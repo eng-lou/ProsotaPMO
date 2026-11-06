@@ -43,6 +43,8 @@ export interface SiteContext {
   // own ClippingPolygonCollection can. null = no cutout Zone selected.
   cutout_zone_id: string | null
   cutout_active: boolean
+  cutout_mode?: 'remove' | 'isolate'
+  view_isolation?: [number, number, number, number][] | null
   created_at: string | null
   updated_at: string | null
 }

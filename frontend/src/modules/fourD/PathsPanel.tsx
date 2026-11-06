@@ -1,6 +1,7 @@
 import { ToolVisualGuide } from './ToolVisualGuide'
 import { useEffect, useState } from 'react'
 import type { Path, PathLineStyle, PathPoint } from './paths'
+import { togglePathAxis, type PathDrawOptions } from './pathDrawing'
 import type { PathFollower, PathFollowerTargetKind } from './pathFollowers'
 import type { UpAxis } from './upAxis'
 import { formatTimelineValue, type TimeDisplayMode } from './timelinePlayback'
@@ -28,6 +29,10 @@ interface Props {
   paths: Path[]
   error: string | null
   addingPointsForPathId: string | null
+  drawOptions: Record<string, PathDrawOptions>
+  savingPaths: Set<string>
+  onDrawOptions: (id: string, options: PathDrawOptions) => void
+  onSegmentMode: (id: string, end: number, mode: 'curved' | 'straight') => void
   // Needed only for the Elevation field below (2026-07-29) — to read/write
   // "up" it has to know which raw coordinate that actually is.
   upAxis: UpAxis
@@ -90,8 +95,13 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
 }
 
 function Item({
+  drawOptions, saving, onDrawOptions, onSegmentMode,
   path, siteBindings, upAxis, addingPoints, binding, error: _error, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, bindTarget, onUpdateStyle, onSetElevation, animWindow, format, onKeyAnimStart, onKeyAnimEnd,
 }: {
+  drawOptions: PathDrawOptions
+  saving: boolean
+  onDrawOptions: (options: PathDrawOptions) => void
+  onSegmentMode: (end: number, mode: 'curved' | 'straight') => void
   path: Path
   siteBindings?: React.ReactNode
   upAxis: UpAxis
@@ -162,7 +172,7 @@ function Item({
         </button>
         <button
           onClick={onRemoveLastPoint}
-          disabled={path.points.length === 0}
+          disabled={saving || path.points.length === 0}
           className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted disabled:text-gray-300 disabled:border-gray-200 hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:hover:bg-transparent"
         >
           Undo last point
@@ -170,27 +180,57 @@ function Item({
       </div>
       <div className="rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-prosota-line dark:bg-prosota-panel2 space-y-2.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-medium text-gray-600 dark:text-prosota-muted">Line geometry</span>
+          <span className="text-[11px] font-medium text-gray-600 dark:text-prosota-muted">Next segment</span>
           <kbd title="Switch mode while adding points" className="rounded border border-gray-300 bg-white px-1.5 text-[10px] leading-4 text-gray-500 dark:border-prosota-line dark:bg-prosota-panel dark:text-prosota-muted">L</kbd>
         </div>
         <div role="group" aria-label="Line geometry" className="grid grid-cols-2 gap-1 rounded-md bg-white p-1 dark:bg-prosota-panel">
           {(['curved','straight'] as const).map(mode=>{
-            const active=(path.curve_mode || 'curved')===mode
-            return <button key={mode} type="button" aria-pressed={active} onClick={()=>onUpdateStyle({curve_mode:mode})}
+            const active=drawOptions.mode===mode
+            return <button key={mode} type="button" aria-pressed={active} onClick={()=>onDrawOptions({...drawOptions,mode})}
               className={`flex min-w-0 items-center justify-center gap-2 rounded px-2 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${active?'bg-sky-600 text-white shadow-sm':'text-gray-600 hover:bg-gray-100 dark:text-prosota-muted dark:hover:bg-prosota-panel2'}`}>
               <svg aria-hidden="true" width="22" height="14" viewBox="0 0 22 14" fill="none" className="shrink-0"><path d={mode==='curved'?'M2 12 C5 12 5 2 11 2 S17 12 20 2':'M2 12 L11 2 L20 12'} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
               {mode==='curved'?'Curved':'Straight'}
             </button>
           })}
         </div>
+        <p className="text-[10px] leading-4 text-gray-500 dark:text-prosota-muted">Applies from the last point to the next. Earlier segments stay unchanged.</p>
+        <div className="border-t border-gray-200 pt-2 dark:border-prosota-line space-y-2">
+          <span className="text-[11px] font-medium">Lock coordinates</span>
+          <div role="group" aria-label="Path axis locks" className="flex gap-1">
+            {(['x','y','z'] as const).map(axis => <button key={axis} type="button" aria-pressed={drawOptions.locks.includes(axis)}
+              disabled={!drawOptions.locks.includes(axis) && drawOptions.locks.length === 2}
+              title={`Keep ${axis.toUpperCase()} equal to the last point; shortcut ${axis.toUpperCase()}`}
+              onClick={() => onDrawOptions({...drawOptions,locks:togglePathAxis(drawOptions.locks,axis)})}
+              className={`flex-1 rounded border px-2 py-1 text-xs disabled:opacity-40 ${drawOptions.locks.includes(axis)?'bg-sky-600 border-sky-600 text-white':'border-gray-300 dark:border-prosota-line'}`}>
+              {axis.toUpperCase()}{axis===upAxis?' ↕':''}
+            </button>)}
+          </div>
+          <div className="flex gap-2 text-[11px]">
+            <button type="button" className="underline" onClick={() => onDrawOptions({...drawOptions,locks:[upAxis]})}>Keep level</button>
+            <button type="button" className="underline" onClick={() => onDrawOptions({...drawOptions,locks:[]})}>Free placement</button>
+          </div>
+          <p className="text-[10px] leading-4 text-gray-500 dark:text-prosota-muted">{!path.points.length?'Place the first point to set the reference.':drawOptions.locks.length?`Hold ${drawOptions.locks.map(a=>`${a.toUpperCase()} = ${path.points[path.points.length-1][a].toFixed(2)}`).join(', ')} m at the last point.`:'Free: place on a surface or the ground.'} Change locks before each click.</p>
+        </div>
         <div className="flex items-center justify-between gap-2 border-t border-gray-200 pt-2 dark:border-prosota-line">
           <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-600 dark:text-prosota-paper">
-            <input type="checkbox" checked={path.closed} onChange={onToggleClosed} className="accent-sky-600" />
+            <input type="checkbox" checked={path.closed} disabled={saving} onChange={onToggleClosed} className="accent-sky-600" />
             Closed loop
           </label>
           <span className="text-[11px] tabular-nums text-gray-400 dark:text-prosota-muted">{path.points.length} point{path.points.length === 1 ? '' : 's'}</span>
         </div>
-        {addingPoints && <p className="text-[10px] leading-4 text-gray-500 dark:text-prosota-muted">Click in the viewport to add points · L switches line geometry</p>}
+        {addingPoints && <p role="status" className="text-[10px] leading-4 text-gray-500 dark:text-prosota-muted">{saving?'Saving point…':'Click to place · L: curve/straight · X/Y/Z: locks · Esc: finish. Curves blend from the incoming direction; the first two points form a line.'}</p>}
+        {path.points.length > 1 && <details className="text-[11px]">
+          <summary className="cursor-pointer">Edit existing segments</summary>
+          <div className="max-h-40 overflow-auto space-y-1 pt-2">
+            {Array.from({length:path.closed?path.points.length:path.points.length-1},(_,i)=>{
+              const end=(i+1)%path.points.length
+              return <label key={i} className="flex items-center gap-2"><span className="flex-1">{i+1} → {end+1}</span><select aria-label={`Segment ${i+1} to ${end+1}`} disabled={saving}
+                value={path.points[end].segment_mode || path.curve_mode || 'curved'}
+                onChange={e=>onSegmentMode(end,e.target.value as 'curved'|'straight')}
+                className="rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel px-1 py-1"><option value="curved">Curved</option><option value="straight">Straight</option></select></label>
+            })}
+          </div>
+        </details>}
       </div>
       <button onClick={() => setStyleOpen(v => !v)} className="rounded px-1 py-1 text-[11px] font-medium text-sky-600 hover:text-sky-800 dark:text-sky-400 dark:hover:text-sky-300">
         {styleOpen ? '▾' : '▸'} Style
@@ -408,17 +448,23 @@ function Item({
 // existing point, matching the "click-to-place" spirit of the whole feature
 // rather than mixing in a second, numeric-list editing mode.
 export function PathsPanel({
+  drawOptions, savingPaths, onDrawOptions, onSegmentMode,
   paths, siteBindings, error, addingPointsForPathId, upAxis, bindTarget, followers, animWindows, format,
   onCreate, onRename, onToggleClosed, onToggleVisible, onDelete, onToggleAddPoints, onRemoveLastPoint, onBind, onUnbind, onToggleOrient, onSetHeadingOffset, onUpdateStyle, onSetElevation, onKeyAnimStart, onKeyAnimEnd,
 }: Props) {
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if(event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.key.toLowerCase() !== 'l' || (event.target instanceof HTMLElement && (event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)))) return
+      if(event.repeat || event.ctrlKey || event.metaKey || event.altKey || (event.target instanceof HTMLElement && (event.target.isContentEditable || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)))) return
       const path=paths.find(p=>p.id===addingPointsForPathId)
-      if(path) {event.preventDefault();onUpdateStyle(path.id,{curve_mode:path.curve_mode==='straight'?'curved':'straight'})}
+      if (!path) return
+      const options=drawOptions[path.id] || {mode:path.curve_mode || 'curved',locks:[]}
+      const key=event.key.toLowerCase()
+      if (key==='l') {event.preventDefault();onDrawOptions(path.id,{...options,mode:options.mode==='straight'?'curved':'straight'})}
+      else if (key==='x'||key==='y'||key==='z') {event.preventDefault();onDrawOptions(path.id,{...options,locks:togglePathAxis(options.locks,key)})}
+      else if (key==='escape') {event.preventDefault();onToggleAddPoints(path.id)}
     }
     window.addEventListener('keydown',key);return ()=>window.removeEventListener('keydown',key)
-  },[paths,addingPointsForPathId,onUpdateStyle])
+  },[paths,addingPointsForPathId,drawOptions,onDrawOptions,onToggleAddPoints])
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto">
@@ -439,6 +485,10 @@ export function PathsPanel({
             <Item
               key={path.id}
               path={path}
+              drawOptions={drawOptions[path.id] || {mode:path.curve_mode || 'curved',locks:[]}}
+              saving={savingPaths.has(path.id)}
+              onDrawOptions={options=>onDrawOptions(path.id,options)}
+              onSegmentMode={(end,mode)=>onSegmentMode(path.id,end,mode)}
               upAxis={upAxis}
               addingPoints={addingPointsForPathId === path.id}
               siteBindings={siteBindings?.(path)}

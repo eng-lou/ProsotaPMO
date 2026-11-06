@@ -1,5 +1,6 @@
-import { buildPathCurve } from './pathCurve'
-import { useEffect, useMemo, useRef } from 'react'
+import { appendPathPoint, samplePathCurve, pathSegmentCurve } from './pathCurve'
+import { constrainedPathPoint, type PathDrawOptions } from './pathDrawing'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Html, Line } from '@react-three/drei'
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
@@ -28,8 +29,6 @@ const HANDLE_COLOR = 0x38bdf8
 // own turns got roughly 1/20th the resolution. Scaling with point count
 // instead keeps each individual bend adequately sampled no matter how long
 // the rest of the route is.
-const CURVE_SAMPLES_MIN = 64
-const CURVE_SAMPLES_PER_POINT = 24
 // Flat-arrow size (2026-07-29) — see the arrow's own render/orientation
 // logic below for why this is a flat ground shape, not a 3D cone.
 const ARROW_LENGTH = 0.5
@@ -274,10 +273,7 @@ function PathGizmo({
 
   const curvePositions = useMemo(() => {
     if (path.points.length < 2) return null
-    if (path.curve_mode === 'straight') return [...path.points, ...(path.closed ? [path.points[0]] : [])].map(p=>[p.x,p.y,p.z] as [number,number,number])
-    const curve = buildPathCurve(path.points,path.closed,path.curve_mode)!
-    const samples = Math.max(CURVE_SAMPLES_MIN, path.points.length * CURVE_SAMPLES_PER_POINT)
-    return curve.getPoints(samples).map(v => [v.x, v.y, v.z] as [number, number, number])
+    return samplePathCurve(path.points,path.closed,path.curve_mode).map(v => [v.x, v.y, v.z] as [number, number, number])
   }, [path.points, path.closed, path.curve_mode])
 
   // Arrowhead orientation (2026-07-29, `path.show_arrow`) — lies flat
@@ -433,7 +429,7 @@ function PathGizmo({
       next = planeHit.add(drag.offset)
     }
 
-    const nextPoints = drag.lastPoints.map((p, i) => (i === drag.index ? { x: next.x, y: next.y, z: next.z } : p))
+    const nextPoints = drag.lastPoints.map((p, i) => (i === drag.index ? { ...p, x: next.x, y: next.y, z: next.z } : p))
     drag.lastPoints = nextPoints
     onDragMove(path.id, nextPoints)
   }
@@ -569,13 +565,25 @@ export function PathGizmos({
 // clicking empty space above/around the model still places a point instead
 // of silently doing nothing.
 export function PathAddPointCatcher({
-  active, upAxis, onAddPoint,
+  active, upAxis, onAddPoint, path, drawOptions, saving = false,
 }: {
   active: boolean
   upAxis: 'y' | 'z'
   onAddPoint: (point: PathPoint) => void
+  path?: Path
+  drawOptions?: PathDrawOptions
+  saving?: boolean
 }) {
-  const { camera, scene, gl } = useThree()
+  const { camera, scene, gl, invalidate } = useThree()
+  const [preview, setPreview] = useState<PathPoint | null>(null)
+  const [parallel, setParallel] = useState(false)
+  const pointer = useRef<{clientX:number;clientY:number} | null>(null)
+  const options = useMemo<PathDrawOptions>(() => drawOptions || {mode:path?.curve_mode || 'curved',locks:[]},[drawOptions,path?.curve_mode])
+  const draftLine = useMemo(() => {
+    if (!preview || !path?.points.length) return null
+    const points = appendPathPoint(path.points,path.closed,path.curve_mode || 'curved',preview,options.mode,options.locks)
+    return pathSegmentCurve(points,points.length-1).getPoints(32)
+  },[preview,path,options.mode,options.locks])
 
   useEffect(() => {
     if (!active) return
@@ -585,15 +593,15 @@ export function PathAddPointCatcher({
       ? new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
       : new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
 
-    const handlePointerDown = (event: PointerEvent) => {
-      event.stopPropagation()
-      event.preventDefault()
+    const pick = (event: {clientX:number;clientY:number}): PathPoint | null => {
       const rect = gl.domElement.getBoundingClientRect()
       const ndc = new THREE.Vector2(
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
         -((event.clientY - rect.top) / rect.height) * 2 + 1,
       )
       raycaster.setFromCamera(ndc, camera)
+      const anchor = path?.points[path.points.length-1]
+      if (anchor && options.locks.length) return constrainedPathPoint(raycaster.ray,anchor,options.locks)
 
       // isAppGizmoObject (2026-07-29 fix, per Maro, after a real incident: a
       // path traced across a sidewalk that had a Zone's own flat fill
@@ -609,19 +617,52 @@ export function PathAddPointCatcher({
 
       if (hits.length > 0) {
         const p = hits[0].point
-        onAddPoint({ x: p.x, y: p.y, z: p.z })
-        return
+        return { x: p.x, y: p.y, z: p.z }
       }
       const groundHit = new THREE.Vector3()
       if (raycaster.ray.intersectPlane(groundPlane, groundHit)) {
-        onAddPoint({ x: groundHit.x, y: groundHit.y, z: groundHit.z })
+        return { x: groundHit.x, y: groundHit.y, z: groundHit.z }
       }
+      return null
+    }
+    const updatePreview = () => {
+      if (!pointer.current || !path) return
+      const point = pick(pointer.current)
+      setPreview(point)
+      setParallel(!point && options.locks.length > 0 && path.points.length > 0)
+      invalidate()
+    }
+    let frame = 0
+    const handlePointerMove = (event: PointerEvent) => {
+      pointer.current = {clientX:event.clientX,clientY:event.clientY}
+      if (!frame && path) frame = requestAnimationFrame(() => {frame=0;updatePreview()})
+    }
+    const leave = () => {pointer.current=null;setPreview(null);setParallel(false)}
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return
+      event.stopPropagation()
+      event.preventDefault()
+      if (saving) return
+      const point = pick(event)
+      if (point) onAddPoint(point)
     }
 
     const el = gl.domElement
     el.addEventListener('pointerdown', handlePointerDown, { capture: true })
-    return () => el.removeEventListener('pointerdown', handlePointerDown, { capture: true })
-  }, [active, upAxis, camera, scene, gl, onAddPoint])
+    el.addEventListener('pointermove',handlePointerMove)
+    el.addEventListener('pointerleave',leave)
+    updatePreview()
+    return () => {
+      el.removeEventListener('pointerdown', handlePointerDown, { capture: true })
+      el.removeEventListener('pointermove',handlePointerMove)
+      el.removeEventListener('pointerleave',leave)
+      cancelAnimationFrame(frame)
+    }
+  }, [active, upAxis, camera, scene, gl, onAddPoint, path, options.mode, options.locks, saving, invalidate])
 
-  return null
+  if (!active || !path) return null
+  return <group userData={{isPathGizmo:true}}>
+    {draftLine && !saving && <Line points={draftLine} color="#f59e0b" lineWidth={2} depthTest={false} renderOrder={1000} />}
+    {parallel && <Html fullscreen style={{pointerEvents:'none'}}><div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded bg-slate-900 px-3 py-2 text-xs text-white">Orbit slightly to place a point on the locked plane / axis.</div></Html>}
+  </group>
 }

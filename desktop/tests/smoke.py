@@ -115,6 +115,45 @@ try:
     project = request("/api/v1/projects/", "POST", {"name": "Desktop persistence test"})
     assert project["name"] == "Desktop persistence test"
     project_id = project["id"]
+    equipment = request('/api/v1/equipment-rigs/', 'POST', {
+        'project_id': project_id, 'model_ref': 'equipment-test.glb', 'name': 'Single link loader',
+        'definition': {'schema_version': 1,
+            'controls': [{'id': 'lift', 'name': 'Lift', 'value': 0, 'rest': 0, 'keys': [
+                {'date': '2026-01-01T00:00:00Z', 'value': 0, 'interpolation': 'linear'},
+                {'date': '2026-01-01T00:00:10Z', 'value': 1, 'interpolation': 'smooth'}]}],
+            'joints': [{'id': 'arm', 'name': 'Arm', 'node': '/0:Arm', 'members': ['/1:ArmPin'],
+                'parent': None, 'control': 'lift', 'kind': 'hinge', 'pivot': [0,0,0],
+                'axis': [1,0,0], 'minimum': 0, 'maximum': 90, 'response': [[0,0],[1,1]]}],
+            'motion_details': [{'node': '/3:AccessLadder', 'joint': 'arm', 'threshold': 0.5}],
+            'followers': [{'id': 'link', 'name': 'Bucket linkage', 'barrel': '/2:Link', 'piston': '',
+                'base_node': '', 'tip_node': '/0:Arm', 'base_point': [0,0,0], 'tip_point': [0,1,0]}]}})
+    equipment_rows = request('/api/v1/equipment-rigs/?project_id=' + project_id)
+    assert equipment_rows[0]['definition'] == equipment['definition']
+    assert equipment_rows[0]['definition']['motion_details'] == [{'node': '/3:AccessLadder', 'joint': 'arm', 'threshold': 0.5}]
+    assert equipment_rows[0]['definition']['followers'][0]['piston'] == ''
+    print('PASS: packaged backend saves grouped original parts, rigid links and animation keys')
+    cycle_definition = equipment['definition']
+    cycle_definition['soil'] = dict(enabled=True, show_guide=False, bucket_node='/0:Arm', center=[0,0,0], size=[1,1,1], rotation=[0,0,0],
+        opening_direction=[0,.6,.8],
+        capacity=.5, dump_angle=105, pour_seconds=1.5, source=[4,5,0], radius=2, height=1, up_axis='z',
+        start='2026-01-01T00:00:00Z', end='2026-01-01T00:00:14Z', duration_seconds=14, steps=240, color='#806046',
+        cycle=dict(pickup={'lift':0},carry={'lift':.5},tip={'lift':1},approach_seconds=4,lift_seconds=2,travel_seconds=5,tip_seconds=1,start_progress=0,pickup_progress=25,drop_progress=85))
+    equipment = request('/api/v1/equipment-rigs/' + equipment['id'], 'PUT', {'version':equipment['version'], 'name':equipment['name'], 'definition':cycle_definition})
+    assert request('/api/v1/equipment-rigs/?project_id=' + project_id)[0]['definition']['soil'] == equipment['definition']['soil']
+    assert equipment['definition']['soil']['opening_direction'] == [0,.6,.8]
+    print('PASS: packaged backend retains the guided cycle poses, soil settings and timing')
+    bulk_definition = equipment['definition']
+    bulk_definition['followers'].insert(0, dict(id='hose', name='Flexible feed', barrel='/3:Hose', piston='',
+        base_node='/2:Link', tip_node='/0:Arm', base_point=[0,0,0], tip_point=[0,1,0],
+        flex_curve=[[0,0,0],[.2,.5,0],[0,1,0]]))
+    bulk_definition['soil'].update(mode='preloaded', material='rocks', initial_fill=.75,
+        outlet=[0,.5,0], dump_angle=28, pour_seconds=5)
+    equipment = request('/api/v1/equipment-rigs/' + equipment['id'], 'PUT', {'version':equipment['version'], 'name':equipment['name'], 'definition':bulk_definition})
+    persisted = request('/api/v1/equipment-rigs/?project_id=' + project_id)[0]['definition']
+    assert persisted['followers'] == equipment['definition']['followers']
+    assert persisted['soil']['mode'] == 'preloaded' and persisted['soil']['material'] == 'rocks'
+    assert persisted['soil']['initial_fill'] == .75 and persisted['soil']['outlet'] == [0,.5,0]
+    print('PASS: packaged backend retains dependent flexible hoses and preloaded aggregate loads')
     removal = request('/api/v1/animation-profiles/', 'POST', {
         'project_id': project_id, 'name': 'Opaque removal', 'config': {
             'transform_kind': 'grow', 'grow_mode': 'remove', 'opacity_from': 1, 'opacity_to': 1}})
@@ -126,6 +165,8 @@ try:
         'points': [{'x': 0, 'y': 0, 'z': 0}, {'x': 12, 'y': 0, 'z': 0}]})
     site_item = dict(id=str(uuid.uuid4()), name='Boundary fence', kind='fence', up_axis='z',
         position={'x':0,'y':0,'z':0}, path_id=site_path['id'], points=site_path['points'], gate_start=4, gate_width=2)
+    site_item['path_motion'] = dict(path_id=site_path['id'],start='2026-01-01T00:00:00Z',speed=1,loop=False,orient=True,heading=0,animation_reference_speed=1,
+        progress_keys=[dict(date=f'2026-01-01T00:00:{second:02d}Z',progress=progress,interpolation='linear') for second,progress in [(0,0),(4,25),(6,25),(11,85),(14,85)]])
     scene_url = f'/api/v1/site-scenes/{project_id}'
     preview = request(scene_url + '/preview', 'POST', site_item)
     assert preview['layout']['panel_count'] == 5
@@ -134,6 +175,7 @@ try:
     command = dict(command_id=str(uuid.uuid4()), expected_revision=0, items=[recipe])
     scene = request(scene_url, 'PUT', command)
     assert scene['revision'] == 1 and scene['items'][0]['layout']['panel_count'] == 5
+    assert request(scene_url)['items'][0]['path_motion']['progress_keys'] == site_item['path_motion']['progress_keys']
     assert request(scene_url, 'PUT', command)['revision'] == 1  # retry never duplicates
     def rejected(body, status=409):
         try:
@@ -193,6 +235,38 @@ try:
         "points": [{"x": 0, "y": 0, "z": 0}, {"x": 10, "y": 0, "z": 0}],
     })
     assert path_row["opacity"] == 1 and path_row["show_in_render"] and path_row["show_in_viewport"]
+    mixed_points = [{"x":0,"y":0,"z":2},
+        {"x":10,"y":10,"z":2,"segment_mode":"curved","segment_controls":[{"x":4,"y":0,"z":0},{"x":0,"y":-4,"z":0}]},
+        {"x":20,"y":10,"z":2,"segment_mode":"straight"}]
+    mixed_path = request('/api/v1/paths/', 'POST', {'project_id':project_id,'name':'Mixed route','points':mixed_points})
+    mixed_fence = request(scene_url + '/preview', 'POST', {**recipe, 'path_id':mixed_path['id'],
+        'points':mixed_points, 'closed':False, 'curve_mode':'curved', 'gate_start':0, 'gate_width':0})
+    assert mixed_fence['layout']['panel_count'] > 0
+    assert mixed_fence['points'] == mixed_points
+    # Timed worker actions and attachments must survive the packaged storage path.
+    previous_scene = request(scene_url)
+    worker = {**saved_asset, 'id':str(uuid.uuid4()), 'name':'Timed worker', 'path_motion':None,
+        'motion_actions':[dict(id=str(uuid.uuid4()), name='Work', start='2026-10-29T00:00:02Z',
+            end='2026-10-29T00:00:07Z', clip=2, speed=1, loop=True, blend=.2)]}
+    hand_tool = {**saved_asset, 'id':str(uuid.uuid4()), 'name':'Hand tool', 'path_motion':None,
+        'attachment':dict(parent_id=worker['id'], node='CC_Base_R_Hand', start='2026-10-29T00:00:02Z',
+            end='2026-10-29T00:00:07Z', position=dict(x=.1,y=0,z=0), rotation=dict(x=0,y=90,z=0), only_during=True)}
+    previous_items = [{k:v for k,v in row.items() if k != 'layout'} for row in previous_scene['items']]
+    saved_workers = request(scene_url, 'PUT', dict(command_id=str(uuid.uuid4()),
+        expected_revision=previous_scene['revision'], items=[*previous_items,worker,hand_tool]))
+    reopened_workers = request(scene_url)
+    restored_worker = next(row for row in reopened_workers['items'] if row['id']==worker['id'])
+    restored_tool = next(row for row in reopened_workers['items'] if row['id']==hand_tool['id'])
+    assert restored_worker['motion_actions'][0]['clip'] == 2
+    assert restored_worker['motion_actions'][0]['blend'] == .2
+    assert restored_tool['attachment']['parent_id'] == worker['id']
+    assert restored_tool['attachment']['position']['x'] == .1
+    assert restored_tool['attachment']['rotation']['y'] == 90
+    rejected(dict(command_id=str(uuid.uuid4()),expected_revision=saved_workers['revision'],
+        items=[*previous_items,hand_tool]), status=422)
+    request(scene_url, 'PUT', dict(command_id=str(uuid.uuid4()),
+        expected_revision=saved_workers['revision'], items=previous_items))
+    print('PASS: packaged worker actions and hand attachments persist; missing parent rejected')
     request(f"/api/v1/paths/{path_row['id']}", "PATCH", {
         "opacity": 0.35, "show_in_viewport": False, "show_in_render": False,
     })
@@ -241,6 +315,48 @@ try:
     assert request(f'/api/v1/site-assets/?project_id={project_id}') == []
     assert request(f"/api/v1/site-assets/{asset['id']}/download") == asset_bytes
     assert request(scene_url+'/preview','POST',saved_asset)['asset_id'] == asset['id']
+    # A site's dimensions must not be mistaken for a geometry-complexity limit.
+    large_dimensions = dict(width=2500.25, depth=3500.5, height=750.75)
+    large_upload = request('/api/v1/site-assets/', 'POST', dict(
+        project_id=other_project['id'], name='Large site.glb', category='Other'))
+    request(large_upload['upload_url'], 'PUT', asset_bytes, content_type='model/gltf-binary')
+    large_asset = request(f"/api/v1/site-assets/{large_upload['id']}/ready", 'POST', large_dimensions)
+    assert large_asset['dimensions'] == large_dimensions
+    large_scene_url = f"/api/v1/site-scenes/{other_project['id']}"
+    large_item = dict(id=str(uuid.uuid4()), name='Large site', kind='asset', asset_id=large_asset['id'],
+        up_axis='z', position=dict(x=0,y=0,z=0), **large_dimensions)
+    request(large_scene_url+'/preview', 'POST', large_item)
+    request(large_scene_url, 'PUT', dict(command_id=str(uuid.uuid4()), expected_revision=0, items=[large_item]))
+    large_saved = request(large_scene_url)['items'][0]
+    assert {axis:large_saved[axis] for axis in large_dimensions} == large_dimensions
+    print('PASS: large asset import, placement and reload retain original dimensions')
+    # Keep the packaged API's object count independent of the import UI. Use the
+    # real data-centre split when available, otherwise an equivalent large recipe.
+    assembly_fixture = repo / 'outputs/data-centre-import/independent-parts.json'
+    if assembly_fixture.exists():
+        assembly_parts = json.loads(assembly_fixture.read_text(encoding='utf-8'))
+    else:
+        assembly_parts = [dict(id=str(uuid.uuid4()), name=f'Construction part {i}',
+            kind='asset', up_axis='z', position=dict(x=i%60,y=i//60,z=0),
+            asset_part=dict(path=[0,i],transform=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]),
+            rig_disabled=True) for i in range(3447)]
+    assert len(assembly_parts) == 3447
+    for part in assembly_parts:
+        part['asset_id'] = large_asset['id']
+    request(large_scene_url, 'PUT', dict(command_id=str(uuid.uuid4()), expected_revision=1, items=assembly_parts))
+    assembly_saved = request(large_scene_url)['items']
+    assert len(assembly_saved) == 3447 and len({part['id'] for part in assembly_saved}) == 3447
+    for original, saved in zip(assembly_parts, assembly_saved):
+        assert saved['asset_part'] == original['asset_part'] and saved['position'] == original['position']
+    assembly_schedule = request(f"/api/v1/schedule-variants/context?project_id={other_project['id']}")
+    scheduled_parts = [assembly_parts[i] for i in (0,1723,3446)]
+    assembly_generated = request('/api/v1/schedule-bulk-generate/', 'POST', dict(
+        project_id=other_project['id'], schedule_period_id=assembly_schedule['period']['id'],
+        activities=[dict(temp_id=p['id'],task_name=p['name'],duration_hours=1,
+            source_kind='site',element_refs=[p['id']]) for p in scheduled_parts],
+        site_animation_profile=dict(transform_kind='fall',axis='z',direction=1,color_from=None)))
+    assert assembly_generated['model_element_link_count'] == 3
+    print('PASS: 3,447 independent parts save/reload and generate individual schedule links')
     resource = request("/api/v1/resources/", "POST", {
         "project_id": project_id, "resource_type": "labour", "name": "Test crew", "unit": "hour", "rate": 25,
     })
@@ -266,6 +382,71 @@ try:
     conversion = request(f"/api/v1/model3d-files/{model['id']}/ifc4-export-source", "POST")
     assert b"FILE_SCHEMA(('IFC4'))" in gzip.decompress(request(conversion["download_url"]))
     assert any((data / "files").rglob("*.ifc"))
+    # Exercise the frozen open-map service import without an external network call.
+    try:
+        request('/api/v1/site-context/open-map', 'POST', {'project_id':project_id,'lat':0,'lon':180,'width':100,'depth':100})
+        raise AssertionError('Date-line map request accepted')
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 422
+    context_recipe = {'source_date':'2026-10-26','lat':53.33,'lon':-6.34,'width':100,'depth':100,'features':[
+        {'id':'way/1/0','name':'Editable warehouse','kind':'building','height':12,'height_basis':'user',
+         'points':[[-10,-10],[10,-10],[10,10],[-10,10]],'roof':'industrial',
+         'surfaces':{'wall:0:1':{'finish':'brick','color':'#934b32'},'material:0':{'finish':'original','color':'#aaccbb'}},
+         'replacement':{'asset_id':asset['id'],'width':4,'depth':5,'height':12,'anchor':[0,0,.14]}}]}
+    context_item = request(scene_url+'/preview','POST',{'id':str(uuid.uuid4()),'kind':'geographic','name':'Open context','up_axis':'z','position':{'x':0,'y':0,'z':0},'geographic':context_recipe})
+    current_scene = request(scene_url)
+    part_item = dict(id=str(uuid.uuid4()),name='Independent GLB part',kind='asset',asset_id=asset['id'],up_axis='z',position=dict(x=1,y=2,z=0),asset_part=dict(path=[0,0],transform=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]),assembly_id=str(uuid.uuid4()),assembly_name='Construction kit',rig_disabled=True)
+    context_items = [{k:v for k,v in item.items() if k!='layout'} for item in [*current_scene['items'],part_item,context_item]]
+    request(scene_url,'PUT',{'command_id':str(uuid.uuid4()),'expected_revision':current_scene['revision'],'items':context_items})
+    part_schedule=request('/api/v1/schedule-bulk-generate/','POST',dict(project_id=project_id,schedule_period_id=schedule['period']['id'],activities=[dict(temp_id='part',task_name='Install independent GLB part',duration_hours=1,source_kind='site',element_refs=[part_item['id']])],site_animation_profile=dict(transform_kind='fall',axis='z',direction=1,color_from=None)))
+    assert part_schedule['model_element_link_count']==1
+    print('PASS: packaged 3D parts retain selectors and generate schedule activity/profile links')
+    isolation_planes = [[1,0,0,10],[-1,0,0,10],[0,1,0,10],[0,-1,0,10],[0,0,1,10],[0,0,-1,10]]
+    request('/api/v1/site-context/','PUT',{'project_id':project_id,'view_isolation':isolation_planes,'cutout_mode':'isolate'})
+    assert request('/context/tree-small.glb')[:4] == b'glTF'
+    simulation = request('/api/v1/simulations/', 'POST', dict(project_id=project_id,schedule_period_id=schedule['period']['id'],name='Packaged operation',config=dict(activity_ids=[activity['id']],start='2026-10-28T08:00:00',horizon_days=10,steps=[dict(id='work',name='Work',activity_id=activity['id'],hours=2)])))
+    simulation = request('/api/v1/simulations/'+simulation['id']+'/run','POST',dict(revision=simulation['revision']))
+    assert simulation['result']['steps'][0]['status']=='complete'
+    assert request('/api/v1/simulations/activity/'+activity['id'])['scenario_id']==simulation['id']
+    print('PASS: packaged Simulator endpoint calculates and persists an isolated method')
+    # Frozen schema/solver/persistence check. Actual clips and grip playback are
+    # exercised separately by worker-method-review.cjs with the real models.
+    worker_id, tool_id = str(uuid.uuid4()), str(uuid.uuid4())
+    current_scene = request(scene_url)
+    method_items = [dict(id=i, name=n, kind='asset', asset_id=asset['id'], up_axis='z',
+                         position=dict(x=0, y=0, z=0))
+                    for i,n in [(worker_id,'Method worker'),(tool_id,'Method tool')]]
+    method_scene_items = [{k: v for k, v in item.items() if k != 'layout'}
+                          for item in [*current_scene['items'][:-1], *method_items, current_scene['items'][-1]]]
+    request(scene_url, 'PUT', dict(command_id=str(uuid.uuid4()), expected_revision=current_scene['revision'],
+                                  items=method_scene_items))
+    method_points = [dict(x=0,y=0,z=0),dict(x=12,y=0,z=0)]
+    method_route = request('/api/v1/paths/', 'POST', dict(project_id=project_id,name='Method route',
+                                                       points=method_points,closed=False,curve_mode='straight'))
+    visual_method = dict(version=1,kind='walk_work_continue',worker_id=worker_id,tool_id=tool_id,
+                         worker_asset_id=asset['id'],tool_asset_id=asset['id'],route_id=method_route['id'],
+                         route=dict(id=method_route['id'],geometry=dict(points=method_points,closed=False,curve_mode='straight'),
+                                    samples=[[0,0,0],[12,0,0]],length_m=12),
+                         idle_clip='Idle',walk_clip='Walk',work_clip='Drill',hand='CC_Base_R_Hand',
+                         work_seconds=10,speed_mps=1.2,work_position=50,
+                         grip=dict(position=[.1,.2,.3],rotation=[0,90,0]))
+    visual_simulation = request('/api/v1/simulations/', 'POST', dict(project_id=project_id,
+        schedule_period_id=schedule['period']['id'],name='Packaged visual method',config=dict(
+            activity_ids=[activity['id']],start='2026-10-28T08:00:00',horizon_days=10,
+            steps=[dict(id='visual-work',name='Use tool',activity_id=activity['id'],worker_method=visual_method)])))
+    visual_simulation = request('/api/v1/simulations/'+visual_simulation['id']+'/run', 'POST',
+                                dict(revision=visual_simulation['revision']))
+    assert [e['worker_action']['stage'] for e in visual_simulation['result']['events']] == ['approach','work','continue']
+    assert visual_simulation['config']['steps'][0]['worker_method']['grip'] == visual_method['grip']
+    print('PASS: packaged visual worker method emits approach/work/continue events and retains grip bindings')
+    working_url = f"/api/v1/simulations/working?project_id={project_id}&schedule_period_id={schedule['period']['id']}"
+    assert request(working_url) is None
+    working_sequence = request('/api/v1/simulations/'+visual_simulation['id']+'/promote', 'POST',
+                               dict(revision=visual_simulation['revision'], working_revision=0))
+    assert working_sequence['revision'] == 1 and working_sequence['status'] == 'current'
+    assert working_sequence['scenario']['timing']['mode'] == 'parent_activity'
+    assert request(working_url)['scenario'] == working_sequence['scenario']
+    print('PASS: packaged working sequence fits the parent activity and persists independently')
     process.stdin.close()
     process.wait(timeout=40)
     assert process.returncode == 0
@@ -297,11 +478,39 @@ try:
     measurements = request(f"/api/v1/measurements/?project_id={project_id}")
     assert request(scene_url)['items'][0]['layout'] == preview['layout']
     assert request(scene_url)['items'][1]['asset_id'] == asset['id']
+    assert request(scene_url)['items'][-1]['geographic']['features'][0]['height'] == 12
+    restored_part=next(i for i in request(scene_url)['items'] if i['id']==part_item['id'])
+    assert restored_part['asset_part']['path']==[0,0] and restored_part['rig_disabled']
+    restored_assembly = request(large_scene_url)['items']
+    assert restored_assembly == assembly_saved
+    restored_assembly_links = request(f"/api/v1/model-element-links/?project_id={other_project['id']}")
+    assert {link['element_ref'] for link in restored_assembly_links} == {part['id'] for part in scheduled_parts}
+    assert all(link['source_kind']=='site' and link['animation_profile_id'] for link in restored_assembly_links)
+    print('PASS: all 3,447 parts, transforms and independent schedule links survive portable backup/reopen')
+    assert any(l['element_ref']==part_item['id'] and l['source_kind']=='site' and l['animation_profile_id'] for l in request(f'/api/v1/model-element-links/?project_id={project_id}'))
+    restored_feature = request(scene_url)['items'][-1]['geographic']['features'][0]
+    assert restored_feature['surfaces']['wall:0:1']['finish'] == 'brick'
+    assert restored_feature['surfaces']['material:0']['color'] == '#aaccbb'
+    assert restored_feature['replacement']['asset_id'] == asset['id']
+    assert request('/api/v1/site-context/?project_id='+project_id)['view_isolation'] == isolation_planes
+    restored_simulation=request('/api/v1/simulations/'+simulation['id'])
+    assert restored_simulation['config']==simulation['config'] and restored_simulation['result']==simulation['result']
+    restored_visual=request('/api/v1/simulations/'+visual_simulation['id'])
+    assert restored_visual['config']==visual_simulation['config'] and restored_visual['result']==visual_simulation['result']
+    restored_working = request(working_url)
+    assert restored_working['revision'] == 1 and restored_working['status'] == 'current'
+    assert restored_working['scenario'] == working_sequence['scenario']
+    print('PASS: promoted parent-fitted sequence survives portable backup/reopen')
+    print('PASS: visual worker method, route snapshot, grip and events survive portable backup/reopen')
+    print('PASS: Simulator method, source snapshot and results survive portable backup/reopen')
+    print('PASS: packaged geographic service, editable scene, bundled vegetation and saved isolation survive backup/reopen')
     assert any(l['id']==site_link['id'] and l['animation_profile_id']==profile['id'] for l in request(f'/api/v1/model-element-links/?project_id={project_id}'))
     assert request(f"/api/v1/site-assets/{asset['id']}/download") == asset_bytes
     print('PASS: GLB library import is separate from placement; immutable versions; project validation; asset placement and bytes survive backup/reopen')
     print('PASS: atomic site recipes, gate geometry, preview isolation, locks, source validation, idempotency and backup/reopen')
     routes = request(f"/api/v1/paths/?project_id={project_id}")
+    assert next(p for p in routes if p['id']==mixed_path['id'])['points'] == mixed_points
+    print('PASS: per-segment curves and straight lines survive portable backup/reopen')
     assert any(p["id"] == path_row["id"] and p["opacity"] == 0.35 and not p["show_in_viewport"]
                and not p["show_in_render"] and len(p["points"]) == 2 for p in routes)
     print("PASS: path display controls persist without altering route points")
@@ -309,6 +518,25 @@ try:
     assert any(m["id"] == area["id"] and m["value"] == 4 for m in measurements)
     print("PASS: multi-point length and area save/reload in the Windows backend")
     print("PASS: local CRUD, authenticated API, IFC conversion, portable backup/restore with new DB password, model bytes, resource/cost persistence, Maps configuration")
+    revision_base = f"/api/v1/model3d-files/{model['id']}"
+    initial_version = request(revision_base + '/content-version')
+    revised_bytes = fixture.replace(b"'Wall'", b"'Revised wall'").replace(b'#11,3.)', b'#11,4.)')
+    revision = request(revision_base + '/revisions', 'POST', {'name': 'wall-revision.ifc'})
+    request(revision['upload_url'], 'PUT', gzip.compress(revised_bytes), content_type='application/gzip')
+    review_url = revision_base + '/revisions/' + revision['id']
+    report = request(review_url + '/compare', 'POST')
+    assert len(report['report']['changes']) == 1
+    changed = report['report']['changes'][0]
+    assert changed['kind'] == 'modified' and 'geometry' in changed['fields']
+    preview_mesh = request(review_url + '/geometry/' + changed['guid'])
+    assert preview_mesh['before']['faces'] and max(preview_mesh['after']['vertices']) == 4
+    request(review_url + '/apply', 'POST', {'decisions': {changed['guid']: {'action': 'accept', 'assignments': 'keep'}}})
+    assert request(revision_base + '/content-version') != initial_version
+    assert b'Revised wall' in gzip.decompress(request(revision_base + '/download'))
+    fresh_conversion = request(revision_base + '/ifc4-export-source', 'POST')
+    assert b'Revised wall' in gzip.decompress(request(fresh_conversion['download_url']))
+    assert request(revision_base + '/revisions')[-1]['status'] == 'applied'
+    print('PASS: packaged IFC revision worker compares, renders, applies, persists review and invalidates converted download')
     def capped(path, body):
         try:
             request(path, "POST", body)

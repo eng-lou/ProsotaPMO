@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CostRateLineBase(BaseModel):
@@ -14,6 +14,8 @@ class CostRateLineBase(BaseModel):
     rate: Decimal
     # location/system/activity — see CostRateLine.cost_code's own docstring.
     cost_code: str | None = None
+    area_m2: Decimal | None = Field(default=None, ge=0)
+    quantity_review_required: bool = False
 
 
 class CostRateLineCreate(CostRateLineBase):
@@ -21,6 +23,8 @@ class CostRateLineCreate(CostRateLineBase):
 
 
 class CostRateLineUpdate(BaseModel):
+    area_m2: Decimal | None = Field(default=None, ge=0)
+    quantity_review_required: bool | None = None
     description: str | None = None
     qty: Decimal | None = None
     unit: str | None = None

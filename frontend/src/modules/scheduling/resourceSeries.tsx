@@ -70,7 +70,9 @@ export function ResourceFigures({ selected, budget, actual, earned, unit, overal
 }) {
   const values = { budget, actual, earned }
   return <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-    {selected.map(key => <span key={key} className={`flex-1 text-right ${key === 'budget' && overallocated ? 'text-red-600 dark:text-red-300 font-bold' : ''}`} title={SERIES.find(s => s.key === key)!.label}>
+    {selected.map(key => <span key={key}
+      className={`flex-1 text-right ${key === 'budget' && overallocated ? 'rounded bg-red-100 text-red-800 font-bold px-1 ring-1 ring-inset ring-red-200' : ''}`}
+      title={key === 'budget' && overallocated ? 'Budgeted — exceeds resource capacity' : SERIES.find(s => s.key === key)!.label}>
       {selected.length > 1 && (key === 'budget' ? values[key] !== 0 : values[key] !== null) && <span className="opacity-70 mr-1">{SERIES.find(s => s.key === key)!.short}</span>}
       {key === 'budget' && values[key] === 0 ? '' : formatResourceFigure(values[key], unit)}
     </span>)}

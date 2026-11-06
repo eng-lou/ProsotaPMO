@@ -1,11 +1,20 @@
 import { ToolVisualGuide } from './ToolVisualGuide'
+import { EquipmentSoilSetup } from './EquipmentSoilSetup'
+import type { TimelineFormat } from './TimelinePointInput'
 import { undoHistory } from '@/lib/undoHistory'
 import { EquipmentSetup } from './EquipmentSetup'
 import type { EquipmentProposal } from './poeEquipmentTools'
 import type { EquipmentVisualState } from './EquipmentVisualEditor'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type * as THREE from 'three'
-import { controlValue, emptyEquipment, equipmentNodes, validateEquipment, type EquipmentDefinition, type EquipmentRig, type Vec3 } from './equipmentRig'
+import * as THREE from 'three'
+import { controlValue, emptyEquipment, equipmentNodes, jointNodes, sampleEquipmentNode, validateEquipment, type EquipmentDefinition, type EquipmentRig, type Vec3 } from './equipmentRig'
+import { bucketOpeningAngle, calibrateBucketOpening } from './soilSimulation'
+import { importEquipmentPreset } from './equipmentPreset'
+import { useDockActive } from './SideDock'
+import { EquipmentCycleEditor } from './EquipmentCycleEditor'
+import type { Path } from './paths'
+import type { SiteItem, PathMotion } from './siteScene'
+import { buildPathCurve } from './pathCurve'
 
 const input = 'w-full min-w-0 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel2 px-1 py-1'
 const button = 'rounded border border-gray-300 dark:border-prosota-line px-2 py-1 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-prosota-panel2'
@@ -15,7 +24,9 @@ function VectorInput({ label, value, change }: { label: string; value: Vec3; cha
   return <label className="block">{label}<div className="flex gap-1">{value.map((v, i) => <input aria-label={`${label} ${'XYZ'[i]}`} key={i} className={input} type="number" step="any" value={v} onChange={e => { const next = [...value] as Vec3; next[i] = Number(e.target.value); change(next) }} />)}</div></label>
 }
 
-export function EquipmentPanel({ proposal, onProposalConsumed, projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset }: {
+export function EquipmentPanel({ proposal, onProposalConsumed, projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset, upAxis='z', format, siteItems=[], paths=[], onSaveRoute }: {
+  siteItems?:SiteItem[];paths?:Path[];onSaveRoute?:(model:string,motion:PathMotion)=>Promise<void>
+  upAxis?:'y'|'z'; format?:TimelineFormat|null
   proposal?: EquipmentProposal | null
   onProposalConsumed?: () => void
   onSaveAsset?: (rig: EquipmentRig) => Promise<void>
@@ -29,11 +40,12 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
   onPreview: (p: { model: string; values: Record<string, number>; time: number | null } | null) => void
   onSeek: (d: Date) => void
 }) {
+  const active = useDockActive()
   const owner = useRef({})
   const gesture = useRef<object | undefined>()
   const fieldGesture = useRef<object | undefined>()
   const [restoreRevision, setRestoreRevision] = useState(0)
-  const [tab, setTab] = useState<'setup' | 'animate'>('setup')
+  const [tab, setTab] = useState<'setup' | 'animate'>('animate')
   const [assemblyParts, setAssemblyParts] = useState<string[]>([])
   const [assemblyName, setAssemblyName] = useState('Equipment')
   const [assembling, setAssembling] = useState(false)
@@ -41,13 +53,20 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
   const [draft, setDraft] = useState<EquipmentRig | null>(null)
   const draftRef = useRef(draft); draftRef.current = draft
   const [dirty, setDirty] = useState(false)
+  const [cycleEditing,setCycleEditing]=useState(false)
+  const [savingCycle,setSavingCycle]=useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [poeRationale, setPoeRationale] = useState<string | null>(null)
   const [time, setTime] = useState(dateRef.current?.getTime() ?? Date.now())
   const [preview, setPreview] = useState<Record<string, number>>({})
+  const [setupFocus,setSetupFocus]=useState<{id:string;request:number}>()
+  const setupRef=useRef<HTMLDivElement>(null)
   const [jointIndex, setJointIndex] = useState(0)
   const [followerIndex, setFollowerIndex] = useState(0)
   useEffect(() => () => onVisual?.(null), [onVisual])
+  useEffect(() => {
+    if (!active) { onVisual?.(null); onPreview(null); setPreview({}) }
+  }, [active, onVisual, onPreview])
   const object = objects.find(o => o.name === model && o.kind === 'mesh')
   const nodes = useMemo(() => object ? equipmentNodes(object.object) : new Map<string, THREE.Object3D>(), [object?.object])
   const saved = rigs.find(r => r.model_ref === model)
@@ -62,17 +81,19 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
     onProposalConsumed?.()
   }, [proposal?.token])
   useEffect(() => {
-    if (!dirty && !busy) return
+    if (!dirty && !cycleEditing && !savingCycle && !busy) return
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty, busy])
+  }, [dirty, cycleEditing, savingCycle, busy])
   useEffect(() => {
+    if(!active)return
+    setTime(dateRef.current?.getTime() ?? Date.now())
     const timer = window.setInterval(() => setTime(dateRef.current?.getTime() ?? Date.now()), 100)
     return () => clearInterval(timer)
-  }, [dateRef])
+  }, [dateRef, active])
   useEffect(() => { setPreview({}); onPreview(null) }, [time, onPreview])
-  useEffect(() => { onEditing(dirty) }, [dirty, onEditing])
+  useEffect(() => { onEditing(dirty || cycleEditing || savingCycle) }, [dirty, cycleEditing, savingCycle, onEditing])
   useEffect(() => () => { onDraft(null); onPreview(null); onEditing(false) }, [onDraft, onPreview, onEditing])
   const restoreRef = useRef<(value: EquipmentRig | null) => void>(() => {})
   restoreRef.current = next => {
@@ -120,7 +141,7 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
   const save = async () => {
     try {
       validate()
-      if (await onSave(draft!)) { undoHistory.remove(owner.current); setDirty(false); onDraft(null); setNotice('Equipment saved'); onPreview(null) }
+      if (await onSave(draft!)) { undoHistory.remove(owner.current); setDirty(false); onDraft(null); setNotice(cycleEditing?'Rig settings saved. Finish capturing the cycle poses, then Create & save cycle.':'Equipment saved'); onPreview(null) }
     } catch (e) { setNotice((e as Error).message) }
   }
   // Key is a persistence action, not merely a transient viewport preview.
@@ -143,11 +164,13 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
   </select>
   const joint = draft?.definition.joints[jointIndex]
   const follower = draft?.definition.followers[followerIndex]
-  return <fieldset disabled={busy || assembling} className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper border-b border-gray-200 dark:border-prosota-line">
+  const cycleItem=siteItems.find(i=>'site:'+i.id===model),cyclePath=paths.find(p=>p.id===cycleItem?.path_motion?.path_id)
+  const cycleCurve=cyclePath?buildPathCurve(cyclePath.points,cyclePath.closed,cyclePath.curve_mode):null
+  return <fieldset disabled={busy || assembling || savingCycle} className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper border-b border-gray-200 dark:border-prosota-line">
     <strong>Equipment Controls</strong>
     {poeRationale && <details open><summary>Poe rig proposal — review assumptions</summary><p className="whitespace-pre-wrap">{poeRationale}</p></details>}
     <p className="text-gray-500 dark:text-prosota-muted">Animate rigid parts inside an imported model. Use its root transform or path to move the whole machine.</p>
-    <select aria-label="Equipment model" className={input} disabled={dirty || busy} value={model} onChange={e => { setModel(e.target.value); onDraft(null); onPreview(null); setNotice(null) }}>
+    <select aria-label="Equipment model" className={input} disabled={dirty || cycleEditing || busy} value={model} onChange={e => { setModel(e.target.value); onDraft(null); onPreview(null); setNotice(null) }}>
       <option value="">Select equipment model…</option>
       {objects.filter(o => o.kind === 'mesh').map((o, i) => <option key={i} value={o.name}>{o.label || o.name}</option>)}
     </select>
@@ -170,17 +193,49 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
       <label className="block">Equipment name<input className={input} value={draft.name} onChange={e => change({ ...draft, name: e.target.value })} /></label>
       <div className="flex flex-wrap gap-1">
         <button className={button} disabled={busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save rig & keys'}</button>
-        <button className={button} disabled={busy || !dirty} onClick={() => { undoHistory.remove(owner.current); setDirty(false); setDraft(saved ? structuredClone(saved) : null); onDraft(null); onPreview(null) }}>Discard edits</button>
+        <button className={button} disabled={busy || (!dirty&&!cycleEditing)} onClick={() => { undoHistory.remove(owner.current); setDirty(false); setCycleEditing(false);setRestoreRevision(n=>n+1);setDraft(saved ? structuredClone(saved) : null); onDraft(null); onPreview(null) }}>Discard edits</button>
         {onSaveAsset && model.startsWith('site:') && <button className={button} disabled={busy || dirty || !saved} onClick={async()=>{
           try {validate();await onSaveAsset(draft);setNotice('Saved to the library as Construction equipment. New copies inherit this rig; existing instance overrides stay independent.')}
           catch(e){setNotice((e as Error).message)}
         }}>Save rig to asset library</button>}
         {saved?.id && <button className={button} disabled={busy || dirty} onClick={() => { if (window.confirm('Remove this equipment rig and its control keyframes? Imported geometry will remain.')) void onRemove(saved) }}>Remove rig</button>}
       </div>
-      {dirty && <p>Unsaved changes — save before closing this panel.</p>}
-      <div className="flex gap-2"><button className={button} aria-pressed={tab==='setup'} onClick={()=>setTab('setup')}>Setup</button><button className={button} aria-pressed={tab==='animate'} onClick={()=>setTab('animate')}>Animate</button></div>
-      {tab==='setup' && onVisual && <EquipmentSetup disabled={busy || assembling} key={`${model}:${restoreRevision}`} rig={draft} object={object?.object} onChange={change} onState={onVisual} />}
-      {tab==='animate' && <>
+      {dirty && <p>Unsaved changes — kept when switching tabs. Save rig & keys before closing or refreshing.</p>}
+      <div className="flex gap-2"><button className={button} aria-pressed={tab==='setup'} onClick={()=>{setTab('setup');setPreview({});onPreview(null)}}>Setup</button><button className={button} aria-pressed={tab==='animate'} onClick={()=>setTab('animate')}>Animate</button></div>
+      <div hidden={tab!=='animate'}>
+      {draft.definition.soil&&draft.definition.soil.mode!=='preloaded'&&format&&<EquipmentCycleEditor key={`${model}:${restoreRevision}`} rig={draft} time={time} format={format} route={cycleItem?.path_motion&&cycleCurve?{motion:cycleItem.path_motion,length:cycleCurve.getLength()}:undefined}
+        onPending={setCycleEditing} onSeek={onSeek} onPose={values=>{setTab('animate');onVisual?.(null);setPreview(values);onPreview({model,values,time})}}
+        active={active&&tab==='animate'} editing={cycleEditing}
+        onCalibrateOpening={values=>{
+          const soil=draft.definition.soil!,matrix=object&&sampleEquipmentNode(object.object,draft.definition,soil.bucket_node,values)
+          if(!matrix)throw Error('The equipment is still updating. Try again in a moment.')
+          change({...draft,definition:{...draft.definition,soil:{...soil,opening_direction:calibrateBucketOpening(soil,matrix)}}})
+        }}
+        onAdjustRange={()=>{const id=draft.definition.joints.find(j=>jointNodes(j).includes(draft.definition.soil!.bucket_node))?.id;if(id)setSetupFocus(p=>({id,request:(p?.request??0)+1}));setTab('setup');setPreview({});onPreview(null);requestAnimationFrame(()=>setupRef.current?.scrollIntoView({block:'nearest'}))}}
+        onCapture={(pose,values)=>{
+          const soil=draft.definition.soil!,matrix=object&&sampleEquipmentNode(object.object,draft.definition,soil.bucket_node,values)
+          if(!matrix)return 'The equipment is still updating. Try capturing again in a moment.'
+          const angle=bucketOpeningAngle(soil,matrix)
+          if(pose==='carry'&&angle>soil.dump_angle)return `Opening is ${angle.toFixed(0)}°; it spills above ${soil.dump_angle}°. Curl the bucket back. If its mouth already faces up, set the mouth-up reference below.`
+          if(pose==='tip'&&angle<=soil.dump_angle)return `Opening is ${angle.toFixed(0)}°; pouring needs more than ${soil.dump_angle}°. Raise or tilt the bucket further. If the slider runs out, use Adjust bucket travel.`
+          return null
+        }}
+        onSave={async(next,motion)=>{
+          setSavingCycle(true)
+          let routeSaved=false
+          try{
+            validateEquipment(next.definition,nodes)
+            change(next)
+            if(motion){if(!onSaveRoute)throw Error('Route saving is unavailable.');await onSaveRoute(model,motion);routeSaved=true}
+            if(!await onSave(next)){if(routeSaved)setNotice('Route timing saved, but the rig save failed. Keep this draft and retry Create & save cycle.');return false}
+            undoHistory.remove(owner.current);setDirty(false);setCycleEditing(false);onDraft(null);onPreview(null);setPreview({});setNotice('Cycle, rig and soil settings saved');return true
+          }catch(e){setNotice(`${routeSaved?'Route timing saved; rig still needs saving. ':''}${(e as Error).message}`);return false}finally{setSavingCycle(false)}
+        }}/>}
+      {cycleEditing&&<p>Cycle setup has unsaved changes. Use Create & save cycle to save the captured poses and timing.</p>}
+      </div>
+      <EquipmentSoilSetup rig={draft} object={object?.object} upAxis={upAxis} format={format} time={time} onChange={change} onSeek={onSeek} onActivate={()=>{setTab('animate');onVisual?.(null)}}/>
+      {onVisual && <div ref={setupRef} hidden={tab!=='setup'}><EquipmentSetup disabled={!active || tab!=='setup' || busy || assembling} focusJoint={setupFocus} key={`${model}:${restoreRevision}`} rig={draft} object={object?.object} onChange={change} onState={onVisual} /></div>}
+      {tab==='animate' && <details open={!draft.definition.soil}><summary className="font-semibold">Manual controls & keyframes</summary>
       <label className="block">Playhead (local time)<input aria-label="Equipment playhead" className={input} type="datetime-local" step="0.001" value={localTime(new Date(time))} onInput={e => { const d = new Date(e.currentTarget.value); if (Number.isFinite(d.getTime())) { dateRef.current = d; setTime(d.getTime()); onSeek(d) } }} /></label>
       {draft.definition.controls.map(c => {
         const value = preview[c.id] ?? controlValue(c, time)
@@ -209,8 +264,8 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
           </details>
         </div>
       })}
-      </>}
-      {tab==='setup' && <details><summary className="font-semibold">Advanced joints, controls & cylinders</summary>
+      </details>}
+      {tab==='setup' && <details><summary className="font-semibold">Advanced rig authoring</summary><p>For creating mechanisms: part drivers, shared controls and cylinder attachments. Use Movement range above to change how far an existing part moves.</p>
       <div className="flex flex-wrap gap-1"><button className={button} onClick={() => edit(d => { d.controls.push({ id: uid(), name: 'New control', value: 0, rest: 0, keys: [] }) })}>+ Control</button>
         <button className={button} onClick={() => edit(d => { for (const name of ['Left stabiliser', 'Right stabiliser', 'Boom lift', 'Dipper extension', 'Bucket curl', 'Rear swing', 'Loader lift', 'Front bucket tilt']) if (!d.controls.some(c => c.name === name)) d.controls.push({ id: uid(), name, value: name === 'Rear swing' ? .5 : 0, rest: name === 'Rear swing' ? .5 : 0, keys: [] }) })}>Backhoe control names</button></div>
       <details className="space-y-2"><summary className="font-semibold">Joint setup ({draft.definition.joints.length})</summary>
@@ -232,12 +287,12 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
         <button className={button} disabled={!draft.definition.controls.length} onClick={() => { setJointIndex(draft.definition.joints.length); edit(d => { d.joints.push({ id: uid(), name: 'New joint', node: '', parent: null, control: d.controls[0].id, kind: 'hinge', pivot: [0, 0, 0], axis: [0, 0, 1], minimum: 0, maximum: 90, response: [[0, 0], [1, 1]] }) }) }}>+ Joint</button>
       </details>
       <details className="space-y-2"><summary className="font-semibold">Hydraulic cylinders ({draft.definition.followers.length})</summary>
-        <p>Choose barrel and piston parts. Attachment coordinates are local to the selected attachment parts. Cylinders aim and slide automatically; no scaling or additional keys.</p>
+        <p>Choose the driven part and, for a cylinder, its sliding piston. A rigid link needs only the driven part. Attachment coordinates are local to the selected attachment parts. Parts aim and slide automatically; no scaling or additional keys.</p>
         <select aria-label="Cylinder" className={input} value={followerIndex} onChange={e => setFollowerIndex(Number(e.target.value))}>{draft.definition.followers.map((f, i) => <option key={f.id} value={i}>{f.name}</option>)}</select>
         {follower && <div className="space-y-2">
           <input aria-label="Cylinder name" className={input} value={follower.name} onChange={e => edit(d => { d.followers[followerIndex].name = e.target.value })} />
           <label>Barrel{nodePicker(follower.barrel, v => edit(d => { d.followers[followerIndex].barrel = v }))}</label>
-          <label>Piston{nodePicker(follower.piston, v => edit(d => { d.followers[followerIndex].piston = v }))}</label>
+          <label>Piston (leave empty for a rigid link){nodePicker(follower.piston, v => edit(d => { d.followers[followerIndex].piston = v }))}</label>
           <label>Base attachment part{nodePicker(follower.base_node, v => edit(d => { d.followers[followerIndex].base_node = v }), true)}</label>
           <VectorInput label="Base attachment" value={follower.base_point} change={v => edit(d => { d.followers[followerIndex].base_point = v })} />
           <label>Tip attachment part{nodePicker(follower.tip_node, v => edit(d => { d.followers[followerIndex].tip_node = v }), true)}</label>
@@ -249,24 +304,23 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
       </details>}
       <div className="space-y-1"><button className={button} onClick={() => {
         try {
-          validate(); const def = structuredClone(draft.definition); def.controls.forEach(c => { c.keys = []; c.value = c.rest })
+          validate(); const def = structuredClone(draft.definition); def.controls.forEach(c => { c.keys = []; c.value = c.rest });delete def.soil
           const url = URL.createObjectURL(new Blob([JSON.stringify({ name: draft.name, definition: def }, null, 2)], { type: 'application/json' }))
           const a = document.createElement('a'); a.href = url; a.download = `${draft.name.replace(/[^\w-]/g, '_')}-equipment.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
         } catch (e) { setNotice((e as Error).message) }
       }}>Export rig settings</button>
-        <p className="text-gray-500 dark:text-prosota-muted">Settings require the same model hierarchy and part groups. To reuse a complete rigged machine, save it to the asset library and place a new copy.</p>
+        <p className="text-gray-500 dark:text-prosota-muted">Settings require the same model hierarchy and part groups. To reuse a complete rigged machine, save it to the asset library and place a new copy. Soil cycles belong to this placement and are excluded from reusable rig settings.</p>
         <label className="block">Import preset onto this model<input type="file" accept=".json" className="w-full" onChange={async e => {
           const file = e.target.files?.[0]; if (!file) return
           try {
             if (file.size > 2000000) throw new Error('Preset exceeds 2 MB')
-            const data = JSON.parse(await file.text()); validateEquipment(data.definition)
+            const data = JSON.parse(await file.text())
             // Reject incompatible presets before replacing the current draft or preview.
             // A settings file does not contain geometry or recreate authored model groups.
-            try { validateEquipment(data.definition, nodes) }
+            try { if (!object) throw new Error('Select a model first'); data.definition = importEquipmentPreset(data.definition, object.object) }
             catch (err) { throw new Error(`Preset not imported: ${(err as Error).message}. This model must contain the same part groups. Place a copy of the rigged library asset instead. Your current rig settings have not been changed.`) }
-            data.definition.controls.forEach((c: EquipmentDefinition['controls'][number]) => { c.keys = []; c.value = c.rest })
             setPreview({}); onPreview(null)
-            change({ ...draft, name: typeof data.name === 'string' ? data.name : draft.name, definition: data.definition }); setNotice('Rig settings imported. Test the controls, then save.')
+            change({ ...draft, name: typeof data.name === 'string' ? data.name : draft.name, definition: data.definition }); setTab('animate'); setNotice('Rig settings imported. Move a control to test it, then Save rig & keys. Presets start at rest and do not include animation keyframes.')
           } catch (err) { setNotice((err as Error).message) }
           e.target.value = ''
         }} /></label>

@@ -4,13 +4,24 @@ import uuid
 from typing import Literal
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 
-class PathPoint(BaseModel):
+class PathCoordinate(BaseModel):
     x: float
     y: float
     z: float
+
+
+class PathPoint(PathCoordinate):
+    # Incoming segment; point zero holds the closing segment when cyclic.
+    segment_mode: Literal["curved", "straight"] | None = None
+    segment_controls: tuple[PathCoordinate, PathCoordinate] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_point(self, handler):
+        # Keep old coordinate-only recipes byte-for-byte compatible.
+        return {k: v for k, v in handler(self).items() if v is not None}
 
 
 class PathBase(BaseModel):

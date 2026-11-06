@@ -1,3 +1,4 @@
+import { isOfflineExportActive } from './IdleRenderDriver'
 import { motionDuration } from './cameraMotion'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Activity } from '@/modules/scheduling/types'
@@ -13,7 +14,8 @@ import { dateFromTimelineValue, formatTimelineValue, FPS_OPTIONS, type TimeDispl
 import type { Zone } from './zones'
 
 interface Props {
-  siteMotionTracks?: {id:string;name:string;start:string;duration:number}[]
+  playbackSuspended?: boolean
+  siteMotionTracks?: {id:string;name:string;start:string;duration:number;kind?:string}[]
   equipmentTracks?: React.ReactNode
   scheduleStart: Date | null
   scheduleEnd: Date | null
@@ -131,7 +133,7 @@ function clampToRange(d: Date, start: Date, end: Date): Date {
 // per real second, continuously advanced via requestAnimationFrame while
 // playing rather than pre-baking discrete keyframes onto each object.
 export function TimelineWindow({
-  equipmentTracks,
+  equipmentTracks, playbackSuspended=false,
   scheduleStart, scheduleEnd, dateRef, onDateChange, activities, links, keyframesByDay, onMoveKeyframes, onDeleteKeyframes,
   onCreateKeyframes, onReverseKeyframes,
   elementKeyframes, pathFollowers, annotations, animationProfiles, paths, zones, cameras, onSelectActor, seekRequest,
@@ -139,6 +141,7 @@ export function TimelineWindow({
   rawAnimationMeshNames, onKeyAnimStart, onKeyAnimEnd,
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false)
+  useEffect(()=>{if(playbackSuspended)setIsPlaying(false)},[playbackSuspended])
   const [loop, setLoop] = useState(false)
   const [displayDate, setDisplayDate] = useState<Date | null>(dateRef.current)
   // changeTimeDisplayMode/changeFps (2026-07-12, per Maro: "I want to
@@ -228,9 +231,10 @@ export function TimelineWindow({
   }, [scheduleStart])
 
   useEffect(() => {
-    if (!isPlaying || !scheduleStart || !effectiveScheduleEnd) return
+    if (playbackSuspended || !isPlaying || !scheduleStart || !effectiveScheduleEnd) return
     lastTimeRef.current = null
     const tick = (t: number) => {
+      if(isOfflineExportActive()){lastTimeRef.current=t;rafRef.current=requestAnimationFrame(tick);return}
       const dtSeconds = lastTimeRef.current === null ? 0 : (t - lastTimeRef.current) / 1000
       lastTimeRef.current = t
       const current = dateRef.current ?? scheduleStart
@@ -249,7 +253,7 @@ export function TimelineWindow({
     rafRef.current = requestAnimationFrame(tick)
     return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPlaying, scheduleStart, effectiveScheduleEnd, speedDaysPerSecond, loop, dateRef])
+  }, [playbackSuspended, isPlaying, scheduleStart, effectiveScheduleEnd, speedDaysPerSecond, loop, dateRef])
 
   // Task-bar strip data — only activities actually linked to something in
   // the viewport, deduped, so this stays focused on what the timeline can
@@ -435,7 +439,7 @@ export function TimelineWindow({
     <div className="h-full flex flex-col p-3 gap-2">
       <div className="flex items-center gap-1.5 flex-wrap">
         <button onClick={() => step(-STEP_DAYS)} title="Step back 1 day" className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2">◀</button>
-        <button
+        <button disabled={playbackSuspended} title={playbackSuspended?"Playback is controlled by the scenario or video export":undefined}
           onClick={() => {
             // Auto-rewind on Play if already sitting at (or past) the end
             // (2026-07-24 fix, per Maro: "why isnt it playing now") — the
@@ -606,8 +610,8 @@ export function TimelineWindow({
           </div>
         </div>
       ))}
-      {siteMotionTracks.map(track=><div key={track.id} className="border-t py-2 text-xs" aria-label={`Path motion track: ${track.name}`}>
-        <strong>{track.name} · Follow path · {track.duration.toFixed(1)}s</strong>
+      {siteMotionTracks.map(track=><div key={track.id} className="border-t py-2 text-xs" aria-label={`${track.kind||'Path motion'} track: ${track.name}`}>
+        <strong>{track.name} · {track.kind||'Follow path'} · {track.duration.toFixed(1)}s</strong>
         <div className="flex gap-2 mt-1"><button className="border rounded px-2 py-1" onClick={()=>{setIsPlaying(false);setCurrent(new Date(track.start))}}>Start</button><button className="border rounded px-2 py-1" onClick={()=>{setIsPlaying(false);setCurrent(new Date(Date.parse(track.start)+track.duration*speedDaysPerSecond*DAY_MS))}}>End</button></div>
       </div>)}
       {equipmentTracks}

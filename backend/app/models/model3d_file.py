@@ -82,3 +82,4 @@ class Model3DFile(Base, TimestampMixin):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     unloaded_elements: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     keep_raw_animation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ifc_revisions: Mapped[list | None] = mapped_column(JSONB, nullable=True)

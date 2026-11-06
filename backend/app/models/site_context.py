@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Boolean, Float, ForeignKey, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -87,3 +87,5 @@ class SiteContext(Base, TimestampMixin):
         UUID(as_uuid=True), ForeignKey("zones.id", ondelete="SET NULL"), nullable=True
     )
     cutout_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cutout_mode: Mapped[str] = mapped_column(String(12), nullable=False, default='remove')
+    view_isolation: Mapped[list | None] = mapped_column(JSONB, nullable=True)

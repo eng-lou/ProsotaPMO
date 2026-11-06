@@ -5,6 +5,7 @@ import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
 import { prepareCutoutRendering } from './cutoutRendering'
+import { extractAssetPart, type AssetPart } from './assetParts'
 
 export interface SiteAsset {
   id: string; project_id: string; name: string; category: string; status: 'ready'
@@ -23,6 +24,8 @@ export async function parseAsset(bytes: ArrayBuffer) {
   checkPortableGlb(bytes)
   const gltf = await new GLTFLoader().parseAsync(bytes, '')
   prepareCutoutRendering(gltf.scene)
+  const materialSlots=new Map<THREE.Material,number>()
+  gltf.scene.traverse(node=>{if(node instanceof THREE.Mesh)for(const material of Array.isArray(node.material)?node.material:[node.material]){if(!materialSlots.has(material))materialSlots.set(material,materialSlots.size);material.userData.prosotaAssetSlot=materialSlots.get(material)}})
   const box = new THREE.Box3().setFromObject(gltf.scene), size = box.getSize(new THREE.Vector3())
   if (![size.x, size.y, size.z].every(Number.isFinite) || Math.max(size.x,size.y,size.z)<=.000001) throw Error('Asset needs visible geometry')
   // Flat OBJ surfaces still need a finite normalization scale.
@@ -45,14 +48,15 @@ export async function downloadSiteAssetBytes(id: string) {
   checkPortableGlb(bytes)
   return bytes
 }
-export async function loadSiteAsset(id: string) {
+export async function loadSiteAsset(id: string, part?: AssetPart | null) {
   let pending = loaded.get(id)
   if (!pending) {
     pending = downloadSiteAssetBytes(id).then(parseAsset).then(result => result.object)
     loaded.set(id, pending)
     pending.catch(() => loaded.delete(id))
   }
-  return clone(await pending)
+  const root=await pending
+  return part ? extractAssetPart(root,part) : clone(root)
 }
 export async function importSiteAsset(projectId: string, file: File, category: string, progress: (value: number) => void, displayName = file.name) {
   if (!file.name.toLowerCase().endsWith('.glb')) throw Error('Choose a .glb file')

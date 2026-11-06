@@ -13,6 +13,18 @@ export interface ResourcesLayoutPrefs {
 }
 export const DEFAULT_RESOURCES_LAYOUT: ResourcesLayoutPrefs = { fontFamily: 'sans', fontSize: 11, headerColor: '#1d4ed8' }
 
+// Header colours are user-selected. Choose the more legible foreground rather
+// than assuming every saved colour is dark enough for white text.
+export function resourceHeaderTextColor(background: string): string {
+  const hex = /^#[0-9a-f]{6}$/i.test(background) ? background : DEFAULT_RESOURCES_LAYOUT.headerColor
+  const channels = [1, 3, 5].map(start => {
+    const value = parseInt(hex.slice(start, start + 2), 16) / 255
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+  return (luminance + 0.05) / 0.05 > 1.05 / (luminance + 0.05) ? '#000000' : '#ffffff'
+}
+
 const LAYOUT_STORAGE_KEY = 'prosota_resources_layout'
 export function loadResourcesLayout(): ResourcesLayoutPrefs {
   try {

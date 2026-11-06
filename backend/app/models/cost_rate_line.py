@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from decimal import Decimal
 
-from sqlalchemy import ForeignKey, Numeric, String
+from sqlalchemy import Boolean, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,3 +36,5 @@ class CostRateLine(Base, TimestampMixin):
     # separate parent_id column needed (this is a flat table by design —
     # see the class docstring above).
     cost_code: Mapped[str | None] = mapped_column(String(200))
+    area_m2: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
+    quantity_review_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false', nullable=False)

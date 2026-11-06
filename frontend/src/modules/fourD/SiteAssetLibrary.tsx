@@ -9,7 +9,7 @@ import { convertSiteImportSet } from './convertSiteImport'
 import { AssetImportReview } from './AssetImportReview'
 
 const categories = SITE_ASSET_CATEGORIES
-export function SiteAssetLibrary({ projectId, onPlace, inventory, initialFilter = '' }: { projectId: string; onPlace(asset: SiteAsset): void; inventory: ReturnType<typeof useSiteAssetInventory>; initialFilter?: string }) {
+export function SiteAssetLibrary({ projectId, onPlace, inventory, initialFilter = '' }: { projectId: string; onPlace(asset: SiteAsset, parts?: boolean): void; inventory: ReturnType<typeof useSiteAssetInventory>; initialFilter?: string }) {
   const {assets,setAssets} = inventory
   const [focusedId,setFocusedId] = useState<string|null>(null)
   const focused = assets.find(a=>a.id===focusedId) ?? null
@@ -21,7 +21,8 @@ export function SiteAssetLibrary({ projectId, onPlace, inventory, initialFilter 
   const [pendingImport, setPendingImport] = useState<File>()
   const [sourceFiles,setSourceFiles]=useState<File[]>([]),[sourceName,setSourceName]=useState('')
   const [sourceAxis,setSourceAxis]=useState<'auto'|'y'|'z'>('auto'),[unitScale,setUnitScale]=useState(0),[includeAnimation,setIncludeAnimation]=useState(true)
-  const [assemblyName,setAssemblyName]=useState('Equipment')
+  const [assemblyName,setAssemblyName]=useState('Assembly')
+  const [importAsParts,setImportAsParts]=useState(false)
   const sources=sourceFiles.filter(f=>/\.(glb|gltf|fbx|obj)$/i.test(f.name))
   const source=sourceFiles.find(f=>/\.(glb|gltf|fbx|obj)$/i.test(f.name))
   async function prepare() {
@@ -54,10 +55,10 @@ export function SiteAssetLibrary({ projectId, onPlace, inventory, initialFilter 
   return <section className="space-y-2">
     <div className="flex gap-2"><select aria-label="Import category" className="min-w-0 flex-1 rounded border p-2 bg-transparent" value={category} onChange={e => setCategory(e.target.value)}>{categories.map(c => <option key={c} value={c}>{c==='Equipment'?'Construction equipment':c}</option>)}</select>
       <button className="rounded bg-blue-600 text-white px-3 py-2 disabled:opacity-50" disabled={busy} onClick={() => input.current?.click()}>{busy ? `Importing ${Math.round(progress)}%` : 'Import 3D'}</button></div>
-    <input ref={input} hidden type="file" multiple accept=".glb,.gltf,.fbx,.obj,.mtl,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga" onChange={e => { const files=Array.from(e.target.files||[]);const models=files.filter(f=>/\.(glb|gltf|fbx|obj)$/i.test(f.name));setPendingImport(undefined);setError(models.length===0?'Choose models together with supporting MTL, BIN and texture files.':'');setSourceFiles(models.length?files:[]);setSourceAxis('auto');setUnitScale(0);e.target.value = '' }} />
+    <input ref={input} hidden type="file" multiple accept=".glb,.gltf,.fbx,.obj,.mtl,.bin,.png,.jpg,.jpeg,.webp,.bmp,.tga" onChange={e => { const files=Array.from(e.target.files||[]);const models=files.filter(f=>/\.(glb|gltf|fbx|obj)$/i.test(f.name));setPendingImport(undefined);setError(models.length===0?'Choose models together with supporting MTL, BIN and texture files.':'');setSourceFiles(models.length?files:[]);setImportAsParts(models.length>1);setSourceAxis('auto');setUnitScale(0);e.target.value = '' }} />
     {source && <section className="border rounded p-2 space-y-2">
-      <strong>{sources.length>1?`${sources.length} model files · assembly`:source.name}</strong>
-      {sources.length>1 && <><label className="block">Assembly name<input aria-label="Import assembly name" className="w-full border rounded p-1 dark:bg-prosota-panel2" value={assemblyName} onChange={e=>setAssemblyName(e.target.value)}/></label><p className="text-xs">Imports one asset with named, separate parts at their authored positions. Place it, then open Rigging to configure joints.</p></>}
+      <strong>{sources.length>1?`${sources.length} model files`:source.name}</strong>
+      {sources.length>1 && <><label className="block">Assembly name<input aria-label="Import assembly name" className="w-full border rounded p-1 dark:bg-prosota-panel2" value={assemblyName} onChange={e=>setAssemblyName(e.target.value)}/></label><label className="block">Use imported files as<select className="w-full border rounded p-1 bg-transparent" value={importAsParts?'parts':'assembly'} onChange={e=>setImportAsParts(e.target.value==='parts')}><option value="parts">Independent construction parts</option><option value="assembly">One equipment / model assembly</option></select></label><p className="text-xs">Independent parts can be scheduled and animated separately. One assembly is useful for rigging equipment.</p></>}
       <label className="block">Source up axis<select className="w-full border rounded p-1 dark:bg-prosota-panel2" value={sourceAxis} onChange={e=>setSourceAxis(e.target.value as 'auto'|'y'|'z')}><option value="auto">Automatic (file metadata)</option><option value="y">Y up</option><option value="z">Z up (Blender)</option></select></label>
       <label className="block">Source units<select className="w-full border rounded p-1 dark:bg-prosota-panel2" value={unitScale} onChange={e=>setUnitScale(Number(e.target.value))}><option value={0}>Automatic (file metadata)</option><option value={1}>Metres</option><option value={.01}>Centimetres</option><option value={.001}>Millimetres</option></select></label>
       <label className="flex gap-2"><input type="checkbox" checked={includeAnimation} onChange={e=>setIncludeAnimation(e.target.checked)}/>Include animation clips</label>
@@ -79,7 +80,8 @@ export function SiteAssetLibrary({ projectId, onPlace, inventory, initialFilter 
       <label className="block">Asset name<input key={focused.id+focused.name} aria-label="Asset name" className="block w-full border rounded p-2 bg-transparent" defaultValue={focused.name} disabled={busy} onBlur={e=>{if(e.target.value.trim() && e.target.value.trim()!==focused.name)void edit(focused,{name:e.target.value.trim()})}} /></label>
       <label className="block">Use as<select aria-label="Asset type" className="block w-full border rounded p-2 bg-transparent" value={focused.category} disabled={busy} onChange={e=>void edit(focused,{category:e.target.value})}>{categories.map(c=><option key={c} value={c}>{c==='Equipment'?'Construction equipment':c}</option>)}</select></label>
       <p>{[focused.dimensions.width, focused.dimensions.depth, focused.dimensions.height].map(v => v.toFixed(2)).join(' × ')} m (W × D × H) · base centre</p>
-      <button disabled={busy} className="w-full rounded bg-blue-600 text-white p-2" onClick={() => onPlace(focused)}>Place this asset</button>
+      <label className="block">Placement<select className="w-full border rounded p-1 bg-transparent" value={importAsParts?'parts':'assembly'} onChange={e=>setImportAsParts(e.target.value==='parts')}><option value="parts">Independent construction parts</option><option value="assembly">One object (characters / equipment)</option></select></label>
+      <button disabled={busy} className="w-full rounded bg-blue-600 text-white p-2" onClick={() => onPlace(focused,importAsParts)}>Place {importAsParts?'as independent parts':'as one object'}</button>
       <button className="text-red-600 dark:text-red-400" disabled={busy} onClick={()=>void remove([focused.id])}>Remove from library</button>
       <p className="text-slate-500">Placed copies are kept. Remove those under Site objects.</p>
     </>}

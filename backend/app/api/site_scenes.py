@@ -23,29 +23,44 @@ def result(row):
     return {"revision": row.revision if row else 0, "items": [evaluate(i) for i in row.items] if row else []}
 
 
-async def validate_item(db, project_id, item):
-    if item.asset_id:
-        asset = await db.get(SiteAsset, item.asset_id)
+async def validate_item(db, project_id, item, references=None):
+    # A split assembly can have thousands of items sharing one library asset.
+    # Retain lookups for this request only, including missing references.
+    if references is None:
+        references = {}
+
+    async def lookup(model, identity):
+        key = (model, identity)
+        if key not in references:
+            references[key] = await db.get(model, identity)
+        return references[key]
+
+    asset_ids = {item.asset_id} if item.asset_id else set()
+    asset_ids.update(r.asset_id for r in item.instance_overrides.values())
+    if item.geographic:
+        asset_ids.update(f.replacement.asset_id for f in item.geographic.features if f.replacement)
+    for asset_id in asset_ids:
+        asset = await lookup(SiteAsset, asset_id)
         if not asset or asset.project_id != project_id or asset.status not in ("ready", "archived"):
             raise HTTPException(422, "Choose a ready asset in this project")
     if item.activity_id:
-        activity = await db.get(Activity, item.activity_id)
+        activity = await lookup(Activity, item.activity_id)
         if not activity or activity.project_id != project_id:
             raise HTTPException(422, "Choose an activity in this project")
         if not activity.start or not activity.finish:
             raise HTTPException(422, "The linked activity needs start and finish dates")
     if item.path_motion:
-        motion_path = await db.get(Path, item.path_motion.path_id)
+        motion_path = await lookup(Path, item.path_motion.path_id)
         if not motion_path or motion_path.project_id != project_id or len(motion_path.points) < 2:
             raise HTTPException(422, "Choose a movement path in this project with at least two points")
     if item.kind in ("fence", "shape", "array", "scatter") and item.path_id:
-        path = await db.get(Path, item.path_id)
+        path = await lookup(Path, item.path_id)
         if not path or path.project_id != project_id:
             raise HTTPException(422, "The source path is missing or belongs to another project")
-        if path.points != [p.model_dump() for p in item.points] or path.closed != item.closed or (getattr(path, "curve_mode", "curved") != item.curve_mode):
+        if path.points != [p.model_dump(mode="json") for p in item.points] or path.closed != item.closed or (getattr(path, "curve_mode", "curved") != item.curve_mode):
             raise HTTPException(409, "The source path changed. Preview it again before saving")
     if item.zone_id and item.kind in ("shape", "array", "scatter"):
-        zone = await db.get(Zone, item.zone_id)
+        zone = await lookup(Zone, item.zone_id)
         if not zone or zone.project_id != project_id:
             raise HTTPException(422, "Choose a zone in this project")
         expected = zone_points(zone, item.up_axis)
@@ -85,18 +100,20 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
         raise HTTPException(409, "Site scene changed. Reload before saving")
     old = {i["id"]: SiteItem.model_validate(i).model_dump(mode="json") for i in row.items} if row else {}
     items = [i.model_dump(mode="json") for i in data.items]
+    references = {}
     for item, encoded in zip(data.items, items):
         before = old.get(str(item.id))
         if before == encoded:
             continue
         if before and before.get("locked") and encoded.get("locked"):
             raise HTTPException(409, "Unlock this object before changing it")
-        await validate_item(db, project_id, item)
+        await validate_item(db, project_id, item, references)
     if sum(len((evaluate(i).get("layout") or {}).get("panels", [])) for i in items) > 5000:
         raise HTTPException(422, "This site scene is limited to 5,000 fence panels")
     if sum(len((evaluate(i).get("layout") or {}).get("placements", [])) for i in items) > 1000:
         raise HTTPException(422, "Limit the scene to 1,000 generated placements")
-    if any(i.get("locked") and i["id"] not in {j["id"] for j in items} for i in old.values()):
+    new_ids = {i["id"] for i in items}
+    if any(i.get("locked") and i["id"] not in new_ids for i in old.values()):
         raise HTTPException(409, "Unlock an object before removing it")
     if not row:
         row = SiteScene(project_id=project_id, revision=0, items=[])

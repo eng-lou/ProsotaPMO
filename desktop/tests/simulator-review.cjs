@@ -1,0 +1,33 @@
+const {app,BrowserWindow}=require('electron');const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');const repo=path.resolve(__dirname,'../..');
+app.whenReady().then(async()=>{let win,status=0;try{
+const output=await require(path.join(repo,'frontend/node_modules/esbuild')).build({entryPoints:[path.join(__dirname,'simulator-fixture.tsx')],nodePaths:[path.join(repo,'frontend/node_modules')],tsconfig:path.join(repo,'frontend/tsconfig.json'),bundle:true,write:false,outfile:'fixture.js',format:'iife',define:{'import.meta.env':'{}','process.env.NODE_ENV':'"production"'}});
+win=new BrowserWindow({show:false,width:1540,height:1050,webPreferences:{contextIsolation:true,offscreen:true}});win.webContents.on('console-message',(_,level,message)=>console.log('renderer',message));await win.loadFile(path.join(repo,'desktop/ui/desktop-settings.html'));
+const run=s=>win.webContents.executeJavaScript(s),wait=()=>new Promise(r=>setTimeout(r,450));
+await run(`document.head.innerHTML='<style>html,body,#root{width:100vw;height:100vh;margin:0;max-width:none;font:13px Arial}.simulator{top:20px!important;width:790px!important;max-height:95vh!important}canvas{width:100%;height:100%}</style>';document.body.innerHTML='<div id="root"></div>';void 0`);
+for(const file of output.outputFiles){if(file.path.endsWith('.css'))await run(`(()=>{const s=document.createElement('style');s.textContent=${JSON.stringify(file.text)};document.head.append(s)})()`);else if(file.path.endsWith('.js'))await run(file.text)}await wait();
+const click=async label=>{await run(`(()=>{const b=Array.from(document.querySelectorAll('button')).find(b=>(b.getAttribute('aria-label')||b.textContent.trim())===${JSON.stringify(label)});if(!b)throw Error('Missing button '+${JSON.stringify(label)});b.click()})()`);await wait()};
+await run(`(()=>{document.querySelector('.scenario-options').open=true;const s=document.querySelector('[aria-label="Saved scenario"]');s.value='scenario-a';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);await wait();await run("document.querySelector('.scenario-options').open=false");await click('Results');
+fs.writeFileSync(path.join(repo,'outputs/simulator-results.png'),(await win.webContents.capturePage()).toPNG());await click('Play scenario');await click('Pause');await click('Close');await run('window.setScenario();window.seek(0)');await wait();
+const position=()=>run(`(()=>{const b=window.scene.getObjectByName('Beam');return b.getWorldPosition(new (b.position.constructor)()).toArray()})()`);
+let p=await position();assert.ok(Math.abs(p[0]+5)<.001,JSON.stringify(p));await run('window.seek(1.5)');await wait();p=await position();assert.ok(Math.abs(p[0])<.001&&Math.abs(p[1]-3)<.001,JSON.stringify(p));fs.writeFileSync(path.join(repo,'outputs/simulator-carry.png'),(await win.webContents.capturePage()).toPNG());
+await run('window.seek(3)');await wait();p=await position();assert.ok(Math.abs(p[0]-3)<.001&&Math.abs(p[1]-.4)<.001,JSON.stringify(p));await run('window.seek(1.5)');await wait();assert.deepEqual(await position(),[0,3,0]);assert.deepEqual(await run('window.ifcPositions()'),[[-1,3,0],[1,3,0]]);await run('window.exit()');await wait();assert.deepEqual(await position(),[3,.4,0]);assert.deepEqual(await run('window.ifcPositions()'),[[3,.4,3],[5,.4,3]]);assert.equal(await run('window.error'),'');
+await run('window.show()');await wait();await click('Steps');fs.writeFileSync(path.join(repo,'outputs/simulator-steps.png'),(await win.webContents.capturePage()).toPNG());await click('Add excavation example');
+const phasePick=async n=>{await run(`document.querySelectorAll('.phase-flow button')[${n}].click()`);await wait()};
+assert.equal(await run("document.querySelectorAll('.phase-editor').length"),1);
+await phasePick(1);
+await run(`(()=>{const i=Array.from(document.querySelectorAll('.phase-editor label')).find(l=>l.textContent.startsWith('Phase')).querySelector('input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,'Travel to disposal');i.dispatchEvent(new Event('input',{bubbles:true}))})()`);await wait();
+await phasePick(0);await phasePick(1);
+assert.equal(await run("document.querySelector('.phase-editor input').value"),'Travel to disposal');
+await run("document.querySelector('.phase-flow').scrollIntoView({block:'start'})");await wait();
+fs.writeFileSync(path.join(repo,'outputs/simulator-cycle.png'),(await win.webContents.capturePage()).toPNG());
+await click('Resources');fs.writeFileSync(path.join(repo,'outputs/simulator-resources.png'),(await win.webContents.capturePage()).toPNG());
+assert.ok(await run("document.querySelectorAll('.resource-card').length>0"));
+await click('Scope');fs.writeFileSync(path.join(repo,'outputs/simulator-scope.png'),(await win.webContents.capturePage()).toPNG());
+await run("document.querySelector('.scenario-options').open=true");await click('Save scenario');
+assert.ok(await run("Object.values(window.rows).some(s=>s.config.steps.some(t=>t.phases.some(p=>p.name==='Travel to disposal')))"));
+await run("document.querySelector('.scenario-options').open=false;document.documentElement.classList.add('dark')");await click('Steps');
+await run(`(()=>{const s=document.createElement('style');s.textContent='.simulator{width:calc(100vw - 32px)!important}';document.head.append(s)})()`);win.setSize(580,950);await wait();
+assert.equal(await run("document.querySelector('.simulator main').scrollWidth<=document.querySelector('.simulator main').clientWidth+1"),true);
+fs.writeFileSync(path.join(repo,'outputs/simulator-narrow-dark.png'),(await win.webContents.capturePage()).toPNG());
+console.log('PASS: visual methods, single phase editing, phase retention, scenario save, resource cards, narrow dark layout, results controls, real-object carry, multi-piece IFC materialisation, installed restoration, reverse seek, scenario exit');
+}catch(e){status=1;console.error(e)}finally{if(win)win.destroy();app.exit(status)}})

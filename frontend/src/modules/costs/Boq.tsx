@@ -45,10 +45,33 @@ export function Boq({ projectId, periodId, projectName }: Props) {
   const [generating, setGenerating] = useState(false)
   const [deletingAll, setDeletingAll] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
-  const [addForm, setAddForm] = useState<{ description: string; qty: string; unit: string; rate: string } | null>(null)
+  const [addForm, setAddForm] = useState<{ description: string; qty: string; unit: string; rate: string; area_m2: string } | null>(null)
   const [editingLineId, setEditingLineId] = useState<string | null>(null)
-  const [editValues, setEditValues] = useState<{ description: string; qty: string; unit: string; rate: string } | null>(null)
+  const [editValues, setEditValues] = useState<{ description: string; qty: string; unit: string; rate: string; area_m2: string } | null>(null)
   const [printTrigger, setPrintTrigger] = useState(0)
+  const [quantityProposals, setQuantityProposals] = useState<{ id: string; description: string; area_m2: number | null; qty: number | null; note: string }[] | null>(null)
+  const reviewIfcQuantities = async () => {
+    if (!boqElement) return
+    setGenerating(true)
+    try {
+      const { data } = await api.post(`/api/v1/model3d-files/ifc-boq/${boqElement.id}/quantities`, {}, { timeout: 240000 })
+      setQuantityProposals(data)
+    } catch (e) { setMessage(axios.isAxiosError(e) ? String(e.response?.data?.detail ?? e.message) : String(e)) }
+    finally { setGenerating(false) }
+  }
+  const acceptQuantity = async (p: NonNullable<typeof quantityProposals>[number]) => {
+    try {
+      await api.patch(`/api/v1/cost-rate-lines/${p.id}`, {
+        ...(p.area_m2 !== null ? { area_m2: String(p.area_m2) } : {}),
+        ...(p.qty !== null ? { qty: String(p.qty) } : {}),
+        // Refreshing area alone cannot certify a different quantity unit.
+        quantity_review_required: p.qty === null,
+      })
+      setQuantityProposals(current => current?.filter(x => x.id !== p.id) ?? null)
+      await load()
+    } catch (e) { setMessage(axios.isAxiosError(e) ? String(e.response?.data?.detail ?? e.message) : String(e)) }
+  }
+
 
   // Fires window.print() only after BoqPrintView has committed to the DOM
   // (same two-step trigger CostPlan.tsx's own print buttons already use).
@@ -118,7 +141,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
       for (const d of toCreate) {
         await api.post('/api/v1/cost-rate-lines/', {
           cost_element_id: element.id, description: d.description, qty: d.qty, unit: d.unit, rate: d.rate,
-          cost_code: d.cost_code,
+          cost_code: d.cost_code, area_m2: ['m2', 'm²'].includes(d.unit ?? '') ? d.qty : null,
         })
       }
       await load()
@@ -144,7 +167,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
     }
     await api.post('/api/v1/cost-rate-lines/', {
       cost_element_id: element.id, description: addForm.description,
-      qty: addForm.qty || '0', unit: addForm.unit || null, rate: addForm.rate || '0',
+      area_m2: addForm.area_m2 || null, qty: addForm.qty || '0', unit: addForm.unit || null, rate: addForm.rate || '0',
     })
     setAddForm(null)
     await load()
@@ -153,7 +176,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
   const handleSaveEdit = async (lineId: string) => {
     if (!editValues) return
     await api.patch(`/api/v1/cost-rate-lines/${lineId}`, {
-      description: editValues.description, qty: editValues.qty, unit: editValues.unit || null, rate: editValues.rate,
+      area_m2: editValues.area_m2 || null, quantity_review_required: false, description: editValues.description, qty: editValues.qty, unit: editValues.unit || null, rate: editValues.rate,
     })
     setEditingLineId(null)
     setEditValues(null)
@@ -205,7 +228,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
         </button>
         {!addForm && (
           <button
-            onClick={() => setAddForm({ description: '', qty: '', unit: '', rate: '' })}
+            onClick={() => setAddForm({ description: '', qty: '', unit: '', rate: '', area_m2: '' })}
             className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium"
           >
             + Add line
@@ -230,6 +253,8 @@ export function Boq({ projectId, periodId, projectName }: Props) {
         {message && <span className="text-xs text-gray-500 dark:text-prosota-muted">{message}</span>}
       </div>
 
+      {boqElement && <div className="mb-3 flex gap-3 items-center text-xs"><button className="border rounded px-3 py-1.5" disabled={generating} onClick={() => void reviewIfcQuantities()}>Review / refresh IFC quantities</button>{lines.some(l => l.quantity_review_required) && <span className="text-amber-600">IFC revision applied: review quantities before issuing this BOQ. Saving a line confirms your manual review.</span>}</div>}
+      {quantityProposals && <div className="mb-4 border rounded p-3 text-xs"><div className="flex justify-between"><strong>Proposed quantities · current approved IFC</strong><button onClick={() => setQuantityProposals(null)}>Close</button></div><p className="my-2">Review each measurement before accepting. Rates remain unchanged. Missing measurements need manual review.</p>{quantityProposals.length === 0 && <p>No further IFC quantity proposals.</p>}{quantityProposals.map(p => <div key={p.id} className="py-2 border-t flex gap-3 items-center"><span className="flex-1">{p.description}<small className="block">{p.note}</small></span><span>Qty: {p.qty ?? 'manual'} · Area: {p.area_m2 == null ? 'not supplied' : `${p.area_m2.toFixed(3)} m²`}</span><button disabled={p.qty === null && p.area_m2 === null} className="border rounded p-1 disabled:opacity-40" onClick={() => void acceptQuantity(p)}>Accept measurement</button></div>)}</div>}
       {addForm && (
         <div className="mb-4 p-3 border border-gray-200 dark:border-prosota-line rounded-md bg-gray-50 dark:bg-prosota-panel2 flex items-end gap-2 flex-wrap">
           <label className="text-xs text-gray-500 dark:text-prosota-muted">Item
@@ -240,6 +265,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
             <input value={addForm.qty} onChange={e => setAddForm({ ...addForm, qty: e.target.value })}
               className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-sm w-24" />
           </label>
+          <label className="text-xs text-gray-500 dark:text-prosota-muted">Area (m²)<input type="number" min="0" step="any" value={addForm.area_m2} onChange={e => setAddForm({ ...addForm, area_m2: e.target.value })} className="block w-24 bg-transparent border rounded p-1" /></label>
           <label className="text-xs text-gray-500 dark:text-prosota-muted">Unit
             <input value={addForm.unit} onChange={e => setAddForm({ ...addForm, unit: e.target.value })}
               className="block border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 text-sm w-20" />
@@ -264,7 +290,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
               <th className="py-2 pr-2 w-12">Sr.</th>
               <th className="py-2 pr-2">Name of Item</th>
               <th className="py-2 pr-2 w-32">Cost Code</th>
-              <th className="py-2 pr-2 text-right w-24">Quantity</th>
+              <th className="py-2 pr-2 text-right w-24">Quantity</th><th className="py-2 pr-2 text-right w-24">Area (m²)</th>
               <th className="py-2 pr-2 w-16">Unit</th>
               <th className="py-2 pr-2 text-right w-24">Rate</th>
               <th className="py-2 pr-2 text-right w-28">Amount</th>
@@ -292,6 +318,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
                           <input value={editValues!.qty} onChange={e => setEditValues({ ...editValues!, qty: e.target.value })}
                             className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-sm w-full text-right" />
                         </td>
+                        <td className="py-1.5 pr-2"><input aria-label="Area in square metres" type="number" min="0" step="any" value={editValues!.area_m2} onChange={e => setEditValues({ ...editValues!, area_m2: e.target.value })} className="w-24 bg-transparent border rounded p-1" /></td>
                         <td className="py-1.5 pr-2">
                           <input value={editValues!.unit} onChange={e => setEditValues({ ...editValues!, unit: e.target.value })}
                             className="border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-sm w-full" />
@@ -311,13 +338,13 @@ export function Boq({ projectId, periodId, projectName }: Props) {
                         <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted">{showSr ? sr : '—'}</td>
                         <td className="py-1.5 pr-2" style={{ paddingLeft: 8 + indent * 16 }}>{label}</td>
                         <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{line.cost_code ?? '—'}</td>
-                        <td className="py-1.5 pr-2 text-right">{Number(line.qty).toLocaleString()}</td>
+                        <td className="py-1.5 pr-2 text-right">{Number(line.qty).toLocaleString()}{line.quantity_review_required && <span className="block text-amber-600 text-xs">Review quantities</span>}</td><td className="py-1.5 pr-2 text-right">{line.area_m2 == null ? '—' : Number(line.area_m2).toLocaleString()}</td>
                         <td className="py-1.5 pr-2 text-gray-500 dark:text-prosota-muted">{line.unit ?? '—'}</td>
                         <td className="py-1.5 pr-2 text-right">{formatCurrency(Number(line.rate))}</td>
                         <td className="py-1.5 pr-2 text-right font-medium">{formatCurrency(Number(line.total))}</td>
                         <td className="py-1.5 pr-2 whitespace-nowrap">
                           <button
-                            onClick={() => { setEditingLineId(line.id); setEditValues({ description: line.description, qty: line.qty, unit: line.unit ?? '', rate: line.rate }) }}
+                            onClick={() => { setEditingLineId(line.id); setEditValues({ description: line.description, qty: line.qty, unit: line.unit ?? '', rate: line.rate, area_m2: line.area_m2 ?? '' }) }}
                             className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper mr-2"
                           >Edit</button>
                           <button onClick={() => handleDeleteLine(line)} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
@@ -335,7 +362,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
                         <td className="py-1.5 pr-2"></td>
                         <td className="py-1.5 pr-2 font-bold">{section.label}</td>
                         <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{section.key}</td>
-                        <td colSpan={3}></td>
+                        <td colSpan={4}></td>
                         <td className="py-1.5 pr-2 text-right font-bold">{formatCurrency(section.subtotal)}</td>
                         <td></td>
                       </tr>
@@ -345,7 +372,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
                             <td className="py-1.5 pr-2"></td>
                             <td className="py-1.5 pr-2 font-semibold text-gray-600 dark:text-prosota-muted" style={{ paddingLeft: 8 + 16 }}>{element.label}</td>
                             <td className="py-1.5 pr-2 text-gray-400 dark:text-prosota-muted font-mono text-[10px]">{element.key}</td>
-                            <td colSpan={3}></td>
+                            <td colSpan={4}></td>
                             <td className="py-1.5 pr-2 text-right font-semibold text-gray-600 dark:text-prosota-muted">{formatCurrency(element.subtotal)}</td>
                             <td></td>
                           </tr>
@@ -366,7 +393,7 @@ export function Boq({ projectId, periodId, projectName }: Props) {
           </tbody>
           <tfoot>
             <tr className="border-t-2 border-gray-300 dark:border-prosota-line font-bold">
-              <td colSpan={6} className="py-2 pr-2 text-right">Total Cost</td>
+              <td colSpan={7} className="py-2 pr-2 text-right">Total Cost</td>
               <td className="py-2 pr-2 text-right">{formatCurrency(total)}</td>
               <td></td>
             </tr>

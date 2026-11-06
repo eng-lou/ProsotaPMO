@@ -1,27 +1,8 @@
 import type { Activity, Resource, ResourceAssignment } from './types'
 import type { ResourceRecipeResource, ResourceRecipeAssignment } from '../fourD/scheduleGeneration'
 
-// Deliberately conservative trade rules, not fuzzy matching on project-name words.
-const trades: Record<string, RegExp> = {
-  ground: /\b(excavat\w*|earthworks?|groundworks?|groundworkers?|site clearance|site strip|formation|capping)\b/,
-  piling: /\b(pile(?! caps?\b)|piles|piling(?! platform\b)|cfa)\b/,
-  concrete: /\b(concret\w*|formwork|rebar|reinforc\w*|pile caps?|ground beams?|slab pours?)\b/,
-  steel: /\b(steel|metal deck\w*)\b/,
-  facade: /\b(fa[cç]ade\w*|cladding|curtain wall\w*|glazing|glazed|rainscreen|sfs)\b/,
-  roof: /\b(roof\w*|waterproof\w*|membrane)\b/,
-  drylining: /\b(drylin\w*|partitions?|ceilings?|plasterboard)\b/,
-  finishes: /\b(finishes|finishing|decorat\w*|paint\w*|flooring|floor finishes|tiling)\b/,
-  mechanical: /\b(mechanical|duct\w*|ventilation|ahu\w*|heating|cooling|pipework|plumbing|medical gas\w*|domestic water)\b/,
-  electrical: /\b(electrical|electrician\w*|lighting|cabling|switchboard|switchgear|fire alarm|ict|security|bms)\b/,
-  commissioning: /\b(commission\w*|balancing|integrated testing)\b/,
-}
-const plant: Record<string, { resource: RegExp; task: RegExp }> = {
-  excavator: { resource: /excavator/, task: /excavat|earthwork|site clearance|formation/ },
-  dumper: { resource: /dumper/, task: /excavat|earthwork|site clearance/ },
-  piling_rig: { resource: /piling rig|cfa.*rig/, task: /cfa|install.*piles|piling(?! platform)/ },
-  crane: { resource: /crane/, task: /(?:erect.*steel|steel.*erect|lift.*plant|plant.*lift)/ },
-}
-const normal = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/[^a-z0-9ç]+/g, ' ').trim()
+import { normaliseResourceText as normal, plant, isResourceTask, needsManualResourcePlanning, resourceEvidence, suggestedTrades, matchesTrade } from './scheduleResourceRules'
+
 export function buildDirectAssignments(
   activities: Activity[], resources: Resource[], existing: ResourceAssignment[],
   recipe: { resources: ResourceRecipeResource[]; assignments: ResourceRecipeAssignment[] },
@@ -56,10 +37,7 @@ export function buildDirectAssignments(
     else if (candidates.length > 1) issues.push(`${a.task_name}: choose ${slot} (${candidates.map(r => r.name).join(', ')}).`)
   }
   for (const a of activities) {
-    if (a.is_archived || a.activity_type !== 'task' || !(Number(a.duration_hours) > 0)) continue
-    const text = normal(a.task_name)
-    // Planning/ordering and tests should not acquire installation crews by noun alone.
-    if (/\b(procure\w*|order\w*|design|approv\w*|manufactur\w*|curing|strength gain|inspection)\b/.test(text)) continue
+    if (!isResourceTask(a) || needsManualResourcePlanning(a)) continue
     const before = assignments.length
     const exactSlots = new Set<string>()
     for (const r of recipesByActivity.get(a.id) ?? []) {
@@ -69,17 +47,15 @@ export function buildDirectAssignments(
         && (p.resource_type !== 'material' || (normal(p.unit) !== '' && normal(p.unit) === normal(expected.unit))))
       if (candidates.length) {
         if (expected.resource_type !== 'material' || (r.quantity != null && r.quantity > 0)) choose(a, candidates, expected.name, r.quantity)
-        exactSlots.add(expected.resource_type)
+        exactSlots.add(expected.resource_type === 'labour' ? 'crew' : expected.resource_type)
       }
     }
-    const evidence = Object.values(trades).some(rule => rule.test(text)) ? text
-      : /\b(install|erect|construct)\b/.test(text) ? `${text} ${normal(a.schedule_category)} ${normal((labels.get(a.id) ?? []).join(' '))}` : text
-    const commissioning = trades.commissioning.test(evidence)
+    const evidence = resourceEvidence(a, labels.get(a.id))
+    const matchedTrades = suggestedTrades(evidence)
+    const commissioning = matchedTrades.includes('commissioning')
     if (!exactSlots.has('crew')) {
-      for (const [trade, rule] of Object.entries(trades)) {
-        if (commissioning && trade !== 'commissioning') continue
-        if (!rule.test(evidence)) continue
-        const belongs = (r: Resource) => (r.resource_type === 'crew' || r.resource_type === 'labour') && rule.test(normal(`${r.name} ${r.role ?? ''} ${r.category ?? ''}`))
+      for (const trade of matchedTrades) {
+        const belongs = (r: Resource) => matchesTrade(r, trade)
         if ((assigned.get(a.id) ?? []).some(belongs)) continue
         choose(a, resources.filter(belongs), `${trade} labour/crew`)
       }
@@ -89,7 +65,7 @@ export function buildDirectAssignments(
       const belongs = (r: Resource) => r.resource_type === 'equipment' && rule.resource.test(normal(r.name))
       if (!(assigned.get(a.id) ?? []).some(belongs)) choose(a, resources.filter(belongs), name)
     }
-    if (!exactSlots.has('material') && a.schedule_material_name && Number(a.schedule_material_quantity) > 0) {
+    if (!exactSlots.has('material') && a.schedule_material_name && normal(a.schedule_material_unit) && Number(a.schedule_material_quantity) > 0) {
       choose(a, resources.filter(r => r.resource_type === 'material' && normal(r.name) === normal(a.schedule_material_name)
         && normal(r.unit) === normal(a.schedule_material_unit)), 'measured material', Number(a.schedule_material_quantity))
     }

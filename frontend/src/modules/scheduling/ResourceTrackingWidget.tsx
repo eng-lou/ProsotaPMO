@@ -6,7 +6,7 @@ import { FONT_FAMILY_CSS } from '@/lib/ganttLayout'
 import { recalculateCosts, saveSpreadRange, type ResourceSpread } from '@/lib/resourceAssignmentSpread'
 import { formatDateTime } from './dateTime'
 import { buildCalendarLookup, resolveHoursPerDay } from './durationDisplay'
-import { RESOURCE_CHART_Y_AXIS_WIDTH, type ResourcesLayoutPrefs } from './resourcesLayout'
+import { RESOURCE_CHART_Y_AXIS_WIDTH, resourceHeaderTextColor, type ResourcesLayoutPrefs } from './resourcesLayout'
 import { eachDate, usageUnitFactor, type UsageProfileSeries, type AssignmentRow } from './useResourcesTabData'
 import type { Calendar, Resource, ResourceAssignment } from './types'
 
@@ -146,6 +146,11 @@ function ResourceTrackingWidgetImpl({
   }, [trackedResources, baseAssignmentsByResource, buckets, figures])
   const stickyBodyBg = theme === 'dark' ? '#0C1A2E' : '#ffffff'
   const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
+  const resourceHeaderStyle = {
+    backgroundColor: layoutPrefs.headerColor,
+    color: resourceHeaderTextColor(layoutPrefs.headerColor),
+    borderRight: `1px solid ${layoutPrefs.headerColor}`,
+  }
   const [visibleOptionalCols, setVisibleOptionalCols] = useState<Set<OptionalColKey>>(loadVisibleOptionalCols)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
   const [sortKey, setSortKey] = useState<ColKey | null>(null)
@@ -700,16 +705,16 @@ function ResourceTrackingWidgetImpl({
                     const { resource, resourceStart, resourceFinish, resourceBuckets } = flat
                     const collapsed = collapsedIds.has(resource.id)
                     return (
-                      <tr key={resource.id} className="text-white font-semibold" style={{ height: RESOURCE_HEADER_ROW_HEIGHT, backgroundColor: layoutPrefs.headerColor }}>
-                        <td className="px-1.5" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
+                      <tr key={resource.id} className="font-semibold [&>td]:border-b [&>td]:border-gray-200 dark:[&>td]:border-prosota-line" style={{ height: RESOURCE_HEADER_ROW_HEIGHT, backgroundColor: stickyBodyBg }}>
+                        <td className="px-1.5" style={{ position: 'sticky', left: leftOffsets[0], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }}>
                           <input type="checkbox" checked={selectedResourceIds.has(resource.id)} onChange={() => onToggleResourceSelected(resource.id)} />
                         </td>
-                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
-                          <button onClick={() => onToggleCollapsed(resource.id)} className="mr-1 text-white/80 hover:text-white">
+                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[1], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }}>
+                          <button onClick={() => onToggleCollapsed(resource.id)} className="mr-1 opacity-80 hover:opacity-100">
                             {collapsed ? '▸' : '▾'}
                           </button>
                         </td>
-                        <td className="px-2 py-1.5 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>
+                        <td className="px-2 py-1.5 truncate" style={{ position: 'sticky', left: leftOffsets[2], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }}>
                           {resource.name}
                           <button
                             onClick={() => handleRecalculate(resource)}
@@ -720,12 +725,12 @@ function ResourceTrackingWidgetImpl({
                             {recalculatingIds.has(resource.id) ? '…' : '🔄'}
                           </button>
                         </td>
-                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>{formatDateTime(resourceStart, false)}</td>
-                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>{formatDateTime(resourceFinish, false)}</td>
+                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[3], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }}>{formatDateTime(resourceStart, false)}</td>
+                        <td className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[4], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }}>{formatDateTime(resourceFinish, false)}</td>
                         {OPTIONAL_COLUMNS.filter(c => visibleOptionalCols.has(c.key)).map((c, i) => (
-                          <td key={c.key} className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }}>—</td>
+                          <td key={c.key} className="px-2 py-1.5" style={{ position: 'sticky', left: leftOffsets[5 + i], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }}>—</td>
                         ))}
-                        <td style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', backgroundColor: layoutPrefs.headerColor, borderRight: `1px solid ${layoutPrefs.headerColor}` }} />
+                        <td style={{ position: 'sticky', left: leftOffsets[leftOffsets.length - 1], zIndex: 1, height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', ...resourceHeaderStyle }} />
                         {leadingSpacerWidth > 0 && <td style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden' }} />}
                         {visibleBucketIndices.map(i => {
                           const demand = resourceBuckets?.demand[i] ?? 0
@@ -735,8 +740,8 @@ function ResourceTrackingWidgetImpl({
                           return (
                             <td
                               key={i}
-                              style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden', borderRight: `1px solid ${layoutPrefs.headerColor}` }}
-                              className={`px-2 py-1.5 text-right ${empty ? 'bg-gray-100 dark:bg-prosota-panel2' : ''}`}
+                              style={{ height: RESOURCE_HEADER_ROW_HEIGHT, overflow: 'hidden' }}
+                              className={`px-2 py-1.5 text-right border-r border-gray-200 dark:border-prosota-line text-blue-950 dark:text-blue-100 ${empty ? 'bg-gray-50 dark:bg-prosota-panel2' : 'bg-blue-50 dark:bg-slate-800'}`}
                             >
                               <ResourceFigures overallocated={overallocated} selected={series} budget={demand * usageUnitFactor(resource, unit)} actual={resourceFigures.get(resource.id)?.actual[i] ?? null} earned={resourceFigures.get(resource.id)?.earned[i] ?? null} unit={unit} />
                             </td>
@@ -790,7 +795,7 @@ function ResourceTrackingWidgetImpl({
                             key={i}
                             onDoubleClick={() => { if (active && series.length === 1 && series[0] === 'budget') startEdit(row.assignment, i, hours) }}
                             title={series.length === 1 && series[0] === 'budget' ? "Double-click to edit — manual resource leveling" : "Select Budgeted alone to edit its values. Actuals and Earned Value are read-only."}
-                            className={`px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-right text-gray-600 dark:text-prosota-muted ${empty ? 'bg-gray-100 dark:bg-prosota-panel2' : ''} ${active ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                            className={`px-2 py-1 border-r border-gray-200 dark:border-prosota-line text-right text-gray-600 dark:text-prosota-muted ${empty ? 'bg-gray-100 dark:bg-prosota-panel2' : ''} ${active ? 'cursor-pointer hover:bg-blue-50 dark:hover:bg-slate-800' : ''}`}
                             style={{ height: RESOURCE_CHILD_ROW_HEIGHT, overflow: 'hidden' }}
                           >
                             <ResourceFigures selected={series} budget={hours * usageUnitFactor(resource, unit)} actual={figures.actualByAssignment.get(row.assignment.id)?.[i] ?? null} earned={figures.evByAssignment.get(row.assignment.id)?.[i] ?? null} unit={unit} />

@@ -9,10 +9,13 @@ Check `git push --dry-run origin main` before asking the owner to reconnect.
 After pushing, verify the actual production deployment at www.prosota.com.
 
 The homepage's Windows link targets the versioned GitHub release asset.
-`desktop/publish_release.py` verifies the local installer against
-`desktop/release/release-manifest.json`, uploads the installer and manifest, then
-publishes a preview release. It does not publish project data or model sources.
-The current preview is unsigned. Desktop projects remain local, separate from web.
+`desktop/publish_planner.py --channel stable` verifies the local installer against
+`desktop/release/stable/release-manifest.json`, uploads the installer and manifest,
+then publishes the Stable release. Use `--channel preview` for a Preview release.
+Publish the verified installer before pushing the homepage link to main. The
+publisher requires a clean, committed source revision and matching installer hash.
+It does not publish project data or model sources. Installers are currently
+unsigned. Desktop projects remain local, separate from web.
 
 ## Provider key setup links
 

@@ -7,7 +7,7 @@ export function siteMaterialSlots(object: THREE.Object3D, assetId: string) {
   object.traverse(node => {
     if (!(node instanceof THREE.Mesh)) return
     for (const mat of Array.isArray(node.material) ? node.material : [node.material]) {
-      if (!slots.has(mat)) slots.set(mat, `site|${assetId}|${slots.size}`)
+      if (!slots.has(mat)) slots.set(mat, `site|${assetId}|${Number.isInteger(mat.userData.prosotaAssetSlot)?mat.userData.prosotaAssetSlot:slots.size}`)
     }
   })
   return slots

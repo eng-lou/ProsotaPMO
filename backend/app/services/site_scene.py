@@ -9,7 +9,7 @@ import random
 
 def fence_layout(item):
     points = sample_path(item)
-    if item.get('curve_mode') == 'curved' and len(points)>2:
+    if (item.get('curve_mode') == 'curved' or any(p.get('segment_mode') == 'curved' for p in item['points'])) and len(points)>2:
         # Follow the curve with practical panel-length chords, not one panel per tessellation edge.
         route=points+([points[0]] if item.get('closed') else [])
         lengths=[math.dist([a[k] for k in 'xyz'],[b[k] for k in 'xyz']) for a,b in zip(route,route[1:])]
@@ -88,14 +88,25 @@ def evaluate(item):
 def sample_path(item):
     """Centripetal Catmull-Rom, matching Three's path display/followers."""
     points = item['points']
-    if item.get('curve_mode', 'straight') == 'straight' or len(points) < 3:
-        return list(points)
+    mixed = any(p.get('segment_mode') for p in points)
+    if (not mixed and item.get('curve_mode', 'straight') == 'straight') or len(points) < 2:
+        return [{k:p[k] for k in 'xyz'} for p in points]
     closed = item.get('closed', False)
     result = []
     n = len(points)
     if n>128: raise ValueError('Limit curved source paths to 128 control points')
     for i in range(n if closed else n-1):
         p1, p2 = points[i], points[(i+1) % n]
+        mode = p2.get('segment_mode') or item.get('curve_mode', 'straight')
+        if mode == 'straight':
+            result.append({k:p1[k] for k in 'xyz'})
+            continue
+        handles = p2.get('segment_controls')
+        if handles:
+            for j in range(24):
+                t=j/24; u=1-t
+                result.append({k:u**3*p1[k]+3*u*u*t*(p1[k]+handles[0][k])+3*u*t*t*(p2[k]+handles[1][k])+t**3*p2[k] for k in 'xyz'})
+            continue
         p0 = points[(i-1) % n] if closed or i > 0 else {k: 2*p1[k]-p2[k] for k in 'xyz'}
         p3 = points[(i+2) % n] if closed or i+2 < n else {k: 2*p2[k]-p1[k] for k in 'xyz'}
         def dt(a,b): return math.sqrt(math.dist(list(a[k] for k in 'xyz'), list(b[k] for k in 'xyz')))
@@ -110,7 +121,7 @@ def sample_path(item):
                 m2=((c-b)/d1-(d-b)/(d1+d2)+(d-c)/d2)*d1
                 point[k]=b+m1*t+(-3*b+3*c-2*m1-m2)*t*t+(2*b-2*c+m1+m2)*t*t*t
             result.append(point)
-    if not closed: result.append(dict(points[-1]))
+    if not closed: result.append({k:points[-1][k] for k in 'xyz'})
     return result
 
 

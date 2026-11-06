@@ -11,6 +11,8 @@ import { restoreSiteObjectState } from './siteObjectTransform'
 import { applyCustomMaterial, captureMaterialChannels, hasCustomTextures } from './customMaterial'
 import type { CustomTextureSet } from './customTextures'
 import { SiteAssetModel } from './SiteAssetModel'
+import { SiteAttachments } from './SiteAttachments'
+import { GeographicModel } from './GeographicModel'
 import type { PathPoint } from './paths'
 import type { ModelElementLink } from './modelElementLinks'
 import type { AnimationProfile } from './animationProfiles'
@@ -38,6 +40,8 @@ function ShapeMaterial({ item, mapping, transmission, preview, colour, textures,
 }
 
 export interface SiteLayerState {
+  detailSelection?: {itemId:string;featureId?:string;surface?:string;instanceIndex?:number}|null
+  onDetailSelect?(selection:{itemId:string;featureId?:string;surface?:string;instanceIndex?:number}):void
   paths?: Path[]; daysPerSecond?: number
   pathDateRef?: React.MutableRefObject<Date | null>
   customTextures?: Record<string, CustomTextureSet>; customOpacity?: Record<string, number>
@@ -87,19 +91,19 @@ function FootprintGeometry({item}:{item:SiteItem}) {
   useEffect(()=>()=>geometry.dispose(),[geometry])
   return <primitive object={geometry} attach="geometry" />
 }
-function Item({ item, state, preview, activity, dateRef, links, activities, profiles, instance = false }: { instance?: boolean; item: SiteItem; state: SiteLayerState; preview: boolean; activity?: Activity; dateRef: React.MutableRefObject<Date | null>; links: ModelElementLink[]; activities: Activity[]; profiles: AnimationProfile[] }) {
+function Item({ item, state, preview, activity, dateRef, links, activities, profiles, instance = false, instanceIndex }: { instanceIndex?:number; instance?: boolean; item: SiteItem; state: SiteLayerState; preview: boolean; activity?: Activity; dateRef: React.MutableRefObject<Date | null>; links: ModelElementLink[]; activities: Activity[]; profiles: AnimationProfile[] }) {
   const motionRoot = useRef<THREE.Group>(null)
   const motionTime = useRef<number | null>(null)
   const sourcePath = state.paths?.find(p => p.id === item.path_motion?.path_id)
   const curve = useMemo(() => sourcePath ? buildPathCurve(sourcePath.points, sourcePath.closed, sourcePath.curve_mode) : null, [sourcePath])
   useFrame(() => {
     const parent = motionRoot.current
-    if (!parent) return
+    if (!parent || selectable.current?.userData.simulatorOwnsPose) return
     if (!preview && !instance && curve && item.path_motion) {
       const pathDate = (state.pathDateRef || dateRef).current
       const seconds = pathDate ? (pathDate.getTime() - Date.parse(item.path_motion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
-      motionTime.current = applySitePath(parent, curve, item.path_motion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z)).animationTime
-    } else { parent.position.set(0,0,0); parent.quaternion.identity(); motionTime.current=null }
+      motionTime.current = applySitePath(parent, curve, item.path_motion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
+    } else { parent.position.set(0,0,0); parent.quaternion.identity(); parent.scale.setScalar(1); motionTime.current=null }
   }, -1)
   const root = useRef<THREE.Group>(null)
   const selectable = useRef<THREE.Group>(null)
@@ -136,13 +140,14 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     visible={!registered || (!state.hiddenIds?.has('site:' + item.id) && (!state.isolate || !!state.isolatedIds?.has('site:' + item.id)))}>
     <group>
     <group ref={root} userData={{ isSitePreview: preview }} visible={preview || !item.activity_id || presentAt(activity, dateRef.current)}>
-    <group key={item.color + ':' + state.selected + ':' + preview}>
-    {item.kind === 'shape' ? <mesh castShadow receiveShadow onClick={e=>{e.stopPropagation();if(!preview)state.onSelect(item.id,e.shiftKey||e.ctrlKey||e.metaKey)}}><FootprintGeometry item={item}/>{material}</mesh> :
-    (item.kind==='array'||item.kind==='scatter') ? <group>{item.layout?.placements?.map((placement,index)=><Item key={index} instance item={{...item,kind:item.placement_kind || 'tree',position:placement.position,yaw:placement.yaw+item.yaw,layout:null,activity_id:null,object_state:null,rotation:undefined,scale:undefined}} state={state} preview={preview} dateRef={dateRef} links={[]} activities={[]} profiles={[]} />)}</group> :
+    <group key={item.kind==='geographic'||item.kind==='asset'?item.id:item.color + ':' + state.selected + ':' + preview}>
+    {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={state.materialMapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface)=>{if(state.boxSelecting)return;state.onSelect(item.id);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :
+    item.kind === 'shape' ? <mesh castShadow receiveShadow onClick={e=>{e.stopPropagation();if(!preview)state.onSelect(item.id,e.shiftKey||e.ctrlKey||e.metaKey)}}><FootprintGeometry item={item}/>{material}</mesh> :
+    (item.kind==='array'||item.kind==='scatter') ? <group>{item.layout?.placements?.map((placement,index)=>{const override=item.instance_overrides?.[index];return <Item key={index} instance instanceIndex={index} item={{...item,...override,kind:override?'asset':item.placement_kind || 'tree',position:placement.position,yaw:placement.yaw+item.yaw,layout:null,activity_id:null,object_state:null,rotation:undefined,scale:undefined,animation_playing:override?false:item.animation_playing}} state={state} preview={preview} dateRef={dateRef} links={[]} activities={[]} profiles={[]} />})}</group> :
     item.kind === 'fence' ? <group><Fence state={state} item={item} selected={state.selected} preview={preview} select={state.onSelect} /></group> :
       <group quaternion={rotation}
-        onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); if (!state.boxSelecting && !preview && e.delta <= 4) state.onSelect(item.id, e.ctrlKey || e.metaKey || e.shiftKey) }}>
-        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
+        onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); if (!state.boxSelecting && !preview && e.delta <= 4) {state.onSelect(item.id, e.ctrlKey || e.metaKey || e.shiftKey);state.onDetailSelect?.({itemId:item.id,instanceIndex})} }}>
+        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
         {(item.kind === 'context' || item.kind === 'cabin') && <>
           <mesh position={[0, item.height / 2, 0]} castShadow receiveShadow><boxGeometry args={[item.width, item.height, item.depth]} />{material}</mesh>
           {item.kind === 'cabin' && <mesh position={[0, item.height * .6, item.depth / 2 + .005]}><planeGeometry args={[item.width * .65, item.height * .3]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="windows" mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} colour="#334155" /></mesh>}
@@ -165,9 +170,12 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   </group></group></group></group>
 }
 export function SiteSceneLayer({ state, activities, links, profiles, dateRef, rendering }: { state: SiteLayerState; activities: Activity[]; links: ModelElementLink[]; profiles: AnimationProfile[]; dateRef: React.MutableRefObject<Date | null>; rendering: boolean }) {
+  const roots=useRef(new Map<string,THREE.Group>())
+  const register=useCallback((id:string,object:THREE.Group|null)=>{if(object)roots.current.set(id,object);else roots.current.delete(id);state.onRegister?.(id,object)},[state.onRegister])
   const items = state.items.filter(i => rendering || i.id !== state.preview?.id)
   return <group name="Prosota site objects">
-    {items.map(item => <Item key={item.id} item={item} state={rendering ? { ...state, selected: null, selectedIds: new Set() } : state} preview={false} activity={activities.find(a => a.id === item.activity_id)} dateRef={dateRef} links={links} profiles={profiles} activities={activities} />)}
+    {items.map(item => <Item key={item.id} item={item} state={{...state,onRegister:register,...(rendering?{selected:null,selectedIds:new Set<string>()}:{})}} preview={false} activity={activities.find(a => a.id === item.activity_id)} dateRef={dateRef} links={links} profiles={profiles} activities={activities} />)}
+    <SiteAttachments items={items} roots={roots} dateRef={state.pathDateRef||dateRef}/>
     {!rendering && state.preview && <Item key={'preview:' + state.preview.id} item={state.preview} state={state} preview dateRef={dateRef} links={links} profiles={profiles} activities={activities} />}
   </group>
 }

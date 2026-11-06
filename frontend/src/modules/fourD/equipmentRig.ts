@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { validateSoil, type SoilDefinition } from './soilSimulation'
+import { bindFlexiblePart } from './equipmentFlex'
 
 export type Vec3 = [number, number, number]
 export interface EquipmentKey { date: string; value: number; interpolation: 'linear' | 'smooth' | 'hold' }
@@ -7,8 +9,13 @@ export interface EquipmentJoint {
   id: string; name: string; node: string; members?: string[]; parent: string | null; control: string
   kind: 'hinge' | 'slide'; pivot_rotation?: Vec3; pivot: Vec3; axis: Vec3; minimum: number; maximum: number; response: [number, number][]
 }
-export interface EquipmentFollower { id: string; name: string; barrel: string; piston: string; base_node: string; tip_node: string; base_point: Vec3; tip_point: Vec3 }
-export interface EquipmentDefinition { schema_version: 1; controls: EquipmentControl[]; joints: EquipmentJoint[]; followers: EquipmentFollower[] }
+// An empty piston makes a rigid linkage: aim the barrel between two attachments,
+// without requiring an artificial second part in the imported model.
+export interface EquipmentFollower { id: string; name: string; barrel: string; piston: string; base_node: string; tip_node: string; base_point: Vec3; tip_point: Vec3; flex_curve?: Vec3[] | null }
+// Optional visual fittings that would clash outside the authored rest pose.
+// Threshold is an absolute joint offset (degrees for hinges, metres for slides).
+export interface MotionDetail { node: string; joint: string; threshold: number }
+export interface EquipmentDefinition { schema_version: 1; controls: EquipmentControl[]; joints: EquipmentJoint[]; followers: EquipmentFollower[]; motion_details?: MotionDetail[]; soil?: SoilDefinition | null }
 export interface EquipmentRig { id: string; project_id: string; model_ref: string; name: string; version: number; definition: EquipmentDefinition }
 export const emptyEquipment = (): EquipmentDefinition => ({ schema_version: 1, controls: [], joints: [], followers: [] })
 
@@ -50,7 +57,44 @@ function responseAt(points: [number, number][], value: number) {
   return points[points.length - 1][1]
 }
 
+export function jointOffset(joint: EquipmentJoint, control: EquipmentControl, value: number) {
+  return (joint.maximum - joint.minimum) * (responseAt(joint.response, value) - responseAt(joint.response, control.rest))
+}
+
+/** Change this part's travel without rebasing linked joints or deleting animation keys. */
+export function setJointTravel(definition: EquipmentDefinition, jointId: string, a: number, b: number) {
+  if (![a,b].every(Number.isFinite) || Math.abs(b-a)<1e-6 || a*b>0) throw new Error('Choose different end positions with the imported pose (0° offset) between them.')
+  const def=structuredClone(definition), j=def.joints.find(j=>j.id===jointId)
+  if(!j)throw new Error('Select a moving group first.')
+  const c=def.controls.find(c=>c.id===j.control)!
+  if((c.rest===0&&Math.abs(a)>1e-6)||(c.rest===1&&Math.abs(b)>1e-6)) throw new Error(`Position ${c.rest} is this control’s imported rest pose. Keep that end at zero offset and adjust the other end.`)
+  const low=Math.min(a,b),span=Math.abs(b-a)
+  j.minimum=low;j.maximum=low+span
+  j.response=[[0,(a-low)/span],...(c.rest>0&&c.rest<1?[[c.rest,-low/span] as [number,number]]:[]),[1,(b-low)/span]]
+  return def
+}
+
+const poseSamplers=new WeakMap<THREE.Object3D,{definition:EquipmentDefinition;sample:(node:string,values:Record<string,number>)=>THREE.Matrix4|undefined}>()
+/** Sample from the bound rest pose, independent of Setup or the last rendered preview. */
+export function sampleEquipmentNode(root:THREE.Object3D,definition:EquipmentDefinition,node:string,values:Record<string,number>) {
+  const sampler=poseSamplers.get(root)
+  return sampler && (sampler.definition===definition || JSON.stringify(sampler.definition)===JSON.stringify(definition)) ? sampler.sample(node,values) : undefined
+}
+
 export const jointNodes = (j: EquipmentJoint) => [j.node, ...(j.members ?? [])]
+export const followerNodes = (f: EquipmentFollower) => f.piston ? [f.barrel, f.piston] : [f.barrel]
+
+function orderedFollowers(followers: EquipmentFollower[]) {
+  const result: EquipmentFollower[] = [], visiting = new Set<string>(), done = new Set<string>()
+  const visit = (f: EquipmentFollower) => {
+    if (done.has(f.id)) return
+    if (visiting.has(f.id)) throw new Error('Cylinder or hose connections contain a cycle')
+    visiting.add(f.id)
+    for (const source of followers) if ([f.base_node, f.tip_node].some(n => followerNodes(source).some(p => n === p || n.startsWith(p + '/')))) visit(source)
+    visiting.delete(f.id); done.add(f.id); result.push(f)
+  }
+  followers.forEach(visit); return result
+}
 
 export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, THREE.Object3D>) {
   if (def.schema_version !== 1 || !Array.isArray(def.controls) || !Array.isArray(def.joints) || !Array.isArray(def.followers)) throw new Error('Unsupported equipment preset')
@@ -68,11 +112,20 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
     if (new Set(c.keys.map(k => Date.parse(k.date))).size !== c.keys.length) throw new Error('Duplicate keyframe time')
     if (c.keys.some(k => !Number.isFinite(Date.parse(k.date)) || !unit(k.value) || !['linear', 'smooth', 'hold'].includes(k.interpolation))) throw new Error('Invalid control keyframe')
   }
-  const drivers = [...def.joints.flatMap(jointNodes), ...def.followers.flatMap(f => [f.barrel, f.piston])]
+  if (def.followers.some(f => typeof f.barrel !== 'string' || !f.barrel || typeof f.piston !== 'string')) throw new Error('Choose a driven part for every cylinder or link')
+  const drivers = [...def.joints.flatMap(jointNodes), ...def.followers.flatMap(followerNodes)]
   if (new Set(drivers).size !== drivers.length || drivers.some(n => !n)) throw new Error('Each part needs one driver; leave the equipment root for paths/transforms')
   const requireNode = (node: string) => { if (nodes && !nodes.has(node)) throw new Error(`Part missing from model: ${node}`) }
+  if(def.soil){validateSoil(def.soil);requireNode(def.soil.bucket_node)}
   drivers.forEach(requireNode)
   const jointMap = new Map(def.joints.map(j => [j.id, j]))
+  if (def.motion_details !== undefined) {
+    if (!Array.isArray(def.motion_details) || def.motion_details.length > 200 || new Set(def.motion_details.map(d => d.node)).size !== def.motion_details.length) throw new Error('Invalid motion detail rules')
+    for (const d of def.motion_details) {
+      if (typeof d.node !== 'string' || !d.node || d.node.length > 2000 || !jointMap.has(d.joint) || !finite(d.threshold) || d.threshold <= 0 || d.threshold > 1000000) throw new Error('Invalid motion detail rule')
+      requireNode(d.node)
+    }
+  }
   for (const j of def.joints) {
     if (j.members && (!Array.isArray(j.members) || j.members.length > 500 || j.members.some(n => typeof n !== 'string' || !n || n.length > 2000))) throw new Error('Invalid group parts')
     if (jointNodes(j).some(n => jointNodes(j).some(a => n !== a && n.startsWith(a + '/')))) throw new Error('Select a part or its children, not both')
@@ -91,12 +144,17 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
     // ambiguous ownership of the child's transform. Sibling meshes are supported.
     for (const a of def.joints) if (jointNodes(j).some(n => jointNodes(a).some(p => n.startsWith(p + '/'))) && !seen.has(a.id)) throw new Error(`${j.name} must inherit from its driven ancestor ${a.name}`)
   }
-  const followerNodes = def.followers.flatMap(f => [f.barrel, f.piston])
+  const followed = def.followers.flatMap(followerNodes)
   for (const f of def.followers) {
     requireNode(f.base_node); requireNode(f.tip_node)
     if (!vector(f.base_point) || !vector(f.tip_point)) throw new Error('Invalid cylinder attachment points')
-    if ([f.base_node, f.tip_node].some(n => followerNodes.some(a => n === a || n.startsWith(a + '/'))) || drivers.some(n => followerNodes.some(a => n !== a && n.startsWith(a + '/')))) throw new Error('Followers cannot drive other mechanisms or their attachment points')
+    if (f.flex_curve) {
+      if (f.piston || !Array.isArray(f.flex_curve) || f.flex_curve.length < 2 || f.flex_curve.length > 512 || f.flex_curve.some(p => !vector(p)) || f.flex_curve.every(p => p.every((v, i) => v === f.flex_curve![0][i]))) throw new Error('Invalid flexible connection centreline')
+      if (nodes && !(nodes.get(f.barrel) as THREE.Mesh).isMesh) throw new Error('A flexible connection needs one mesh part')
+    }
+    if (drivers.some(n => followed.some(a => n !== a && n.startsWith(a + '/')))) throw new Error('Followers cannot contain another driven mechanism')
   }
+  orderedFollowers(def.followers)
 }
 
 /** Bind once to unanimated rest geometry. Evaluation is absolute, never incremental. */
@@ -115,23 +173,34 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
   const applyMatrix = (node: THREE.Object3D, matrix: THREE.Matrix4) => {
     matrix.decompose(node.position, node.quaternion, node.scale); node.updateMatrix()
   }
-  const driven = new Set([...definition.joints.flatMap(jointNodes), ...definition.followers.flatMap(f => [f.barrel, f.piston])])
+  const driven = new Set([...definition.joints.flatMap(jointNodes), ...definition.followers.flatMap(followerNodes)])
   const controls = new Map(definition.controls.map(c => [c.id, c]))
   const byId = new Map(definition.joints.map(j => [j.id, j]))
-  const restore = () => { for (const key of driven) applyMatrix(nodes.get(key)!, locals.get(key)!) }
+  const followers = orderedFollowers(definition.followers)
   const worldPoint = (key: string, point: Vec3, matrices: Map<string, THREE.Matrix4>) => new THREE.Vector3(...point).applyMatrix4(matrices.get(key)!)
   for (const f of definition.followers) if (worldPoint(f.base_node, f.base_point, rest).distanceTo(worldPoint(f.tip_node, f.tip_point, rest)) < 1e-8) throw new Error(`Cylinder ${f.name} needs two distinct attachment points`)
-  return {
+  const flexible = new Map(definition.followers.filter(f => f.flex_curve).map(f => [f.id, bindFlexiblePart(nodes.get(f.barrel) as THREE.Mesh, f.flex_curve!, rest.get(f.barrel)!)]))
+  const hiddenDetails = new Set<THREE.Object3D>()
+  const restoreDetails = () => { for (const node of hiddenDetails) node.visible = true; hiddenDetails.clear() }
+  const restore = () => { restoreDetails(); for (const key of driven) applyMatrix(nodes.get(key)!, locals.get(key)!); for (const part of flexible.values()) part.restore() }
+  const runtime = {
     restore,
+    dispose() { restore(); for (const part of flexible.values()) part.dispose(); poseSamplers.delete(root) },
     evaluate(time: number | null, overrides: Record<string, number> = {}, poses: Record<string, number> = {}) {
       restore()
       const deltas = new Map<string, THREE.Matrix4>()
       const values = new Map(definition.controls.map(c => [c.id, overrides[c.id] ?? controlValue(c, time)]))
+      for (const d of definition.motion_details ?? []) {
+        const j = byId.get(d.joint)!, c = controls.get(j.control)!, node = nodes.get(d.node)!
+        const amount = poses[j.id] ?? jointOffset(j, c, values.get(c.id)!)
+        // Only restore visibility we changed; already hidden parts stay hidden.
+        if (node.visible && Math.abs(amount) > d.threshold) { hiddenDetails.add(node); node.visible = false }
+      }
       function delta(j: EquipmentJoint): THREE.Matrix4 {
         if (deltas.has(j.id)) return deltas.get(j.id)!
         const c = controls.get(j.control)!
         const value = values.get(c.id)!
-        const amount = poses[j.id] ?? (j.maximum - j.minimum) * (responseAt(j.response, value) - responseAt(j.response, c.rest))
+        const amount = poses[j.id] ?? jointOffset(j,c,value)
         const axis = new THREE.Vector3(...j.axis).normalize()
         const own = j.kind === 'slide'
           ? new THREE.Matrix4().makeTranslation(...axis.multiplyScalar(amount).toArray() as Vec3)
@@ -148,13 +217,33 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
         const parentKey = key.slice(0, key.lastIndexOf('/'))
         matrices.set(key, desired.get(key) ?? matrices.get(parentKey)!.clone().multiply(locals.get(key)!))
       }
-      for (const f of definition.followers) {
+      for (const f of followers) {
+        const flex = flexible.get(f.id)
+        if (flex) {
+          flex.update(matrices.get(f.base_node)!.clone().multiply(rest.get(f.base_node)!.clone().invert()), matrices.get(f.tip_node)!.clone().multiply(rest.get(f.tip_node)!.clone().invert()))
+          desired.set(f.barrel, rest.get(f.barrel)!)
+          matrices.set(f.barrel, rest.get(f.barrel)!)
+          continue
+        }
         const a0 = worldPoint(f.base_node, f.base_point, rest), b0 = worldPoint(f.tip_node, f.tip_point, rest)
         const a = worldPoint(f.base_node, f.base_point, matrices), b = worldPoint(f.tip_node, f.tip_point, matrices)
         if (a.distanceToSquared(b) < 1e-16) continue
-        const q = new THREE.Quaternion().setFromUnitVectors(b0.clone().sub(a0).normalize(), b.clone().sub(a).normalize())
+        // Inherit the mounting frame before aiming. A world-only shortest arc
+        // loses the cylinder's roll when the upper body slews or the boom lifts.
+        const mount = matrices.get(f.base_node)!.clone().multiply(rest.get(f.base_node)!.clone().invert())
+        const mountRotation = new THREE.Quaternion()
+        mount.decompose(new THREE.Vector3(), mountRotation, new THREE.Vector3())
+        const mountedDirection = b0.clone().sub(a0).normalize().applyQuaternion(mountRotation)
+        const q = new THREE.Quaternion().setFromUnitVectors(mountedDirection, b.clone().sub(a).normalize()).multiply(mountRotation)
         for (const [key, from, to] of [[f.barrel, a0, a], [f.piston, b0, b]] as [string, THREE.Vector3, THREE.Vector3][]) {
+          if (!key) continue
           desired.set(key, new THREE.Matrix4().makeTranslation(to.x, to.y, to.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(q)).multiply(new THREE.Matrix4().makeTranslation(-from.x, -from.y, -from.z)).multiply(rest.get(key)!))
+          matrices.set(key, desired.get(key)!)
+        }
+        // Attachments may be named children of a driven cylinder group.
+        for (const [key] of nodes) if (followerNodes(f).some(p => key.startsWith(p + '/'))) {
+          const parentKey = key.slice(0, key.lastIndexOf('/'))
+          matrices.set(key, matrices.get(parentKey)!.clone().multiply(locals.get(key)!))
         }
       }
       for (const [key, node] of nodes) {
@@ -169,4 +258,14 @@ export function bindEquipment(root: THREE.Object3D, definition: EquipmentDefinit
       root.updateWorldMatrix(true, true)
     },
   }
+  poseSamplers.set(root,{definition,sample:(key,values)=>{
+    const node=nodes.get(key);if(!node)return undefined
+    const current=[...driven].map(key=>{const n=nodes.get(key)!;return {n,position:n.position.clone(),quaternion:n.quaternion.clone(),scale:n.scale.clone()}})
+    const surfaces=[...flexible.values()].map(part=>({part,snapshot:part.capture()}))
+    const visibility = (definition.motion_details ?? []).map(d => ({node:nodes.get(d.node)!, visible:nodes.get(d.node)!.visible}))
+    const suppressed = [...hiddenDetails]
+    try {runtime.evaluate(null,values);return node.matrixWorld.clone()}
+    finally {for(const {n,position,quaternion,scale} of current){n.position.copy(position);n.quaternion.copy(quaternion);n.scale.copy(scale);n.updateMatrix()}for(const {part,snapshot} of surfaces)part.resume(snapshot);hiddenDetails.clear();suppressed.forEach(n=>hiddenDetails.add(n));visibility.forEach(v=>{v.node.visible=v.visible});root.updateWorldMatrix(true,true)}
+  }})
+  return runtime
 }

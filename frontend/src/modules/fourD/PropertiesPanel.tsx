@@ -395,11 +395,12 @@ export function PropertiesPanel({
       <Row label="Tile Detail">
         <div className="flex items-center gap-1.5 w-full" title="Google Photorealistic 3D Tiles' own screen-space error target — lower forces finer, more detailed tiles to load at close zoom (more download/GPU cost); higher accepts coarser geometry sooner. Doesn't fix mesh decimation entirely (Google may simply not have finer tiles for a given spot) but reduces how aggressively it settles for a coarse one.">
           <input
-            type="range" min={2} max={32} step={1} value={settings.tilesErrorTarget}
-            onChange={e => set('tilesErrorTarget', Number(e.target.value))}
+            type="range" min={2} max={32} step={1} value={34 - settings.tilesErrorTarget}
+            aria-label="Tile detail: coarse to fine"
+            onChange={e => set('tilesErrorTarget', 34 - Number(e.target.value))}
             className="flex-1 w-0"
           />
-          <span className="text-xs text-gray-500 dark:text-prosota-muted w-16 text-right shrink-0">{settings.tilesErrorTarget}px</span>
+          <span className="text-xs text-gray-500 dark:text-prosota-muted w-16 text-right shrink-0">{settings.tilesErrorTarget <= 2 ? 'Finest' : settings.tilesErrorTarget <= 8 ? 'Fine' : settings.tilesErrorTarget <= 16 ? 'Balanced' : 'Coarse'}</span>
         </div>
       </Row>
       <Row label="Tile Cache">

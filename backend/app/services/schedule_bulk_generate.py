@@ -11,6 +11,9 @@ from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar
 from app.models.model_element_link import ModelElementLink
+from app.models.animation_profile import AnimationProfile
+from app.models.site_scene import SiteScene
+from app.models.schedule_variant import ScheduleVariant
 from app.models.resource import Resource
 from app.models.resource_assignment import ResourceAssignment
 from app.models.user_defined_field import UserDefinedFieldDefinition, UserDefinedFieldValue
@@ -61,6 +64,19 @@ async def resolve_existing_resources(db, project_id, resources):
 
 async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> ScheduleBulkGenerateResponse:
     period = await _require_live_schedule_period(db, data.schedule_period_id)
+    variant = await db.get(ScheduleVariant, period.schedule_variant_id)
+    if not variant or variant.project_id != data.project_id:
+        raise HTTPException(422, 'Schedule period belongs to another project')
+    site_refs = {ref for a in data.activities if a.source_kind == 'site' for ref in a.element_refs}
+    if site_refs:
+        scene = await db.get(SiteScene, data.project_id)
+        if site_refs - {i['id'] for i in (scene.items if scene else [])}:
+            raise HTTPException(422, 'A selected 3D object is missing. Reload before generating the schedule.')
+    profile_ids = {a.animation_profile_id for a in data.activities if a.animation_profile_id}
+    if profile_ids:
+        profiles = (await db.scalars(select(AnimationProfile.id).where(AnimationProfile.project_id == data.project_id, AnimationProfile.id.in_(profile_ids)))).all()
+        if profile_ids - set(profiles):
+            raise HTTPException(422, 'Choose an animation profile in this project')
 
     if data.calendar_id is not None:
         calendar = await db.get(Calendar, data.calendar_id)
@@ -347,7 +363,12 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
             relationship_type=rel.relationship_type, lag_hours=rel.lag_hours,
         ))
 
-    # --- ModelElementLink rows (IFC element_refs per activity)
+    generated_profile_id = None
+    if data.site_animation_profile and site_refs:
+        generated_profile_id = uuid.uuid4()
+        db.add(AnimationProfile(id=generated_profile_id,project_id=data.project_id,name=data.site_animation_profile_name,config=data.site_animation_profile.model_dump(mode='json')))
+        await db.flush()
+    # --- ModelElementLink rows (IFC or independent site objects)
     link_count = 0
     for staged in data.activities:
         if not staged.element_refs:
@@ -375,7 +396,8 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
             element_label = staged.element_labels[i] if labels_match else staged.task_name
             db.add(ModelElementLink(
                 id=uuid.uuid4(), project_id=data.project_id, activity_id=activity_id,
-                source_kind="ifc", element_ref=element_ref, element_label=element_label,
+                source_kind=staged.source_kind, element_ref=element_ref, element_label=element_label,
+                animation_profile_id=staged.animation_profile_id or (generated_profile_id if staged.source_kind == 'site' else None),
             ))
             link_count += 1
 
@@ -385,9 +407,13 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
     # -> CPM -> hierarchy again, so any WBS summary's rolled-up start/
     # finish/duration reflects the CPM pass that just ran) — run exactly
     # once for this whole batch, not once per row.
-    await _recompute_hierarchy(db, data.schedule_period_id)
-    await scheduling_cpm.recompute_schedule(db, data.schedule_period_id)
-    await _recompute_hierarchy(db, data.schedule_period_id)
+    # Resource-only actions must not reschedule an imported programme. Existing
+    # activities already have their durations; only new work/links require CPM.
+    schedule_changed = bool(data.activities or data.relationships)
+    if schedule_changed:
+        await _recompute_hierarchy(db, data.schedule_period_id)
+        await scheduling_cpm.recompute_schedule(db, data.schedule_period_id)
+        await _recompute_hierarchy(db, data.schedule_period_id)
 
     # Must run after the CPM pass above, not before: compute_assignment_budget
     # (resource_costing.py) prices a crew/labour/equipment assignment off
@@ -414,7 +440,8 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
     # why it went uncaught until a real multi-storey, multi-phase
     # generation surfaced it. Worth real root-causing if it recurs after
     # this.
-    await _recompute_hierarchy(db, data.schedule_period_id)
+    if schedule_changed:
+        await _recompute_hierarchy(db, data.schedule_period_id)
 
     return ScheduleBulkGenerateResponse(
         activity_count=len(data.activities),

@@ -29,5 +29,6 @@ class ActivityStepResponse(BaseModel):
     name: str
     is_complete: bool
     sort_order: int
+    operation: dict | None = None
     created_at: datetime
     updated_at: datetime

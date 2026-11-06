@@ -54,9 +54,11 @@ interface Props {
 // outward-facing normals per polygon edge (computeCutoutWorldPlanes' own
 // convention), that discard condition is true precisely inside the convex
 // polygon on every edge at once, and false everywhere outside it.
-class TileCutoutClipPlugin {
+export class TileCutoutClipPlugin {
+  private intersection: boolean
   private planes: THREE.Plane[] | null
-  constructor({ planes }: { planes: THREE.Plane[] | null }) {
+  constructor({ planes, intersection = true }: { planes: THREE.Plane[] | null; intersection?: boolean }) {
+    this.intersection = intersection
     this.planes = planes && planes.length > 0 ? planes : null
   }
 
@@ -66,7 +68,7 @@ class TileCutoutClipPlugin {
       const materials = Array.isArray(child.material) ? child.material : [child.material]
       for (const material of materials) {
         material.clippingPlanes = this.planes
-        material.clipIntersection = true
+        material.clipIntersection = this.intersection
         material.clipShadows = true
       }
     })
@@ -205,7 +207,10 @@ export function SiteTilesLayer({ apiKey, ctx, upAxis, errorTarget, cacheSizeMb, 
   // forcing TileCutoutClipPlugin to re-walk the entire loaded tile tree
   // for no reason. Memoized so that traversal only actually happens when
   // cutoutPlanes really changes.
-  const cutoutPluginArgs = useMemo(() => [{ planes: cutoutPlanes }], [cutoutPlanes])
+  const cutoutPluginArgs = useMemo(() => [{
+    planes: ctx.view_isolation ? ctx.view_isolation.map(p => new THREE.Plane(new THREE.Vector3(p[0],p[1],p[2]),p[3])) : ctx.cutout_mode === 'isolate' ? cutoutPlanes?.map(p=>p.clone().negate()) ?? null : cutoutPlanes,
+    intersection: !ctx.view_isolation && ctx.cutout_mode !== 'isolate',
+  }], [cutoutPlanes, ctx.cutout_mode, ctx.view_isolation])
 
   // Recentres the tileset's own root group so the saved lat/lon lands at
   // local (0,0,0) instead of the real ECEF distance from Earth's centre

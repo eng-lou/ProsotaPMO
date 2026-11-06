@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
+
+const DockActive = createContext(true)
+export const useDockActive = () => useContext(DockActive)
 
 export type PanelSide = 'left' | 'right'
 
@@ -90,7 +93,9 @@ export function SideDock({ side, panels, width, focusRequest }: Props) {
       )}
       <div className="flex-1 overflow-y-auto">
         {panels.filter(p => p.keepMounted || p.id === active.id).map(p => (
-          <div key={p.id} hidden={p.id !== active.id}>{p.content}</div>
+          <DockActive.Provider key={p.id} value={p.id === active.id}>
+            <div hidden={p.id !== active.id}>{p.content}</div>
+          </DockActive.Provider>
         ))}
       </div>
     </div>

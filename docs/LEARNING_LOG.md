@@ -1,5 +1,463 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-06 — Stable 0.2.43 promotion
+
+The owner requested updating and publishing both Stable channels. Promoting the
+current Preview development to Stable 0.2.43, including visual simulation and
+activity-fitted sequences, worker actions, equipment/soil controls, editable site
+reconstruction, IFC revision review, 3D-part scheduling and schedule-based resources.
+The resource tracking colour correction is included. DGN import remains paused
+at the owner's request and is not part of this release.
+
+Release checks use disposable databases and packaged runtime tests; no live
+projects are used as test fixtures. Publish the versioned Windows installer before
+main updates the website download link. Stable and Preview keep separate data.
+The 5,418-part data centre still needs further performance work when saved as
+independent scene objects; this release does not claim that freeze is resolved.
+
+Before packaging, the frontend suite passed 290 tests (2 skipped), all 11 desktop
+configuration checks passed, and both web and desktop builds passed. The packaged
+application smoke test also passed, including save/reopen, portable backup,
+IFC revision review and promoted simulation sequences. The full backend suite
+is being run against a disposable database before publication.
+
+## 2026-11-06 — DGN V8 crane sample tested; solid conversion remains unresolved
+
+Tested the owner's `G.A. Grua Metalsa - DRW.dgn` locally. It is a 97 MB
+MicroStation V8 3D model in millimetres, not simply a drawing. Two open-source
+readers (pycadkit and ezdgn) expose cells and curves but leave substantial records
+unsupported. An isolated Aspose.CAD evaluation produced a valid 29.6 MB GLB,
+but inspection found only line primitives, no triangle surfaces, and one mesh.
+That output is unsuitable for the requested 3D parts workflow.
+
+No DGN import support is claimed or added to the application. A reader with full
+MicroStation geometry support still needs testing and suitable licensing. The
+companion STEP export and installed SYNCHRO are possible local conversion routes,
+but neither has been validated for this sample. Source files remained unchanged
+and were not uploaded. Removed temporary converter packages and duplicate geometry;
+retained compact findings in `outputs/dgn-probe/RESULTS.md`. No installer was built.
+
+Lesson: a recognised CAD format or successful conversion call does not establish
+geometry fidelity. Inspect output primitive types and hierarchy before connecting
+a new importer to the asset library, then compare the actual model visually.
+
+## 2026-10-31 — Data-centre schedule import corrected and database-tested
+
+The generated P6 XML failed with HTTP 500 because its 3,872-character source-basis
+note was placed in a custom text field. The installed database limits those fields
+to 500 characters. Moved the full note to the campus WBS commentary and a companion
+`Source_Schedule_Basis.txt`; the custom field now points to those locations. Nothing
+was truncated. Revision 2 also replaces the generated XML under its previous name
+to prevent accidentally retrying the broken file. The source workbook is unchanged.
+
+Verified revision 2 through the actual P6 FastAPI route and import services against
+a disposable PostgreSQL database, with only upload storage mocked. HTTP 201 and a
+fresh database session confirmed 156 activities (six milestones), 45 WBS nodes plus
+the project summary, 274 dependencies, 14 release constraints and 144 model IDs.
+Checked every leaf date, duration and constraint, every dependency, the eight-hour
+weekday calendar, the complete saved notes and the separate non-master variant.
+The activities, relationships and calendars also match revision 1 exactly.
+
+This is an import-file correction; no application reinstall is needed and no live
+project was changed. File parsing alone is insufficient validation for generated
+imports: persist them through the real importer to catch database field limits.
+
+## 2026-10-31 — Original revision 08 data centre prepared for import
+
+Used `Data_Centre_Construction_Simulator_v8.blend`, explicitly excluding the
+owner's separate copy. Exported the completed Exterior view at frame 1177 with
+Current Frame enabled. Retained 5,418 named construction parts, their unique
+component IDs and available area/system/activity metadata. Excluded presentation
+cameras, lights, backdrop and offsite title. The source file remains unchanged.
+
+The single 192 MB GLB contains 55 materials and 26 embedded baked finish maps
+(18 colour, eight normal). These shared swatches approximate Blender procedural
+finishes in a portable form. It is a static completed model for scheduling in
+Prosota, not an export of the Blender construction animation. A component CSV,
+rendered preview and import instructions accompany it.
+
+Validation used Prosota's actual importer and part tools in hidden Electron:
+all 5,418 parts survived splitting, JSON recipe serialization and rebuilding,
+with matching bounds, 17,076 mesh primitives and material counts. All source IDs
+and the four data halls were checked. The approximately 10.3 million triangles
+remain a meaningful rendering cost. The verification fixture now accepts an
+ArrayBuffer as well as base64, avoiding a large base64 IPC allocation; this is a
+test harness improvement, not evidence of a production import defect.
+
+## 2026-10-31 — Large assemblies remain independent site objects (Preview.21)
+
+The corrected data-centre export contains 3,447 construction parts. Saving it as
+independent objects exposed an older 200-object restriction in both import/extract
+screens and the scene API. Removed that fixed object-count cap while retaining
+reference validation, locks, revision conflicts and the separate generated-array
+and fence limits. Parts keep their identity, placement and source mesh selectors.
+
+Large splits now update only the relevant ancestors rather than repeatedly
+updating the entire assembly. Mesh-only extraction skips cloning child meshes.
+The save API caches shared asset/path/activity/zone lookups for one request, and
+checks locked removals against a single ID set.
+
+Validation: ten focused frontend tests and 19 backend tests (plus ten subtests)
+passed. The real data-centre GLB was split and rebuilt through Prosota's importer:
+all 3,447 parts retained matching bounds, mesh and material counts. The geometry
+still shares source buffers. API tests saved, reloaded and edited 3,447 parts,
+generated schedule links for sampled parts, and retained existing conflict,
+lock and invalid-asset checks. Shared asset validation needed one database lookup.
+The rebuilt desktop backend also passed the packaged smoke suite: all 3,447 part
+selectors, transforms and sampled schedule links survived portable backup and
+restore into a fresh database. Existing rig, worker, path, Simulator and IFC
+checks passed alongside the large-assembly check.
+Built the local Preview.21 installer and verified its version/channel, bundled
+backend fingerprint and SHA-256 manifest. No web release or automatic installation.
+
+## 2026-10-31 — Data-centre GLB import and empty export detection (Preview.20)
+
+The owner's data-centre GLB folder contained 2,468 files, but 2,463 were empty
+132-byte scenes with no mesh data. The five remaining files contained ground and
+presentation labels, including a 2 km backdrop that dwarfed the campus preview.
+The Blender source retained the complete campus. Its construction visibility
+depends on the frame; the installed glTF exporter resets to frame zero unless
+Current Frame is enabled. This explains the observed export failure, although the
+original export settings were not recorded.
+
+Re-exported the completed Exterior view at frame 1177 to a separate GLB, preserving
+3,447 named objects and their construction metadata. Excluded the presentation
+backdrop and offsite labels, retaining the roof labels and campus geometry. Baked
+shared procedural finish swatches into 18 colour maps and eight normal maps so
+grass, asphalt, soil and concrete no longer export as white surfaces. These are
+portable approximations of Blender's procedural shaders. The result is a static
+completed model for part selection/scheduling, not the Blender construction movie.
+The original Blender file and individual exports were not changed.
+
+Prosota now checks each GLB/glTF's exported scene before conversion or upload and
+stops a mixed batch containing empty model files rather than silently accepting an
+incomplete assembly. The message identifies examples and explains Current Frame
+and visibility filters. FBX/OBJ geometry is checked after loading as well.
+
+Validation: 13 focused frontend tests passed and the desktop UI build passed. A
+hidden Electron test used Prosota's actual importer, asset parser and part tools:
+all 3,447 parts and metadata survived, with 37 materials, 26 embedded textures and
+campus bounds of about 242 x 162 x 13.5 m. Visually checked the rendered campus.
+The GLB is 78.4 MiB and contains about 5.45 million rendered triangles, so scene
+performance still depends on hardware and the visible part count.
+
+Built the 269.6 MiB Preview.20 installer and verified its SHA-256, packaged version,
+Preview channel, import guard, settings pages and backend source fingerprint.
+Delivered locally with the corrected model; no automatic installation or publishing.
+
+## 2026-10-31 — Large 3D asset dimensions (Preview.19)
+
+The Asset library's repeated “less than or equal to 1000” import error came from
+dimension validation, not the number of objects. Removed the arbitrary 1,000 m
+width/depth and 500 m height caps from asset publication and site scene recipes.
+Replacement assets now use the same positive, finite dimension rules, so a model
+does not import successfully only to fail when placed, replaced or saved. Original
+scale is retained. Upload size and generated geometry count limits remain separate.
+
+Validation: six isolated API/schema tests passed, including large dimensions through
+publication, inventory, placement, replacement and reload, plus rejection of zero,
+negative and non-finite dimensions. Fourteen site scene geometry tests also passed.
+The packaged backend also passed large-asset import, placement and reload, along
+with the existing desktop smoke workflow. Built the 269.6 MB Preview.19 installer;
+verified its SHA-256, packaged version/channel, UI files and backend fingerprint.
+Delivered locally for testing; no production publish or automatic installation.
+
+## 2026-10-31 — Working sequences fitted to parent activities (Preview.18)
+
+The owner confirmed the visual worker method works, but needs the whole connected
+sequence available outside Simulator, exportable and fitted to the parent activity.
+Added a saved working sequence per schedule period, with Detailed sequence / Simple
+4D switching. Promotion maps each activity's complete event span proportionally
+onto its scheduled start/finish, preserving step order and relative durations and
+gaps. A single step fills the window; multiple steps share it. Original programme
+dates, operational results, costs and productivity assumptions are unchanged.
+This is elapsed-window visual fitting, not a recalculation of working calendars.
+
+Promotion checks source freshness, live-period protection and optimistic revisions.
+It rejects fitted worker/tool or handled-element overlaps and reversed completed
+predecessor ordering across parents. Source changes disable stale detailed playback
+until rerun and promoted again. Replacement is explicit and saved scenarios remain.
+Workers now disappear at the end of their entire method and return correctly when
+seeking backwards. Exiting or selecting Simple 4D restores ordinary scene playback.
+
+Results now show activity-grouped steps and phases. Combined video export samples
+the full event range using the current camera and Capture settings; export from
+the working banner uses fitted parent timing, while Results uses the original run.
+Offline export waits for playback bindings and restores the playhead on completion,
+failure or cancellation. This delivery exports video, not baked animation GLB/FBX.
+
+Validation: six direct parent-fitting cases, eight isolated Simulator API tests,
+11 focused frontend tests and TypeScript passed. The actual male/female worker and
+jackhammer fixture passed fitting, reuse, retiming, persistence, calendar pauses,
+shared-tool handoff, before/after visibility, reverse seeking and restoration.
+A full-viewport hidden Electron test passed promotion/replacement, refresh/remount,
+Simple/Detailed switching, stale guards and a decoded two-second WebM with changing
+frames and restored playhead. The packaged backend smoke test passed promotion,
+parent fitting and portable backup/reopen persistence for the working sequence.
+Built the 269.6 MB Preview.18 Windows installer; verified its SHA-256 against the
+release manifest, packaged UI, application version/channel and backend source
+fingerprint. Delivered as a local installer; no automatic installation or main/web
+publication was performed.
+
+
+## 2026-10-30 — First event-driven visual worker method (Preview.17)
+
+The owner wants reusable construction methods whose calculated events visibly
+play out in the scene, using existing paths rather than a new driving system.
+Implemented the first method: walk to a route position, use a tool, then continue.
+The same measured route and work duration produce both the solver events and
+viewport motion. Changing the duration retimes departure and tool attachment.
+Physical workers and tools are reserved across the method, so two methods cannot
+use the same prop simultaneously. These reservations do not invent labour costs.
+
+Added a fitting view with the actual animated worker and tool, working move/rotate
+gizmos, work-motion scrubbing and saved grip coordinates. Device templates retain
+motions/grip/timing but clear scene bindings on reuse. The scenario retains its
+specific bindings. Save/run checks reject replaced assets and stale route geometry.
+The compact Watch in 3D controls leave the scene visible and restore ordinary
+project animation on exit. Programme dates still require explicit acceptance.
+
+Validation: 16 focused frontend tests, 16 direct solver cases, eight isolated
+Simulator API tests and TypeScript passed. The hidden desktop fixture uses actual
+male/female worker clips and the jackhammer: translated and rotated the fitting
+gizmo, saved/reloaded the grip, reused a template on a second route, retimed work,
+paused for a calendar break, handed the tool between workers, sought backwards,
+and restored original scene poses. The ordinary worker-action regression passed.
+The existing Simulator UI regression also passed. Built the Preview.17 Windows
+installer and verified its version, Preview channel and SHA-256 manifest. The
+packaged backend passed the full smoke run, including method/route/grip/event
+persistence through portable backup and reopen in a new database cluster.
+An active work phase initially displayed the next phase's waiting reason; restrict
+the waiting label to a genuine gap in execution. Fitting must also preserve the
+same scale-before-up-axis transform order as the actual site object.
+
+This is the first delivery from VISUAL_SIMULATION_PLAN.md. Fleet choreography,
+spatial queues and synchronised visual scenario comparison remain planned.
+The method uses an authored motion and one hand anchor, without two-hand IK,
+ground-contact solving or automatic transition poses. Scenario preview is not yet
+baked into scene animation export. See SIMULATOR_GUIDE.md for testing steps.
+
+## 2026-10-30 — Mechanism audit and visual Simulator (Preview.16)
+
+The owner found that broad part grouping and endpoint screenshots missed small
+connections and, more importantly, incorrect mechanisms. Reviewed all 26 equipment
+sets at rest, control extremes, quarter positions and combined poses, using
+manufacturer references and close-ups. Corrected crawler upper counterweights,
+forklift chain/stage ownership, drill feed stops and non-spinning swivel, loader
+cylinder fittings, roller fasteners and dump-truck branding. The drill now feeds
+below ground and stops before its collar/tool crosses the fixed guide/drive. Its
+limited stroke is explicit; it is not a complete telescopic drilling simulation.
+
+For minor conflicting crane ladders the owner accepted hiding during conflicting
+poses. Added optional per-joint detail-visibility rules, rather than removing major
+parts or pretending the ladders retract. They survive save/import, wrapper remapping,
+seeking, sampling and disposal. Hidden-at-source nodes remain hidden. A Blender
+visibility-driver attempt stopped transform evaluation; replaced it with a driven
+empty-group Mask modifier so the hidden geometry still has correct transforms.
+
+The Simulator had become too much like a document. Replaced the dense first view
+with icon tabs, duration-method cards, numbered steps, one cycle-phase editor at a
+time, resource cards and result metrics/sequence bars. Moved detailed rules into
+expandable sections. Kept the existing calculation and explicit programme-acceptance
+workflow. Cycle inputs start in minutes instead of displaying tiny hour fractions.
+
+Validation: 30 focused rig/Simulator frontend tests, nine isolated equipment API
+tests and TypeScript passed. All 26 model sets retain source face counts and pass
+Prosota import/restoration and Blender matrix/follower checks. Ten targeted ownership
+regressions, forklift travel and drill stop/depth/swivel checks pass. The actual
+Simulator fixture passed phase edits and retention, save, results/playback, real-object
+and multi-piece IFC restoration, plus a 580-pixel dark-theme layout without overflow.
+New delivery is a matched GLB/preset/Blend collection in `2026-10-30-mechanisms-v2`.
+Packaged backend smoke also passed, including detail-rule persistence and Simulator
+backup/reopen. Installer SHA-256 matches the release manifest.
+The installer cannot update geometry already imported into a project; tell the user
+to import each revised GLB with its matching preset. See EQUIPMENT_LIBRARY.md for
+sources and remaining mechanism limitations.
+
+## 2026-10-29 — Bucket opening calibration (Preview.12)
+
+A soil volume fitted at a tipped pose treated that pose as mouth-up. On the real
+v2 wheeled excavator this reproduced a false 145.2-degree Carry warning, blocking
+the guided cycle. Add an explicit Set mouth-up reference & capture Carry action.
+It samples the actual articulated bucket matrix and stores its opening direction
+in part-local coordinates independently of the fitted volume. The warning, guide
+arrow, spill check and pour outlet share the reference. Existing volume, source
+pile, capacity, dates and rig keys are retained. Older rigs retain their old
+reference until explicitly recalibrated; refitting the box preserves calibration.
+Changing the bucket part clears the old part's reference. Route percentage inputs
+also round display noise, avoiding 99.99999999 at the endpoint.
+
+Validation: 34 rig/cycle/soil/route tests, 7 isolated backend tests, TypeScript and
+the actual panel/playback regression passed. Covered incorrect Carry rejection,
+calibration without collateral edits, valid/invalid Tip, tab switching, cycle
+saving/reload, both up axes, placement/scale and guide alignment. On the real v2
+asset: Carry 145.2 -> 0 degrees; Tip 145.2 degrees, 0.307 cubic metres retained
+then deposited, zero remaining, deterministic reload. This is a visual soil
+model; the user must point the bucket mouth upward when defining its reference.
+
+Delivery: Preview.12 packaged backend smoke passed, including persisted opening
+direction. Packaged UI action and ASAR version/channel verified; installer checksum
+matches the release manifest. Delivered locally for testing.
+
+## 2026-10-29 — Equipment presets must start at the machine root
+
+The v2 excavator preset failed with Upper_body missing even though the imported
+GLB contained all 103 driven parts. Its prepared settings included parseAsset's
+centering group and Scene wrapper. Importing without clips re-exports the model
+under AuxScene / Prosota import, so exact wrapper matching could not resolve it.
+Reproduced against Maro's saved imported asset without altering his project.
+
+Rebased the delivered preset to Excavator_Wheels, transforming pivots and axes
+into that root's coordinates. The existing preset importer can then adapt it to
+each import wrapper. Updated the preparation generator to use this basis for
+future deliveries. No application change or installer is needed for this repair.
+Validated the original v2 and the actual imported model: nine controls, 103 joints,
+210 poses with zero matrix difference, reverse keyframe replay and root placement.
+Keep strict missing-part rejection; a v1 model lacks the v2 hose sections.
+
+## 2026-10-29 — Draw paths one segment at a time
+
+Maro needs to keep equipment routes level, lock a second axis for a straight
+direction, and change these choices before each click. Added explicit X/Y/Z locks
+against the last placed point, a Keep level shortcut for either project up axis,
+and an amber live preview. Resolve the cursor directly against the locked plane
+or axis; snapping to a building and then overwriting height moves the point away
+from the cursor. Edge-on views request a slight orbit instead of guessing depth.
+
+Curved/Straight is now Next segment, not a global rewrite. Incoming segment mode
+and relative Bezier handles live in each saved point. Freeze legacy Catmull-Rom
+spans exactly before extending them, so later clicks cannot reshape earlier work.
+New curves blend from the incoming direction; the first two points form a line.
+Existing segments can be edited individually. Dragging preserves their metadata.
+The shared follower curve, site-tool recipe sampler, API, undo and portable backup
+all retain this breakdown. Axis locks constrain curved handles too, preventing a
+level section from inheriting vertical overshoot from its preceding slope.
+
+Checks: 19 geometry/follower tests, 30 backend tests plus 10 subtests, 11 desktop
+unit tests, and actual panel/viewport clicks in a hidden renderer passed. Source
+and packaged smoke checks preserve mixed segments through backup/reopen and site
+geometry generation. Preview 0.2.43-preview.11 was built and its installer checksum
+verified for local testing; no Stable promotion or web publication requested.
+
+## 2026-10-29 — Hose connections must follow both ends
+
+Maro's close-up excavator test exposed three misassigned fittings and hoses that
+detached when the stick folded or bucket curled. A hose spanning two moving parts
+cannot be fixed by reassigning the entire mesh to one of them. Corrected the piston
+eye cover and valve covers, then derived the eight hoses' ring topology and split
+their existing faces into 18 sections per pair. Parallel hoses share transforms.
+Constrained planar curves preserve section lengths, both connection positions and
+their tangents, driven by the existing stick/bucket controls. No extra controls or
+app update are needed. Original polygon count, materials and UVs are retained.
+
+Revision 2 has 72 additional paired hose meshes and 103 underlying joints. Check
+the fittings and connections close up across full travel, not just broad machine
+poses or finite matrices. Verified all hose ends at 1,001 values per pair (maximum
+position error about 0.035 mm), actual Prosota-engine renders at reported and end
+poses, and matching Blender transforms. Deliver a matched revised GLB and preset;
+the previous GLB cannot gain these flexible sections from a preset alone.
+
+## 2026-10-29 — Prepare one equipment asset before batching the fleet
+
+Maro wants to test the wheeled excavator first, then export the other machines.
+Separate static meshes by mechanical ownership, not material alone: the cab had
+a small detail using the bucket material, and a rocker pin retainer belonged to
+the rocker rather than the bucket. Analyse connected components across UV/normal
+seams without welding the delivered geometry. Preserve the source Blender file.
+
+The excavator pilot has 30 rigid mesh groups, nine controls and 31 hinge/slide
+joints. Its GLB and Prosota preset are a matched pair; the Blender copy exposes
+the same controls through root custom properties. Bucket linkage and cylinder
+angle/stroke responses inherit their mounting joint, preserving orientation
+during upper-body slew. World-space aim followers alone can roll incorrectly.
+Static assets may omit hidden piston lengths: extended the inner ends of three
+rods so raising the boom does not expose gaps, retaining the original face count.
+Blender FCurves coalesce very close keys, so the response-curve driver domain is
+scaled while user controls remain 0–1. No addon is required.
+
+Verified with the actual Prosota parser/rig engine, keyed playback, reverse seeking,
+reset and root placement; checked the reopened Blender rig and compared poses.
+The initial hidden review helper accidentally required Electron's package launcher
+instead of its builtin API, causing an app.whenReady error dialog. Corrected the
+helper to require('electron'); the user's source model was not involved.
+Deliver the paired files for testing; do not batch the remaining fleet yet.
+
+## 2026-10-28 — Imported assemblies need independent construction identities
+
+Maro imported the Assembly Construction Kit's 60 GLBs and found that the equipment
+assembly workflow exposed only one schedulable object. Preserve authored layout
+without forcing equipment-style selection: multi-file imports now default to
+independent construction parts, with one-object assembly as an explicit option.
+Existing placements can extract source-file groups or individual meshes. The
+immutable library asset is shared; each part has a durable source path, baked
+normalisation transform, its own site ID, material instances and activity links.
+Do not clone the entire kit per part or collapse its authored material slots.
+Extraction is undoable and refuses animated/skinned assets or already-bound
+assemblies until their whole-object links/rig/path/transform keys are removed.
+Whole-object custom material overrides must also be cleared before extraction;
+authored materials survive and individual overrides can then be applied.
+
+Added reviewed schedule generation for 3D objects: choose parts, order, names,
+working hours, calendar and animation; create real site links and optional FS
+relationships through the existing bulk schedule service. Default drop starts
+above the design position (positive displacement), moving to zero; the old
+negative-direction recipe would rise from below. No IFC classification, resources
+or quantities are invented from the GLBs. Resources/costs and Simulator methods
+can then be developed on these ordinary activities.
+
+Verified the actual 60 source files (210 material meshes) in a hidden renderer,
+exact assembled bounds, independent playback and reverse seeking. Unit checks
+cover nonuniform transforms/pivots, persisted selectors, mesh nesting and reviewed
+schedule payloads. Disposable-database checks cover saved parts, generated site
+links/profiles and missing/foreign references; existing IFC schedule tests pass.
+The frozen backend smoke also verifies generated part links/profiles and part
+descriptors through portable backup/reopening, alongside the existing workflows.
+Preview 0.2.43-preview.10 is for testing; no Stable/web publication requested.
+
+## 2026-10-28 — Operational Simulator: explicit methods before interface simplification
+
+Maro approved implementing the larger activity-step/scenario workflow with visual
+guidance, then simplifying it after hands-on testing. Real IFC/imported objects
+must retain their identity, assignments and designed pose while delivered, carried,
+laid down and installed; the soil pile is a separate generated-material case.
+
+Added isolated saved multi-activity scenarios, reusable step definitions, resource
+capacity/calendars/queues, cross-activity and partial releases, repeated phases,
+bucket-derived loading, dated access/approval conditions, outages/productivity,
+comparison, source-freshness checks and reviewable CPM impact. Running a scenario
+never changes programme dates. Acceptance requires selected eligible activities,
+a current result and a rationale, records its audit, and preserves actuals and
+protected periods. Programme links remain in the final CPM review even when a
+scenario explicitly refines a relationship. SS links release on the first step
+start, not every step starting. Started-work acceptance must update the total
+forecast duration as well as the remaining-hours display: existing CPM deliberately
+does not schedule from remaining_duration_hours alone. Verified the proposed and
+accepted finish match while the recorded start and percentage remain unchanged.
+
+The UI has an editable excavation example (one excavator/three trucks), phase
+flow, result sequence and report export. Temporary scene handling overrides the
+ordinary profile while active, preserves IFC multi-piece identity, follows a rig
+part without applying its import scale to the load, and restores on exit. Disable
+model transform editing while previewing so transient poses cannot become saved
+design transforms. Bounds for attachment anchors must use the design world pose,
+not the machine/path position in the current frame.
+
+Tests cover queueing, whole-cycle fleet reservations, partial releases, missing
+access, calendar interruptions, external commitments, outages, bucket loading,
+partial last loads, deterministic seeks, real multi-piece IFC handling, stale
+results, reusable resource pools, actual/baseline protection and exact downstream
+CPM review versus acceptance. API tests use disposable PostgreSQL; no user data.
+See SIMULATOR_GUIDE.md for workflow and limits. Space is explicit capacity/access
+in this release, not geometric clearance; automatic rig choreography/fleet routes
+are not inferred. Preview installer only; Stable/full publishing remains paused.
+
+Packaged Preview 0.2.43-preview.9 and verified its installer checksum, all 54 bundled
+UI files, backend executable and source fingerprint against the tested build.
+The packaged backend smoke check includes Simulator persistence through portable
+backup/reopen. Calculation, API, scene playback and TypeScript checks passed.
+Installer supplied for user testing; no automatic installation or publication.
+
+
 ## 2026-10-25 — Release channels must isolate data before publication
 
 The user approved Stable at www.prosota.com and Preview at preview.prosota.com,
@@ -7463,3 +7921,581 @@ Owner explicitly requested moving the 82 GB uploads to D:\BIM Assets\Prosota. Co
 
 ## 2026-10-26 — IFC-only data panel and full 0.2.42 promotion
 Owner requested removing the obsolete 3D Data tab, using 3D Site tools for imported assets, and fully pushing the release. DataPanel now always displays IFC structure/properties with its existing activity links and profile controls. Removed unused tab state and mesh-only panel wiring; renamed the Site Tools toolbar, dock and related help to 3D Site tools. Version 0.2.42 promotes the verified character pose/material and separate-motion import fixes alongside this UI change. Publish channel-specific Stable and Preview installers before updating main/preview website links. Live desktop project data and relocated uploads are not part of the release.
+
+
+## 2026-10-26 — Reviewed IFC revision synchronisation
+Owner requested architect-revision comparison without rebuilding project assignments. Reload / Sync IFC now opens from any saved IFC, with the original unloaded-element restore picker retained. Revision uploads are frozen to a private immutable source before review. Comparison uses element GlobalIds and semantic geometry, placement, properties, type/material, appearance, container/opening/assembly signatures. Changes remain pending until explicitly accepted/rejected; rejection requires rationale. Draft decisions and applied review history persist. The reviewer gets actual geometry overlays (current orange, proposed green), activity/resource/cost impact counts, and an illustrated standalone HTML report for sharing or printing.
+
+Modified elements can retain or remove their element-to-activity links. Accepted removals remove those links and obsolete element keyframes, slices, path bindings, section boxes and collection membership; shared activities and their resource/cost records are never deleted. Accepted source changes reset local element placement overrides while retaining the whole-model transform. Rejecting a change retains its original product. Selective merges validate the resulting semantic snapshots and refuse unsafe shared-context/hierarchy combinations; complete acceptance retains the complete architect export. Same-schema, same-length-unit and stable coordinate-reference exports are required; regenerated/nonmatching or duplicate GlobalIds fail closed. Worker input limit is 128 MB expanded. Review export records unavailable geometry explicitly rather than substituting an invented image.
+
+Model download cache now keys on source version, and applying a revision invalidates only that model's derived IFC4 conversion. Concurrent stale reviews and changed assignment inventories are rejected. Live BOQ lines are marked for quantity review; historical frozen BOQs are retained. Added editable Area (m²) to BOQ and print, plus measurement proposals from current IFC quantities. Missing or inconsistent quantities require manual review; accepting measurements does not change rates. No bounding-box area is invented. Cost-line undo includes area/review state.
+
+Validation: isolated database integration tests for ownership, upload immutability, stale reviews, keep/remove linkage safety and BOQ state; pure IFC tests include selective acceptance, geometry, units, GlobalIds, explicit area units/zero values and retained styles/contexts. Hidden Electron test covers preview, mandatory rejection rationale, draft persistence, illustrated export and apply state. Preview installer 0.2.43-preview.1 is the delivery target; no Stable/web promotion requested for this work.
+
+Final checks: 21 targeted backend tests passed; frontend 210 passed / 2 skipped; desktop 11 passed. Packaged backend smoke passed IFC2X3 revision compare/geometry/apply/history/content-version and IFC4 cache invalidation, alongside backup/restore and existing asset workflows. Hidden Electron review/report test passed with final built CSS. TypeScript check passed.
+
+## 2026-10-26 — Isolated live context and independent editable reconstruction
+
+The user wants the Kylemore industrial site reconstructed in good-quality 3D,
+with types/materials separated and cars omitted. Keep Google live-tile isolation
+separate from an offline editable model. Added saved camera-frame isolation and
+convex-zone keep/remove, plus an independent OpenStreetMap reconstruction flow
+inside Site Context and the existing native Site Scene save/undo system.
+
+The 850 × 670 m study has 902 editable source/derived features. Preserve exact
+mapped footprints and holes; distinguish mapped heights/floors from estimates.
+Roof bays, skylights, windows, parking detail and woodland tree placement are
+presentation estimates. The downloaded source ends before the southern fringe;
+main Overpass requests failed and the explicitly approved mirror timed out.
+Display the coverage note rather than filling missing site geometry from Google
+screenshots. See docs/SITE_RECONSTRUCTION.md for sources, limits and use.
+
+Use material batching and instanced context trees. The first full-tree approach
+was 12.6 million triangles; the optimized CC0 multi-view tree study is about
+320,550 triangles / 46 material draws before extra render passes. This is not an
+FPS guarantee. Keep materials and geometry disposal tied to the generated root,
+not to callback identity, and do not remount a whole neighbourhood on selection.
+
+Validation so far: 26 backend tests plus 5 subtests; native geometry/camera crop
+checks; actual React panel in a hidden Electron window verifies edit, failed-save
+retention, save, refresh, cancellation and stale-project responses. Check actual
+rendered triangles, not merely the presence of a canvas. Hidden on-screen
+capture can return an old compositor frame: use offscreen rendering for UI tests.
+Preview 0.2.43-preview.2 packaging and frozen-backend verification are pending.
+
+Final checks for this Preview: TypeScript passed; frontend suite 214 passed / 2
+skipped; desktop suite 11 passed. Packaged-backend smoke passed, including the
+new geographic service's bundled Shapely import, saved editable study and six
+isolation planes, served vegetation GLB, and a backup/restore into a fresh local
+cluster. The prior IFC revision worker also remains green in that packaged test.
+The final native panel fixture renders 320,550 triangles in 46 draws and passes
+edit/save/remount plus stale-project cancellation. Initial direct pytest invocation
+hit the normal database fixture instead of the disposable helper; rerunning with
+the isolated helper passed. A smoke fixture initially omitted required native
+item fields; the corrected fixture passed without changing the API contract.
+
+Delivered local Preview installer: 0.2.43-preview.2. Installer checksum and bundled
+vegetation match verified; backend source fingerprint current. Sample files and
+interactive engine preview are in outputs/kylemore-reconstruction. No Stable
+website deployment or automatic installation was performed for this task.
+
+## 2026-10-26 — Reconstruction editing, replacement and safe regeneration
+
+The owner wants the combined reconstruction to remain a useful editing recipe,
+including after full regeneration. Preserve feature identities through rendering,
+saving and export rather than collapsing the model into one selectable material.
+The saved inspector now supports category/feature selection, individual building
+walls and roofs, numeric footprint editing, library replacements and GLB refinement.
+Buildings use closed roof/wall/bottom shells; renderer batches retain feature ranges.
+Native context trees remain instanced. The revised full study measures 286,808
+triangles / 46 material draws before shadows/postprocessing.
+
+Replacement is a single undoable scene command. One object, one generated instance
+or matching project instances can be replaced; locks are respected. Imported-asset
+matching also crosses standalone and reconstruction instances. Never transfer old
+animation, path motion, bone pivots or equipment rigs to an arbitrary new asset.
+Keep old rig records disabled for undo, and allow a newly authored rig to replace
+them explicitly. Imported replacement material slots are scoped to that asset;
+unrelated replacements must not inherit coincidentally numbered material slots.
+
+Regeneration defaults to preserving materials, geometry and replacements, with
+per-category checkboxes and a feature checklist. It produces a reviewable draft.
+Missing selected IDs are retained and reported. Ring indices are not persistent
+face identities: match unchanged wall endpoints when refreshing source geometry.
+When face matching is uncertain, retain the previous geometry and flag it rather
+than losing the user's material or applying it to the wrong wall. Saved boolean
+results remain separate assets; hidden source features remain hidden.
+
+Use top-down orthographic plan for camera-defined reconstruction bounds. Convert
+through the site rotation/scale/offset and support both up axes. GLB exports split
+batches into named type/feature/surface groups. Individual feature export uses a
+base anchor so a refined GLB returns to the same place. This release exports static
+GLB; full animated scene/IFC inclusion and FBX remain follow-on scope.
+
+Verification: frontend 222 passed / 2 skipped, desktop 11 passed, TypeScript clean;
+20 targeted backend tests plus 5 subtests passed in the disposable database helper.
+Closed-shell tests cut all roof variants with and without courtyard holes. Hidden
+Electron checks cover wall tint, save/remount, individual imported-tree replacement,
+preservation and structured GLB reload with zero measured anchor drift. A final
+frozen-backend smoke check additionally passed material-slot and replacement
+persistence through backup/restore, plus the existing IFC revision workflows.
+Runtime assembly initially overlapped that smoke process and encountered a locked
+PostgreSQL DLL; after the test exited, the remaining DLL/licence copies completed
+and the backend fingerprint verified. Keep build and smoke steps sequential.
+
+Delivered local Preview 0.2.43-preview.3 installer. Packaged version/channel and
+editing controls verified. SHA256:
+`072373A57C33304CC64B3AD306D3BE1E3739AEB6312F3340E9541ADBB759AF76`.
+No installation or Stable/web deployment performed.
+
+## 2026-10-26 — Restore hidden isolated tiles without losing the frame
+
+Owner reported no restore button beside Hide live tiles, and loss of the region
+when showing tiles again. The reconstruction section now has a persistent toggle:
+Hide isolated tiles / Show isolated tiles. The top checkbox identifies saved
+isolation too. Rename the destructive Show all tiles action to Clear isolation /
+show all, and explain that visibility retains the saved frame. Saving a
+reconstruction may hide live tiles but does not remove its region.
+
+The full-row Site Context save was also vulnerable to overlapping capture and
+visibility actions: a later request could contain the previous frame. Serialize
+patches and merge against the last successful response, with project-switch guards.
+Failed requests do not poison the queue. No schema or backend runtime change.
+
+Validation: TypeScript passed; three focused frontend tests cover overlapping
+capture/hide/show, failure/project changes, and clipping restored/streamed meshes.
+Three isolated backend integration tests passed, including visibility toggles and
+reload retaining six planes. Hidden Electron checks exercise the actual panel's
+toggle, reopen, top checkbox and explicit reset. Preview 0.2.43-preview.4 is the
+installer delivery; Stable/web deployment is not part of this fix.
+
+Before delivery, the owner requested removing the dedicated Return refined GLB
+file control. Removed its import handler and changed the help to normal Asset
+library import followed by optional Replace object / instances. Export and normal
+replacement remain available. Included in the same Preview.4 installer.
+
+## 2026-10-27 — Rig-driven soil scoop, carry and pour
+
+Owner paused the requested full push to focus on an excavation cycle: remove soil
+from a pile, carry it visibly in the equipment bucket and pour it when tipped.
+Implemented an optional project-rig soil recipe, bucket volume/opening calibration,
+source pile placement, capacity/tilt/pour settings and timeline date/seconds/frame
+inputs. Keys and soil setup save together. Presets/library rigs exclude placement-
+specific soil settings, preventing new machine instances duplicating a work pile.
+
+Fixed-step evaluation samples the same rigid-part keys and site path transforms.
+It tracks source, bucket, in-air and deposited volumes independently of seek order;
+terrain snapshots are shared when unchanged. Rendering uses two small height fields,
+one contained load and at most 96 instanced clods. Testing the real backhoe exposed
+load protrusion from rectangular calibration: fit bounds in the opening frame and
+constrain visible contents to a shrunken convex envelope of the bucket. Auto fit
+remains approximate and the guide is intended for manual cavity calibration.
+
+Validation so far: 19 soil/rig unit tests, 7 isolated backend rig/Poe tests, TypeScript,
+hidden Electron rig playback + save/widget-close/remount checks, and a rendered
+cycle with the prepared backhoe (1 m³ loaded and deposited). Instructions and limits
+are in docs/SOIL_SIMULATION.md: independent piles, flat receiving ground, no truck
+collision or arbitrary root keyframe sampling; procedural soil is in video capture,
+not animated GLB/IFC export. Stable/web publishing remains held for this addition.
+
+Delivery: local Preview 0.2.43-preview.5 (282,576,315 bytes). Final checks also
+passed path-relative deposition in the actual Rigging/playback component, 11
+desktop support tests and the packaged-backend smoke suite. Verified packaged
+version/channel, soil UI/runtime strings, settings files and backend source
+fingerprint. SHA256:
+`B7E0FA1E94BF949AAA1A6C505B718D1C756B18AB5ED88C2F7B68D4983A720FC1`.
+No automatic installation or web/Stable publication performed.
+
+## 2026-10-27 — Loader preset on the original 77-part assembly
+
+The owner imported `Wheel_loader_-_articulated_rig-equipment.json` onto a freshly
+assembled `Equipment.glb`. Live Preview.5 correctly refused `/1:Front_chassis`:
+the preset came from the separately grouped loader, while this asset retains the
+77 original import roots (83 render meshes). The old preset contains no grouping
+recipe, so it cannot reconstruct those missing groups. An error about a missing
+path alone is not proof of missing geometry: check the actual GLB first.
+
+Matched every original mesh to the prepared loader by geometry signature, names
+for identical mirrored parts, and a common rest-space transform. Authored a new
+`outputs/backhoe-authoring/Equipment-77-parts-rig.json` using existing joint members
+instead of editing the model hierarchy. Cylinders' constituent parts and the
+bucket linkage use single-part followers (empty piston), removing the need for
+synthetic endpoint geometry. Existing two-part cylinders continue to work.
+
+Preset import now recognises one unchanged parts hierarchy inside import wrappers
+and transforms pivots/axes/slide distances accordingly. It rejects ambiguity,
+missing groups and nonuniform/sheared/mirrored wrappers; it does not guess arbitrary
+part names or invent missing groups. Import opens Animate and explicitly explains
+rest values, absent keys and saving. The new preset is calibrated to this original
+assembly, not arbitrary loader models. Original model and supplied JSON are intact.
+
+Validation: 22 rig/soil unit tests, TypeScript, 8 isolated backend rig/Poe tests.
+The real imported assembly matches all 83 prepared-loader mesh transforms over 23
+separate/combined poses (maximum matrix error 1.26e-9). A hidden Electron review
+also exercises the actual panel: old preset rejected without replacing the draft,
+new preset imported, controls shown, Save rig & keys and panel remount retain the
+rig. Packaged-backend smoke (including original-part members, single links and
+keys), all 11 desktop support tests, packaged UI/version and backend fingerprint
+checks also pass. The first loopback test needed escalation after sandbox EACCES;
+it passed with local networking allowed. No user workspace was changed by tests.
+
+Delivered local `Prosota-Planner-Preview-0.2.43-preview.6-Setup.exe` (282,577,753
+bytes) together with the replacement JSON and a short README. SHA256:
+`56A6D8584BAACB356ECBFB630F36EF3FAE1822338B4E866BEFA2D2F3C6105FE0`.
+Not automatically installed; Stable/web publication remains held.
+
+
+## 2026-10-27 — Make one soil cycle practical to author
+
+The owner could scoop soil but found one pickup/carry/pour cycle too complicated.
+Site objects had one constant-speed binding, so a second binding replaced the
+first. Switching to Paths also unmounted EquipmentPanel, clearing unsaved soil
+settings and selection. Reopening Setup could override keyed poses with rest poses.
+
+Rigging now stays mounted across dock tab switches. Hidden Setup releases its
+visual overrides; saved and valid draft rigs keep playing. Drafts still require
+saving before refresh/close. Asset selection no longer remounts its model hierarchy.
+Moving a dirty Rigging panel between docks is guarded because that does remount it.
+
+Added dated route progress keys to the existing binding: repeated percentages
+pause, decreasing percentages reverse, and clip phase follows distance. Viewport
+movement and soil baking share the sampler. Timeline ranges/tracks include the
+last route key. The route editor uses Date/Seconds/Frames and offers a pause action;
+manual retiming does not silently move unrelated rig keys or soil settings.
+
+Added a simpler three-pose cycle builder in Rigging: Pick up, Carry and Tip, with
+controls and capture buttons in one place. It creates lift/pour pauses, route keys,
+control keys and a soil window long enough to discharge a full bucket. Captured
+poses and durations are saved with the project rig for reuse. It rejects captured
+carry poses that spill and tip poses below the calibrated pour angle. Advanced
+manual controls remain available in an expandable section. Creating a cycle replaces
+keys inside its window (and the previous generated window on regeneration), keeping
+outside keys. The source pile remains fixed; the operator still calibrates the
+bucket once and chooses route pickup/drop positions. This is not automatic terrain
+or rig recognition, and does not add multiple scheduled path bindings.
+
+The cycle end is the last collection/release time, not the tipping key. Carry at
+12.0s and tip at 12.3s means a 0.3s rotation; a 1.5s discharge still needs time after
+that. The UI and soil guide now explain this explicitly. Route and rig saves are
+separate API operations; partial failures report what saved and retain the rig draft.
+
+Validation so far: 30 geometry/route/rig/soil unit tests, TypeScript, 34 isolated
+backend path/rig/scene tests, plus 14 focused tests after adding persisted cycle
+recipes and route-key validation. Hidden Electron exercises actual SideDock,
+EquipmentPanel and EquipmentPlayback: dirty tab switching, hidden Setup, replay,
+path-relative deposition, three-pose authoring, inadequate-tip feedback, save and
+reload. No user project data was changed. Packaging Preview.7; Stable/web remains held.
+
+Delivery: local Preview `0.2.43-preview.7` installer (282,584,805 bytes).
+Packaged backend smoke passed with the guided pose recipe and timed-route data,
+alongside existing CRUD/IFC/backup checks. All 11 desktop support tests passed
+(the callback test required loopback access outside the sandbox). Verified actual
+app styling, bundled UI/settings, ASAR version/channel and packaged backend source
+fingerprint. SHA256: `A5442C74463913412E1A138B6535C934A7D30741E0F87631A752B84D11153F78`.
+Installer provided for owner testing; no automatic installation or Stable/web push.
+
+
+## 2026-10-27 — Visible tip capture and persistent travel limits (Preview.8)
+
+Owner testing found two usability failures: Capture tip silently rejected poses
+because its explanation was below the long form, and Setup's Set 0/1 only staged
+local endpoints which vanished on unmount. Applying limits also refused the
+loader's shared bucket/rocker control and any keyed control.
+
+Capture now records the pose and shows immediate success plus the measured opening
+angle warning next to the button. Invalid carry/tip stages are marked and cannot
+create a misleading cycle. Validation samples the requested control values from
+the bound rest pose and restores the visible transforms exactly; it no longer
+relies on whichever Setup/timeline frame last rendered. It revalidates saved
+captures after travel/calibration edits and again before creating a cycle.
+
+Setup now opens on the bucket, puts Movement range first, and applies Set 0/1
+immediately to the rig draft. The endpoints are explicitly slider limits, not
+keyframes. A rest-anchored response curve allows wider travel without changing
+shared controls, other joints' response curves or existing key values. Existing
+keys intentionally use the revised movement range. Boundary-rest controls keep
+that endpoint at zero; invalid endpoints report an inline error. Linked mechanical
+parts retain their own ranges and should be previewed after a range change.
+
+Setup stays mounted across tabs but releases visual overrides when inactive.
+Cycle poses survive Setup edits; returning to Animate restores the edited cycle
+pose. Adjust bucket travel jumps directly to the relevant part. Rig settings can
+be saved while a cycle is unfinished; cycle pose edits remain a separately labelled
+draft until Create & save cycle. Detailed rig authoring is collapsed and explained.
+
+The original 77-part loader test measured only 106.5 degrees of opening with full
+lift and full old tilt, against a 105-degree pour threshold. Testing a +60-degree
+bucket endpoint (previously +30) demonstrates a clearer tip. This is a test rig,
+not an automatic rewrite of the owner's projects or existing calibrated presets.
+
+Validation/delivery: 32 rig, cycle, soil and route tests passed, TypeScript passed,
+plus the actual panel/playback tests on both the synthetic soil fixture and original
+77-part loader. Verified repeated bucket selection, keyed/shared range edits, inline
+capture feedback, cycle creation, tab persistence and save/reopen. Packaged backend
+smoke passed. Preview.8 UI, settings, ASAR version/channel and backend fingerprint
+verified. Installer 282585853 bytes; SHA256 806A7E50DE7C72D5B192FB33747374E2E137D30BA473821798F18972213A8509.
+No user project was rewritten and no Stable/web release was published.
+
+## 2026-10-29 — Equipment collection, flexible fittings and aggregates (Preview.13)
+
+Prepared 23 primary ConstructionVehiclesPack1 machines plus the requested KitBash
+portable mixer and tower cranes A/B. Loaded, folded and extended versions were
+used as references where useful rather than extra deliverables; rubble excluded.
+Sources remain untouched. Each asset has a matched textured GLB, portable equipment
+JSON and Blender file with root custom-property controls. All source faces are
+retained; cylinder strokes welded into a common island require face-level splits.
+
+Lessons from the wheeled excavator carried into this collection: a material is
+not a mechanical part. Small fittings, branding and hose mounts must follow their
+actual host, not the nearest large piece sharing that material. Final Bobcat review
+found cab bolts incorrectly following lift/curl; explicit ownership corrected them.
+Blender follower parenting must preserve the inverse of the aiming frame rather
+than cancel the animated stroke transform. Source objects are renamed before root
+creation so GLB node names do not acquire unstable .001 suffixes.
+
+Prosota now preserves follower mount roll, orders dependent followers and rejects
+cycles. Flexible hoses retain authored geometry, weighted along a rest curve between
+moving endpoints; buffers are owned, restored and disposed with the binding. Backend
+validation/persistence carries optional curve data. The prepared crane ropes use
+the same visual deformation capability, without load or sway physics.
+
+Bulk material adds soil, sand, gravel and rocks plus a preloaded-body mode. The two
+dump trucks include starting volume metadata and rear discharge calibration. Fine
+material remains a continuous surface; coarse material uses bounded reusable stone
+instances. Deposition is relaxed to avoid needle-like piles. All four material tests
+carry and release 8 m³ without losing volume. This is not a live excavator-to-truck
+receiving system; tailgate collisions, per-stone mechanics and procedural aggregate
+3D export remain unsupported. Tracked belts stay rigid. Per-model limits are explicit
+in the catalogue, including the grader's limited controls and simplified Bobcat lift.
+
+Validation: all 26 pass actual Prosota import/remapping, 30 sampled finite poses and
+rest restoration; all Blender joint/rigid-follower checks pass. Reviewed rest and
+posed renders. 33 frontend rig/soil/cycle tests, TypeScript, 8 backend rig tests,
+11 desktop tests and packaged-backend smoke pass, including flexible followers and
+preloaded aggregate persistence. Verified packaged ASAR version/Preview channel and
+backend source fingerprint. First packaging attempt could not resolve GitHub in the
+sandbox; the authorized network retry succeeded. The first added smoke assertion
+omitted the required name on PUT; fixed the test request and the full smoke passed.
+
+Delivery: 26 assets, 265 files, 1,805,357,880 bytes, every copied SHA-256 verified, at
+`D:\BIM Assets\Prosota Assets\Prosota Rigged Equipment\2026-10-29`.
+Catalogue links/search/rest-pose switching checked. Preview installer
+`Prosota-Planner-Preview-0.2.43-preview.13-Setup.exe` is 282,671,375 bytes;
+SHA-256 `C22E947BD1D66E0BF03F58D21309362BF3BC149463290FCD2E27885B95DCE56C`.
+Local owner-testing delivery only; no automatic install and no Stable/web push.
+See `docs/EQUIPMENT_LIBRARY.md` and the expanded `docs/SOIL_SIMULATION.md`.
+
+## 2026-10-29 — Compatible worker motions and timed actions (Preview.14)
+
+The owner's correction was valid: rejecting an ActorCore motion in Prosota does
+not prove the user must retarget it manually. The importer was comparing rest
+axes/proportions too strictly. Compatible CC rigs now map shared bone names and
+parent relationships and adapt rest-frame rotations and positional deltas during
+import. Unrelated/ambiguous hierarchies still fail clearly. Body-motion import
+omits facial morph tracks with a notice. Batch FBX import appends clips in one
+new immutable asset version without replacing the character's materials.
+
+Actual iClone idle/walk exports revealed a separate multi-metre starting root
+offset. Normalize the horizontal starting offset for compatible CC motion clips,
+preserving subsequent travel and vertical displacement. Do not apply this to the
+character's ordinary pose import. This fixed a female worker apparently leaving
+the scene when switching to an idle clip; visual checks must examine actual posed
+geometry as well as successful skeleton matching.
+
+Timed work actions use the shared Date/Seconds/Frames timeline and a deterministic
+mixer, blending with the normal walk/idle clip. Route stops hold progress during
+an action and shift later route keys. Timed attachments follow named hands or
+equipment parts after skeleton and rig evaluation; offsets are metres independent
+of imported bone scale. Definitions persist in the scene recipe, with parent/cycle
+validation and replacement cleanup. Panel closure does not own playback state.
+
+Compatibility checks passed for 139 construction files across 15 workers (2,085
+combinations). Two actual workers, M-0026 and F-0012, have prepared local GLBs with
+idle, walk, drill-floor and excavator-operation clips. Rendered poses were reviewed.
+The real scene fixture passed route pause/continue, animated hand attachment,
+panel close, save/reopen, backwards seek, release visibility and Frames UI. All
+16 relevant frontend tests, TypeScript and three backend validation tests passed.
+Direct pytest initially activated the repository's unrelated local PostgreSQL
+fixture; the standalone schema tests use unittest and passed.
+
+This first workflow requires manual prop/seat offset alignment and suitable clips;
+it does not provide hand/foot IK, automatic entry/exit, crowd avoidance or live
+driving. The full requested simulator direction remains broader than this delivery.
+See `docs/WORKER_ACTIONS.md`. Packaged backend persistence smoke passed, including
+stored action clips/blends, hand offsets and missing-parent rejection. UI build,
+ASAR version/channel and backend fingerprint verified. Packaging initially needed
+a retry with network permission to fetch public Electron build resources; it then
+completed. Installer `Prosota-Planner-Preview-0.2.43-preview.14-Setup.exe` is
+282,676,174 bytes; SHA-256
+`F520D330D63762454B6FDAD30982A5A29F58EC732A422F42C8872876925D3A7B`.
+No Stable/web publish, automatic installation or user-project rewrite performed.
+
+
+## 2026-10-30 — Rig audit, attachment editing and duplicate panels (Preview.15)
+
+The repeated Construction parts cards were a React reconciliation bug: sibling
+parts, actions and geography editors shared the same object-ID key. Use a distinct
+key per editor role. The actual JSX regression reproduced 40 stale cards after
+40 selections, then verified one card with a selection and zero after clearing.
+Part inspection now runs on expansion, resets on selection changes and ignores
+stale asynchronous results; its list is bounded.
+
+The attachment runtime previously inverted the object's current transform every
+frame, cancelling the viewport gizmo. Keep the editable tool in the anchor's
+metre-based frame and move its parent with the animated anchor. Save drag/rotation
+edits into attachment offsets, preserving the original placement for release.
+Hand shortcuts and explicit Move/Rotate attached tool buttons pause inside the
+attachment interval. Simulator ownership suspends attachments without overwriting
+its pose, then reapplies the saved grip when it releases ownership. This still
+requires a compatible hand pose; it is not automatic two-hand IK.
+
+Audited all 26 prepared rigs at rest, individual extremes and intermediate poses,
+plus combined control samples. Eleven assets required ownership corrections:
+tower-crane counterweights; both KitBash cranes' braces/trolley fittings and outer
+hoist falls; mobile-crane hook fittings and staged outriggers; crawler-crane deck
+fixings and boom stops; luffing-crane cab/crown fittings and the full hook cable
+loop; concrete-pump turntable fittings and pipe split; American mixer cab trim;
+asphalt-paver auger; rotary-drill upper floor; wheel-loader headlight lenses and
+bucket pins. Blender piston parenting preserves the aiming frame's rest inverse.
+The last luffing-crane check caught 107 faces of the lower cable loop incorrectly
+assigned to the winch run. Expanding the hook-loop selection removed the floating
+fragment without losing source faces. Visual rope deformation remains approximate
+and can bow at extreme luff angles; there is no tension or load simulation.
+
+Validation: TypeScript and 45 focused frontend tests passed. Real male/female
+worker and jackhammer integration checks passed mouse-driven translation/rotation,
+persisted offsets, original placement, panel close/reopen, backwards playback,
+release and Frames UI. The fixture logs stale TransformControls scene-graph
+warnings during fixture reload, although its pose/persistence assertions pass.
+All 26 models passed actual Prosota import/remapping, finite sampled poses and rest
+restoration. Blender joint/follower checks also pass (worst joint matrix error
+about 3.8e-6). Original face counts, material assignments, UVs and normals remain.
+These checks are not a claim of collision-free movement at every combination.
+
+Built UI and Preview installer; verified ASAR version/channel, packaged settings
+files, unchanged backend source fingerprint and installer SHA-256. The backend was
+not changed in this audit. Preview.15 is 282,676,934 bytes, SHA-256
+`A66170FD8C41202A65DAE5ABDF40DCA0A6668F2871A336E0370D2C705B9CC903`.
+
+Delivered 26 model sets, catalogue and installer as 265 files (1,805,296,594 bytes)
+to `D:\BIM Assets\Prosota Assets\Prosota Rigged Equipment\2026-10-30`.
+Every copied file hash verified; catalogue links, search and rest/posed switching
+passed. Kept the 29 October collection and the owner's corrected Blender source.
+Users must import each revised GLB with its matching preset; installing the app
+does not replace geometry already saved in projects. No auto-install, project
+rewrite, main push or web publication. See EQUIPMENT_LIBRARY.md and WORKER_ACTIONS.md.
+
+### 30 October 2026 — Worker and prop HTML catalogues
+
+Added matching local catalogues at
+`D:\BIM Assets\Prosota Assets\Catalogues\2026-10-30`:
+`workers.html`, `props.html`, and an `index.html` collection hub that also links
+the existing equipment catalogue. Includes 15 workers, 90 main props, and 74
+motion entries (70 construction actions plus four male/female idle/walk clips).
+There are 69 in-place work files and 70 travel-variant files; drill-floor is only
+in the latter folder. Do not present the missing variant as available.
+
+Rendered 105 real model thumbnails. Worker thumbnails use compatible idle clips
+without changing source FBXs. Seven transparent GLBs are displayed with their
+main props and linked as companions, not duplicated as complete assets. Cards
+distinguish static sources from the three prepared KitBash rigs. Included the
+two existing worker action sample GLBs; all other model/motion links point to
+original asset folders, avoiding duplication. The new catalogue is 62.4 MiB.
+
+Verified all images decode, 515 local links resolve, search/category/collection
+filters work, and desktop/narrow layouts have no horizontal overflow. Inspected
+all thumbnail contact sheets and rendered pages. Verified SHA-256 for all 111
+delivered content files; manifest is alongside them. Reproducible inventory,
+render, build and review scripts are under `outputs/asset-catalogues`.
+No app build, deployment or source-asset changes were needed for this task.
+
+### 30 October 2026 — Worker preview correction and visual simulation direction
+
+Corrected the catalogue thumbnails for F-0011, M-0016 and M-0017. Their combined
+clothing/body texture atlases were being rendered with whole-mesh alpha blending,
+causing sorting artefacts at the face, collar and ankles. Compared blended, opaque
+and masked renders of all three actual workers. Masking at 0.5 preserves the trim
+cutouts and fixes the gaps; forcing opaque reveals unwanted goggle surfaces.
+The renderer now uses an explicit three-worker catalogue correction. Do not apply
+this rule indiscriminately to genuinely translucent assets: these atlases also
+contain intermediate alpha values. Original FBXs and the application importer
+were not modified by this thumbnail fix.
+
+Copied the three previews into the existing D: catalogue and updated its manifest.
+All 111 content hashes verify. The rendered catalogue check passed 515 local
+links, all images decoding, filters and narrow/desktop layouts.
+
+Studied Reallusion's Motion Planning and MD prop documentation: scene-bound
+actions, interaction calibration, portable objects, conditional waits, occupancy,
+parallel actions, interruptions, subgraphs, reusable sets and in-scene outputs.
+Compared these with the current solver, handling playback, path sampler, worker
+actions and attachments. Research used public pages/manuals, not a hands-on iClone
+test. Findings and source links are in `VISUAL_SIMULATION_PLAN.md`.
+
+Owner clarified that existing authored paths, curves and timed pauses are adequate
+for vehicles and pedestrians. Prioritise reusable methods and discrete-event
+coordination of existing animations, rather than autonomous driving. The principal
+gap is connecting solver events to physical scene units and coordinated animation
+tracks. The solver already allocates internal resource slots; its emitted events
+do not retain the corresponding stable scene-unit identity. Current handling
+playback does not automatically choreograph every resource.
+
+Proposed milestones: one complete reusable worker/tool method, a resource-driven
+load/haul/tip method, actual element handoffs with visual scenario comparison,
+then broader templates and optional graph composition. Separate operational time
+from playback compression; share curved-route lengths; preserve user-authored
+keys; distinguish task backlog from parked vehicle queues. These are a documented
+implementation plan, not claims that the new orchestration features are shipped.
+
+### 1 November 2026 — Resources for imported and manual schedules
+
+Removed the IFC-only restriction from Generate Resources. The planner now uses
+existing IFC recipes when available and conservative task-description rules
+otherwise, shared with Auto Assign Resources. New inferred trade/plant entries
+start at zero cost; users review rates and capacity. Existing pool entries and
+assignments are reused. Ambiguous matches, procurement/design work and unclear
+activities remain explicit review items. Material quantities are never inferred
+from names alone.
+
+Manual resource creation and assignment already worked without IFC. Verified
+create, update and delete through the real API. Also corrected bulk generation:
+resource-only changes must not run CPM/hierarchy rollups, since that unexpectedly
+rescheduled imported dates. New activities/relationships still trigger scheduling.
+
+Validation: 12 targeted frontend tests and TypeScript passed. An isolated
+PostgreSQL/FastAPI run imported the owner's 202-row data-centre P6 schedule with
+zero IFC links, generated 15 resources and 120 assignments, and verified repeat
+runs made no duplicates. Edited resource rates/capacity survived generation.
+Every activity's dates, duration and constraints stayed unchanged. Manual
+assignment utilisation changes recalculated costs correctly. No live project
+records were changed. Reproduction scripts and Resource_Validation.json are in
+outputs/data-centre-schedule-20261031. Packaged as Preview 0.2.43-preview.22.
+The rebuilt packaged backend passed the desktop persistence/backup, resources,
+3D parts, rigging, simulator and IFC revision smoke checks. The installer checksum
+and inclusion of the rebuilt backend were verified. Production publishing remains
+separate.
+
+### 3 November 2026 — Resource Tracking colour contrast
+
+Resource totals inherited the saturated resource-header background, leaving
+overallocation warnings as red text on blue. Kept the chosen header colour on
+resource identity cells and gave the time grid separate, theme-aware backgrounds.
+Overallocated budget figures now use dark red text on a pale red highlight, with
+an explanatory tooltip. Custom resource headers choose a readable black or white
+foreground. Expanded assignment hover colours also respect dark mode.
+
+Validation: TypeScript and the desktop UI build passed. A disposable browser
+fixture rendered the actual Resource Tracking widget with production CSS and
+verified light/dark contrast, a pale custom header, warning toggling, expanded
+assignments and Budgeted/Actuals/Earned Value together. Resource rows remained
+30px high. Reviewed the light and dark screenshots in
+outputs/resource-colour-review; verification.json records the checks. This is a
+presentation change; resource calculations and saved project data are unchanged.
+Packaged Preview 0.2.43-preview.23 and verified the installer SHA-256 against its
+release manifest, plus the packaged version/channel and UI. Installer supplied
+locally; no production deployment or automatic installation.
+
+### 3 November 2026 — C: storage cleanup and backup relocation
+
+The repeated installer upgrades accumulated 49 automatic Preview backups,
+totalling 35.86 GiB, in AppData. Moved them to
+`D:\BIM Assets\Prosota\Desktop Preview Backups`, verified every file against its
+source using SHA-256, then replaced the original AppData backup directory with a
+Windows junction. Future version-change backups now land on D: through the same
+application path. This is a machine-local relocation; no application code or
+backup-retention policy changed. Live project data and databases remain intact.
+
+The earlier `backend/uploads` junction to `D:\BIM Assets\Prosota\uploads` is
+unchanged and was excluded from the C: usage scan. Audit records and per-backup
+checksums are in `outputs/storage-audit-20261103`.
+
+Deleted a further 12.02 GiB of disposable files: isolated desktop smoke-test
+databases (3.96 GiB), PyInstaller build intermediates, unpacked Stable/Preview
+build duplicates, superseded .21/.22 Preview and .41 Stable installers, and the
+npm download cache (5.48 GiB). Source assets, installed dependencies, live project
+files, personal downloads and Git history were preserved. The latest local
+Preview .23 and Stable .42 installers both still match their manifest SHA-256.
+All specified cleanup targets are absent. C: finished with 128.73 GiB free;
+47.88 GiB of file content was relocated or deleted (other system activity can
+affect the net free-space change). The relocation and cleanup scripts are scoped
+to explicit paths and refuse junctions in deletion targets.

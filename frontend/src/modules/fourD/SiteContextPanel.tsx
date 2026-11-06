@@ -1,3 +1,5 @@
+import { GeographicContextPanel } from './GeographicContextPanel'
+import type { useSiteScene } from './siteScene'
 import { useEffect, useState } from 'react'
 import { parseCoordinate, parseCoordinatePair, type SiteContext } from './siteContext'
 import type { Zone } from './zones'
@@ -6,10 +8,14 @@ import { isConvexPolygon } from './tileCutoutGeometry'
 
 type SiteContextPatch = Partial<Pick<SiteContext,
   'enabled' | 'lat' | 'lon' | 'elevation' | 'label' | 'offset_x' | 'offset_y' | 'offset_z' | 'offset_yaw_deg' | 'scale'
-  | 'cutout_zone_id' | 'cutout_active'
+  | 'cutout_zone_id' | 'cutout_active' | 'cutout_mode' | 'view_isolation'
 >>
 
 interface Props {
+  onPlan?(action:'plan'|'capture'|'orbit'):void
+  planArea?:import('./reconstructionPlan').ReconstructionArea|null
+  onIsolateView(): void
+  sceneState: ReturnType<typeof useSiteScene>
   ctx: SiteContext
   error: string | null
   apiKey: string | null
@@ -39,7 +45,7 @@ function formatCoord(v: number | null): string {
   return v === null ? '' : String(v)
 }
 
-export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, zones, upAxis }: Props) {
+export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, zones, upAxis, onIsolateView, sceneState, onPlan, planArea }: Props) {
   const [keyDraft, setKeyDraft] = useState(apiKey ?? '')
   const [savingKey, setSavingKey] = useState(false)
 
@@ -151,7 +157,7 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
 
         <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
           <input type="checkbox" checked={ctx.enabled} onChange={e => onUpdate({ enabled: e.target.checked })} />
-          Show Google Tiles
+          {ctx.view_isolation ? 'Show isolated Google tiles' : 'Show Google Tiles'}
         </label>
         {ctx.enabled && !apiKey && (
           <p className="text-[11px] text-amber-600 dark:text-amber-400">No Google Maps API key configured yet.</p>
@@ -239,15 +245,15 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
         </div>
 
         <div className="pt-2 mt-1 border-t border-gray-100 dark:border-prosota-line space-y-1.5">
-          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Tile Cutout</div>
+          <div className="text-[10px] font-bold text-gray-400 dark:text-prosota-muted uppercase tracking-wide">Tile isolation / cutout</div>
           <p className="text-[11px] text-gray-400 dark:text-prosota-muted">
-            Cuts an existing Zone's footprint out of the Tiles layer — e.g. remove an existing
-            station's own tile geometry from a reconstruction plot so your IFC/mesh model shows
-            in its place, keeping the surrounding real-world tiles. v1 only supports a convex
-            footprint and one active cutout at a time.
+            Keep only the current camera frame or a convex Zone. The region stays fixed while you orbit. Live tiles still stream; no tile download is saved.
           </p>
+          <div className="flex flex-wrap gap-1"><button className="rounded border p-1.5 dark:border-prosota-line" onClick={onIsolateView} disabled={!ctx.enabled}>Isolate current view</button><button className="rounded border p-1.5 dark:border-prosota-line" onClick={()=>onUpdate({enabled:true,view_isolation:null,cutout_active:false})}>Clear isolation / show all</button></div>
+          {ctx.view_isolation && <p className="text-blue-500">{ctx.enabled ? 'Showing saved camera region.' : 'Tiles hidden. Your camera region is saved.'} Hide/show retains this frame. Clear isolation explicitly removes it.</p>}
+          <label className="block text-xs">Zone operation<select className="w-full rounded border p-1 dark:bg-prosota-panel2" value={ctx.cutout_mode||'remove'} onChange={e=>onUpdate({cutout_mode:e.target.value as 'remove'|'isolate',view_isolation:null})}><option value="isolate">Keep inside zone</option><option value="remove">Remove inside zone</option></select></label>
           <label className="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-prosota-muted">
-            <span className="w-20 shrink-0">Cutout Zone</span>
+            <span className="w-20 shrink-0">Zone</span>
             <select
               value={ctx.cutout_zone_id ?? ''}
               onChange={e => onUpdate({ cutout_zone_id: e.target.value || null })}
@@ -264,7 +270,7 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
               type="checkbox"
               checked={ctx.cutout_active}
               disabled={!ctx.cutout_zone_id}
-              onChange={e => onUpdate({ cutout_active: e.target.checked })}
+              onChange={e => onUpdate({ cutout_active: e.target.checked, view_isolation:null })}
             />
             Active
           </label>
@@ -277,15 +283,14 @@ export function SiteContextPanel({ ctx, error, apiKey, onUpdate, onSaveApiKey, z
             if (!isConvexPolygon(selectedZone.points, upAxis)) {
               return (
                 <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                  "{selectedZone.name}" isn't a convex shape — the cutout will clip an approximation
-                  (roughly its convex hull), not the exact outline. Use a simpler, convex Zone shape
-                  for an accurate cut.
+                  "{selectedZone.name}" needs a simple convex outline with 3–64 points. Clipping is disabled for this shape; choose another Zone or isolate the camera view.
                 </p>
               )
             }
             return null
           })()}
         </div>
+        <GeographicContextPanel ctx={ctx} state={sceneState} upAxis={upAxis} onHideTiles={()=>onUpdate({enabled:false})} onShowTiles={()=>onUpdate({enabled:true})} onPlan={onPlan} planArea={planArea}/>
       </div>
     </div>
   )

@@ -55,6 +55,7 @@ let externalActivityAt = 0
 // its own canvas — the main view and every active comparison view.
 const viewRenderers = new Set<(timestamp: number) => void>()
 let offlineExportActive = false
+export function isOfflineExportActive(){return offlineExportActive}
 export function setOfflineExportActive(active: boolean) {
   offlineExportActive = active
 }

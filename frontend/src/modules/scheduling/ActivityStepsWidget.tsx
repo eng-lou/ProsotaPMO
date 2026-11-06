@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
@@ -7,12 +8,11 @@ interface Props {
   activityId: string
 }
 
-// P6's per-activity ordered checklist (docs/SCHEDULING_GAPS_PLAN.md Phase 10)
-// — checkbox + name + manual up/down reordering, deliberately minimal (no
-// weighted % complete or per-step dates, unlike P6 itself — extend only if
-// asked). Self-contained state, same as CodeHistory/ResourceAssignments —
-// nothing else in the panel needs to see this list.
+// Checklist editing remains simple; reusable operational definitions open in Simulator.
 export function ActivityStepsWidget({ activityId }: Props) {
+  const navigate=useNavigate()
+  const [simulation,setSimulation]=useState<{programme_hours:number;derived_hours:number|null;variance_hours:number|null;status:string;scenario_id:string|null;scenario_name:string|null;calculated_at:string|null}|null>(null)
+  const [simulationError,setSimulationError]=useState('')
   const [steps, setSteps] = useState<ActivityStep[]>([])
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState('')
@@ -21,6 +21,7 @@ export function ActivityStepsWidget({ activityId }: Props) {
 
   const load = () => {
     setLoading(true)
+    api.get('/api/v1/simulations/activity/'+activityId).then(r=>{setSimulation(r.data);setSimulationError('')}).catch(()=>setSimulationError('Could not read the simulation status. Open Simulator to retry.'))
     api.get<ActivityStep[]>('/api/v1/activity-steps/', { params: { activity_id: activityId } })
       .then(res => setSteps(res.data))
       .finally(() => setLoading(false))
@@ -67,6 +68,8 @@ export function ActivityStepsWidget({ activityId }: Props) {
 
   return (
     <div className="p-3">
+      <button type="button" className="text-xs text-blue-500 mb-2" onClick={()=>{sessionStorage.setItem('prosota-simulator-activity',activityId);if(simulation?.scenario_id)sessionStorage.setItem('prosota-simulator-scenario',simulation.scenario_id);navigate('/4d');window.dispatchEvent(new CustomEvent('prosota-open-simulator',{detail:{activityId}}))}}>Open operational steps in Simulator</button>
+      {simulation&&<div className="text-xs border rounded p-2 mb-3 space-y-1"><strong>Operational simulation · {({current:'Calculated',stale:'Requires recalculation',incomplete:'Incomplete',not_configured:'Not configured'} as Record<string,string>)[simulation.status]??simulation.status}</strong><div>Programme: {simulation.programme_hours.toFixed(2)} h · Steps: {simulation.derived_hours==null?'—':simulation.derived_hours.toFixed(2)+' h'}</div><div>Variance: {simulation.variance_hours==null?'—':simulation.variance_hours.toFixed(2)+' h'}</div>{simulation.scenario_name&&<div>{simulation.scenario_name}{simulation.calculated_at?' · '+new Date(simulation.calculated_at).toLocaleString():''}</div>}</div>}{simulationError&&<p className="text-xs text-red-500">{simulationError}</p>}
       <div className="text-xs font-semibold text-gray-500 dark:text-prosota-muted uppercase tracking-wide mb-2">Steps</div>
       {steps.length > 0 && (
         <ul className="space-y-1 mb-2">

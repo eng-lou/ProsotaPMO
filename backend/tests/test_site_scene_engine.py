@@ -16,10 +16,23 @@ def fixture():
 
 
 class SiteGeometryTests(unittest.TestCase):
+    def test_mixed_path_recipe_keeps_bezier_span_and_straight_corner(self):
+        item = fixture()
+        item['curve_mode'] = 'straight'
+        item['points'] = [dict(x=0,y=0,z=2),
+            dict(x=10,y=10,z=2,segment_mode='curved',segment_controls=[dict(x=4,y=0,z=0),dict(x=0,y=-4,z=0)]),
+            dict(x=20,y=10,z=2,segment_mode='straight')]
+        saved = SiteItem.model_validate(item).model_dump(mode='json')
+        self.assertEqual(saved['points'],item['points'])
+        samples = sample_path(saved)
+        self.assertEqual(samples[12],dict(x=6.5,y=3.5,z=2.0))
+        self.assertEqual(samples[-2:], [dict(x=10,y=10,z=2),dict(x=20,y=10,z=2)])
+        self.assertTrue(all(set(p)==set('xyz') for p in samples))
+
     def test_path_motion_roundtrip_and_validation(self):
         item = fixture()
         item['path_motion'] = dict(path_id=item['path_id'], start='2026-10-23T00:00:00Z', speed=1.4,
-                                  loop=False, orient=True, heading=-90, animation_reference_speed=1.4, bind_origin={'x':23.,'y':-15.,'z':-31.})
+                                  loop=False, orient=True, heading=-90, animation_reference_speed=1.4, bind_origin={'x':23.,'y':-15.,'z':-31.}, progress_keys=[])
         parsed = SiteItem.model_validate(item)
         self.assertEqual(parsed.model_dump(mode='json')['path_motion'], item['path_motion'])
         self.assertEqual(evaluate(parsed.model_dump(mode='json'))['path_motion'], item['path_motion'])
@@ -28,6 +41,16 @@ class SiteGeometryTests(unittest.TestCase):
         for patch in ({'bind_origin': {'x':float('nan'),'y':0,'z':0}}, {'speed': 0}, {'speed': float('nan')}, {'animation_reference_speed': 0}, {'start': 'not-a-date'}):
             with self.subTest(patch=patch), self.assertRaises(ValueError):
                 SiteItem.model_validate({**item, 'path_motion': {**item['path_motion'], **patch}})
+
+    def test_route_key_validation_and_legacy_default(self):
+        from app.schemas.site_scene import PathMotion
+        base = dict(path_id=fixture()['path_id'], start='2026-10-23T00:00:00Z')
+        self.assertEqual(PathMotion(**base).progress_keys, [])
+        key = dict(date='2026-10-24T00:00:00Z', progress=25, interpolation='linear')
+        for keys in [[key, key], [{**key, 'progress':101}], [{**key, 'progress':float('nan')}],
+                     [{**key, 'date':'2026-10-24T00:00:00'}], [{**key, 'interpolation':'unknown'}]]:
+            with self.subTest(keys=keys), self.assertRaises(ValueError):
+                PathMotion(**base, progress_keys=keys)
 
     def test_asset_transform_roundtrip_and_legacy_defaults(self):
         item = fixture()

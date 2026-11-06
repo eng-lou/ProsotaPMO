@@ -7,10 +7,17 @@ import { api } from '@/lib/api'
 // (see path.py's own docstring for why), same JSONB-blob convention as
 // MaterialPreset's config — the frontend's own PathGizmo rewrites this array
 // wholesale on every point add/move/remove, never a per-point PATCH.
-export interface PathPoint {
+export interface PathCoordinate {
   x: number
   y: number
   z: number
+}
+export type PathSegmentMode = 'curved' | 'straight'
+export interface PathPoint extends PathCoordinate {
+  // Incoming segment. On point 0 this describes the closing segment.
+  segment_mode?: PathSegmentMode | null
+  // Bezier handles relative to the segment's start and end, respectively.
+  segment_controls?: [PathCoordinate, PathCoordinate] | null
 }
 
 // 'solid' | 'dashed' — a plain string, not a union alias, mirrors every

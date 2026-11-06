@@ -92,7 +92,8 @@ export async function uploadModel3DFile(
   // first reload after an import doesn't download them. A model's bytes
   // never change under the same id (a re-import replaces the row — new id —
   // see model3d_file.py's create_file), so caching by id is safe.
-  void putCachedFile('model', res.data.project_id, res.data.id, stored)
+  const { data: revision } = await api.get<{ version: string }>(`/api/v1/model3d-files/${res.data.id}/content-version`)
+  void putCachedFile('model', res.data.project_id, `${res.data.id}:${revision.version}`, stored)
   return res.data
 }
 
@@ -100,15 +101,23 @@ export async function uploadModel3DFile(
 export async function downloadModel3DFile(
   file: Pick<Model3DFile, 'id' | 'project_id'> & { size_bytes?: number },
 ): Promise<Blob> {
+  const { data: revision } = await api.get<{ version: string }>(`/api/v1/model3d-files/${file.id}/content-version`)
   const stored = await getOrDownloadFile(
-    'model', file.project_id, file.id,
+    'model', file.project_id, `${file.id}:${revision.version}`,
     () => downloadLargeBlob(`/api/v1/model3d-files/${file.id}/download`), file.size_bytes,
   )
   return decompressIfGzip(stored)
 }
 
-export const pruneModel3DFileCache = (projectId: string, keepFileIds: string[]) =>
-  pruneCachedFiles('model', projectId, keepFileIds)
+export const pruneModel3DFileCache = async (projectId: string, keepFileIds: string[]) => {
+  try {
+    const keys = await Promise.all(keepFileIds.map(async id => {
+      const { data } = await api.get<{ version: string }>(`/api/v1/model3d-files/${id}/content-version`)
+      return `${id}:${data.version}`
+    }))
+    await pruneCachedFiles('model', projectId, keys)
+  } catch { /* Keep the cache when a version cannot be checked. */ }
+}
 
 export async function deleteModel3DFile(fileId: string): Promise<void> {
   await api.delete(`/api/v1/model3d-files/${fileId}`)

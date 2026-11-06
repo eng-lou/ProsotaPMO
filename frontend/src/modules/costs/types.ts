@@ -110,6 +110,8 @@ export interface CostCommitment {
 }
 
 export interface CostRateLine {
+  area_m2?: string | null
+  quantity_review_required?: boolean
   id: string
   cost_element_id: string
   description: string

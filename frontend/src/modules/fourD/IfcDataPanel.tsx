@@ -441,13 +441,13 @@ function ModelItem({
             ⚠ unsaved
           </span>
         )}
-        {unloadedCount > 0 && (
+        {saved && (
           <button
             onClick={onReloadIfc}
             title={`${unloadedCount} element${unloadedCount === 1 ? '' : 's'} unloaded from this model — reload the file to bring some back`}
             className="ml-auto text-xs text-blue-500 hover:text-blue-700 dark:hover:text-prosota-cyan shrink-0"
           >
-            Reload IFC ({unloadedCount})
+            Reload / Sync IFC
           </button>
         )}
         <button onClick={onUnload} title="Unload IFC model" className={`${unloadedCount > 0 ? '' : 'ml-auto'} text-xs text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0`}>

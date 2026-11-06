@@ -34,9 +34,10 @@ class AssetEdit(BaseModel):
 
 class Dimensions(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
-    width: float = Field(gt=0, le=1000)
-    height: float = Field(gt=0, le=500)
-    depth: float = Field(gt=0, le=1000)
+    # Model extents are not a complexity limit; large sites must retain their scale.
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+    depth: float = Field(gt=0)
 
 
 def record(row):

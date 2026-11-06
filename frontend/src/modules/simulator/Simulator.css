@@ -1,0 +1,79 @@
+.simulator {position:fixed;right:18px;top:115px;width:min(960px,90vw);max-height:82vh;z-index:80;display:flex;flex-direction:column;background:#f8fafc;color:#162235;border:1px solid #94a3b8;border-radius:12px;box-shadow:0 18px 65px #0005;font-size:12px}
+.dark .simulator{background:#101c30;color:#e2e8f0;border-color:#334155}
+.simulator header,.simulator nav,.simulator footer{display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid #94a3b840;flex-wrap:wrap}
+.simulator header strong{font-size:16px}.simulator header small{color:#74849c}.simulator main{padding:14px;overflow:auto}.simulator main>section{margin-bottom:16px}.simulator button,.simulator select,.simulator input,.simulator textarea{font:inherit;border:1px solid #94a3b870;border-radius:5px;padding:6px;background:transparent;color:inherit;max-width:100%}.simulator select option{color:#15213a;background:#fff}.simulator button:hover{background:#3b82f625}.simulator button:disabled{opacity:.45;cursor:default}.simulator button.active,.simulator button.primary{background:#4568e8;color:white;border-color:#4568e8}.simulator .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.simulator .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.simulator .columns{display:grid;grid-template-columns:220px 1fr;gap:14px}.simulator .stack{display:flex;flex-direction:column;gap:8px}.simulator label{display:flex;flex-direction:column;gap:4px}.simulator .check{flex-direction:row;align-items:center}.simulator input[type=checkbox]{width:14px}.simulator h3{font-size:14px;font-weight:700;margin:8px 0}.simulator p{line-height:1.5;margin:6px 0}.simulator .muted{color:#7d8fa7}.simulator .card{border:1px solid #94a3b84d;border-radius:7px;padding:10px;margin:7px 0}.simulator .error{color:#d94d44;padding:8px;border:1px solid #e8827060;border-radius:5px}.simulator .notice{padding:10px;background:#6c91e517;border-radius:6px}.simulator table{width:100%;border-collapse:collapse;font-size:11px}.simulator td,.simulator th{text-align:left;padding:7px;border-bottom:1px solid #94a3b840}.simulator .grow{flex:1}.simulator textarea{min-height:56px;width:100%}.simulator .guide{display:flex;align-items:center;justify-content:space-around;padding:10px;background:#64748b12;border-radius:6px}.simulator .bar{height:22px;position:relative;background:#64748b15;border-radius:3px;overflow:hidden}.simulator .bar>button{position:absolute;height:100%;padding:0;border:0;background:#4169e1aa;border-radius:2px}.simulator .vector{display:flex;gap:6px}.simulator .vector input{width:80px}.simulator details{margin:10px 0}.simulator summary{cursor:pointer;font-weight:600}
+
+.simulator, .simulator * { box-sizing: border-box; }
+
+.simulator{width:min(1000px,calc(100vw - 32px));font-size:13px;background:#f3f6fa}
+.simulator main{padding:20px;min-height:220px}
+.simulator header{background:#ffffff60}
+.simulator nav{flex-wrap:nowrap;gap:6px;padding:10px 14px;background:#fff}
+.simulator nav>button{display:flex;align-items:center;gap:8px;text-align:left;flex:1;border-color:transparent;padding:10px 8px;min-width:0}
+.simulator nav small{display:block;font-size:10px;line-height:1.5;opacity:.8;font-weight:400}
+.simulator nav .sim-icon{width:23px;height:23px}
+.simulator .sim-icon{width:26px;height:26px;flex-shrink:0}
+.simulator .sim-intro{display:flex;align-items:center;gap:12px;margin:0 0 20px}
+.simulator .sim-intro h2{font-size:20px;line-height:1.2;margin:0;font-weight:650;letter-spacing:-.4px}
+.simulator .sim-intro p{color:#576b85;max-width:650px;margin:6px 0 0}
+.simulator .sim-icon-box{padding:12px;border-radius:12px;background:#dde8fb;color:#3867b7;display:flex}
+.simulator .scenario-options{margin:0;padding:10px 14px;border-bottom:1px solid #94a3b840}
+.simulator .scenario-options>summary{line-height:1.6;overflow-wrap:anywhere}
+.simulator .scenario-options header{padding:12px 0;border:0;background:none}
+.simulator .scenario-options header input{flex:1;min-width:140px}
+.simulator .card{background:#fff;border-color:#dae1eb;border-radius:10px;padding:14px}
+.simulator .sim-options{border:1px solid #d9e1ec;border-radius:8px;padding:12px;background:#ffffff80}
+.simulator .sim-options[open]>summary{margin-bottom:12px}
+.simulator .scope-list{max-height:310px;overflow:auto}
+.simulator .scope-list .check{padding:10px;border-bottom:1px solid #e5eaf1;gap:10px;cursor:pointer}
+.simulator .scope-list .muted{margin-left:auto;text-align:right}
+.simulator .sim-pill{font-size:11px;padding:4px 8px;border-radius:20px;background:#e7eef8;color:#476185;white-space:nowrap}
+.simulator .columns{grid-template-columns:210px minmax(0,1fr);align-items:start;gap:18px}
+.simulator .step-list>button{display:flex;align-items:flex-start;text-align:left;gap:9px;padding:12px}
+.simulator .step-list strong{display:block;margin:4px 0;font-size:13px}
+.simulator .step-list small{font-size:10px;line-height:1.4}
+.simulator .step-index,.simulator .phase-number{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:#e5edfb;color:#4264a2;width:24px;height:24px;flex-shrink:0;font-size:11px;font-weight:700}
+.simulator .method-picker{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:6px 0}
+.simulator .method-picker button{text-align:left;display:grid;grid-template-columns:30px 1fr;align-items:center;gap:4px 8px;padding:12px;background:#fff;min-height:78px}
+.simulator .method-picker .sim-icon{grid-row:span 2;color:#577faf}
+.simulator .method-picker small{font-size:11px;line-height:1.35;color:#61748a}
+.simulator .method-picker button[aria-pressed=true],.simulator .phase-flow button[aria-pressed=true]{border-color:#4b75cd;background:#eaf1ff;box-shadow:inset 0 0 0 1px #4b75cd}
+.simulator .phase-flow{display:flex;gap:9px;overflow-x:auto;padding:6px 0 12px;scroll-snap-type:x proximity}
+.simulator .phase-flow button{position:relative;flex:1 0 115px;max-width:180px;padding:12px 10px;text-align:left;background:#fff;scroll-snap-align:start}
+.simulator .phase-flow strong,.simulator .phase-flow small{display:block;overflow-wrap:anywhere;margin-top:7px}
+.simulator .phase-flow small{font-size:10px;color:#61748a;margin-top:4px}
+.simulator .phase-flow button+button:before{content:'→';position:absolute;left:-10px;top:20px;color:#647b9d}
+.simulator .phase-editor{margin-top:0;border-top:3px solid #4b75cd}
+.simulator .phase-editor>.row{margin-bottom:12px}
+.simulator .resource-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.simulator .resource-card{margin:0 0 12px}
+.simulator .resource-card .sim-icon{color:#577faf}
+.simulator .result-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.simulator .result-metrics>div{padding:14px;border:1px solid #d9e2ee;background:#fff;border-radius:10px}
+.simulator .result-metrics small{display:block;color:#64748b;font-size:11px}
+.simulator .result-metrics strong{display:block;font-size:24px;margin-top:7px;font-weight:650}
+.simulator .sequence-card>.row{margin-top:14px}
+.simulator .sequence-card .bar{height:34px;min-width:150px}
+.simulator .bar>button{font-size:10px;text-align:left;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 6px;border-right:2px solid #fff;min-width:2px}
+.simulator .sim-empty{text-align:center;padding:32px 20px;border:1px dashed #bac9dc;border-radius:12px;background:#ffffff50;display:flex;align-items:center;flex-direction:column;gap:10px}
+.simulator .sim-empty .sim-icon{width:42px;height:42px;color:#7290b9}
+.simulator .sim-empty strong{font-size:17px}
+.simulator footer{background:#fff;border-top:1px solid #d9e2ee;padding:12px 16px}
+.simulator button{cursor:pointer}.simulator button:focus-visible,.simulator summary:focus-visible{outline:2px solid #4b75cd;outline-offset:3px}
+.simulator .muted{color:#667b94}
+.dark .simulator nav,.dark .simulator footer,.dark .simulator .card,.dark .simulator .method-picker button,.dark .simulator .phase-flow button,.dark .simulator .result-metrics>div{background:#16243a;border-color:#35445c}
+.dark .simulator header,.dark .simulator .sim-options{background:#16243a60;border-color:#35445c}
+.dark .simulator .sim-intro p,.dark .simulator .muted,.dark .simulator .method-picker small,.dark .simulator .phase-flow small,.dark .simulator .result-metrics small{color:#a4b4ca}
+.dark .simulator .sim-icon-box,.dark .simulator .sim-pill,.dark .simulator .phase-number,.dark .simulator .step-index{background:#253c60;color:#bad1f6}
+.dark .simulator .method-picker button[aria-pressed=true],.dark .simulator .phase-flow button[aria-pressed=true]{background:#243c60;border-color:#6c9ae9}
+.dark .simulator .sim-empty{background:#16243a60;border-color:#35445c}
+@media(max-width:850px){.simulator nav small{display:none}.simulator nav>button{flex-direction:column;text-align:center;gap:5px}.simulator .columns{grid-template-columns:165px minmax(0,1fr)}.simulator main{padding:14px}}
+@media(max-width:600px){.simulator .columns,.simulator .resource-grid{grid-template-columns:1fr}.simulator .step-list{max-height:220px;overflow:auto}.simulator .result-metrics{gap:6px}.simulator .result-metrics>div{padding:9px}.simulator .result-metrics strong{font-size:19px}.simulator .sim-intro h2{font-size:18px}.simulator nav{padding:8px 4px;gap:0}.simulator nav>button{font-size:11px}}
+.simulator-workspace{display:flex;flex-direction:column;min-height:0;overflow:hidden}.simulator-workspace>main{flex:1;min-height:0}.simulator.watching{width:min(440px,calc(100vw - 32px));top:auto;bottom:24px}.simulator.watching>.simulator-workspace{display:none}.simulator .method-playback{padding:14px;overflow:auto}.method-playback>input[type=range]{width:100%;margin:12px 0}.method-states{max-height:240px;overflow:auto}.method-states>div{margin:12px 0}.method-stage-strip{display:flex;gap:6px;margin:8px 0}.method-stage-strip>button{flex:1;text-align:center}.method-stage-strip>button>span{display:block;font-size:23px}.worker-method .method-stage-strip{padding:8px;background:#3b82f612;border-radius:8px}.method-fit canvas{touch-action:none}
+
+.simulator .activity-sequence{border:1px solid var(--sim-line,#ccd5e5);border-radius:8px;padding:12px;margin:12px 0}
+.simulator .activity-sequence>small{display:block;margin:4px 0 12px;color:var(--sim-muted,#64748b)}
+.simulator .activity-sequence .row{margin:8px 0}
+.simulator .sequence-step-name{width:180px;flex-shrink:0;overflow-wrap:anywhere}
+.simulator .sequence-delivery{margin:16px 0}
+.simulator .sequence-delivery .row{margin:12px 0;flex-wrap:wrap}

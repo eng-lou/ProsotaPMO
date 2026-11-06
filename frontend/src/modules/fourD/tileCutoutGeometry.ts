@@ -39,7 +39,7 @@ function upVector(upAxis: UpAxis): THREE.Vector3 {
 // concave selection — this doesn't attempt to detect self-intersection
 // (a genuinely malformed polygon), only "is this convex or not."
 export function isConvexPolygon(points: ZonePoint[], upAxis: UpAxis): boolean {
-  if (points.length < 3) return false
+  if (points.length < 3 || points.length > 64 || points.some(p=>![p.x,p.y,p.z].every(Number.isFinite))) return false
   const up = upVector(upAxis)
   const verts = points.map(p => toVec3(p, upAxis))
   let sign = 0
@@ -52,6 +52,14 @@ export function isConvexPolygon(points: ZonePoint[], upAxis: UpAxis): boolean {
     const thisSign = Math.sign(cross)
     if (sign === 0) sign = thisSign
     else if (thisSign !== sign) return false
+  }
+  if (sign === 0) return false
+  // Every vertex must lie on the same side of each edge. This also
+  // rejects self-crossing stars that pass a consecutive-turn test.
+  for (let i=0;i<verts.length;i++) {
+    const a=verts[i],edge=verts[(i+1)%verts.length].clone().sub(a)
+    if(edge.lengthSq()<1e-12) return false
+    for(const p of verts) if(edge.clone().cross(p.clone().sub(a)).dot(up)*sign < -1e-8)return false
   }
   return true
 }

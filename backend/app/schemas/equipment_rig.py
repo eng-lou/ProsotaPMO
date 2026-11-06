@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -47,12 +47,81 @@ class Joint(Strict):
 class Follower(Strict):
     id: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=100)
-    barrel: str
-    piston: str
+    barrel: str = Field(min_length=1, max_length=2000)
+    piston: str = Field(max_length=2000)  # Empty for a single rigid link.
     base_node: str  # Empty string means equipment root.
     tip_node: str
     base_point: tuple[float, float, float]
     tip_point: tuple[float, float, float]
+    flex_curve: list[tuple[float, float, float]] | None = Field(default=None, min_length=2, max_length=512)
+
+    @model_validator(mode='after')
+    def check_flexible(self):
+        if self.flex_curve and (self.piston or len(set(self.flex_curve)) < 2):
+            raise ValueError('Flexible connections need one mesh and a non-zero centreline')
+        return self
+
+
+class SoilCycle(Strict):
+    pickup: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(max_length=100)
+    carry: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(max_length=100)
+    tip: dict[str, Annotated[float, Field(ge=0, le=1)]] = Field(max_length=100)
+    approach_seconds: float = Field(ge=.1, le=120)
+    lift_seconds: float = Field(ge=.1, le=120)
+    travel_seconds: float = Field(ge=.1, le=120)
+    tip_seconds: float = Field(ge=.1, le=120)
+    start_progress: float = Field(ge=0, le=100)
+    pickup_progress: float = Field(ge=0, le=100)
+    drop_progress: float = Field(ge=0, le=100)
+
+
+class Soil(Strict):
+    material: Literal['soil', 'sand', 'gravel', 'rocks'] = 'soil'
+    mode: Literal['excavate', 'preloaded'] = 'excavate'
+    initial_fill: float = Field(default=1, ge=0, le=1)
+    outlet: tuple[float, float, float] | None = None
+    cycle: SoilCycle | None = None
+    enabled: bool = True
+    show_guide: bool = False
+    bucket_node: str = Field(min_length=1, max_length=2000)
+    center: tuple[float, float, float]
+    size: tuple[float, float, float]
+    rotation: tuple[float, float, float]
+    opening_direction: tuple[float, float, float] | None = None
+    capacity: float = Field(ge=.001, le=100)
+    dump_angle: float = Field(ge=10, le=170)
+    pour_seconds: float = Field(ge=.2, le=30)
+    source: tuple[float, float, float]
+    radius: float = Field(ge=.2, le=50)
+    height: float = Field(ge=.05, le=20)
+    up_axis: Literal['y', 'z']
+    start: datetime
+    end: datetime
+    duration_seconds: float = Field(ge=1, le=300)
+    steps: int = Field(ge=60, le=600)
+    color: str = Field(pattern=r'^#[0-9a-fA-F]{6}$')
+
+    @model_validator(mode='after')
+    def check_soil(self):
+        if self.mode != 'preloaded' and self.dump_angle < 45:
+            raise ValueError('Excavation pour angle must be at least 45 degrees')
+        if self.outlet is not None and any(abs(n) > .5 for n in self.outlet):
+            raise ValueError('Discharge edge must be within the calibrated volume')
+        if self.start.tzinfo is None or self.end.tzinfo is None or self.end <= self.start:
+            raise ValueError('Soil simulation needs an increasing time range with timezones')
+        if any(n <= 0 for n in self.size):
+            raise ValueError('Bucket dimensions must be positive')
+        if self.opening_direction is not None and (sum(n*n for n in self.opening_direction) < 1e-12 or any(abs(n) > 1e7 for n in self.opening_direction)):
+            raise ValueError('Bucket opening direction must be a non-zero finite vector')
+        if any(abs(n) > 1e7 for v in (self.center, self.size, self.rotation, self.source) for n in v):
+            raise ValueError('Soil coordinates exceed supported range')
+        return self
+
+
+class MotionDetail(Strict):
+    node: str = Field(min_length=1, max_length=2000)
+    joint: str = Field(min_length=1, max_length=80)
+    threshold: float = Field(gt=0, le=1000000)
 
 
 class Definition(Strict):
@@ -60,6 +129,8 @@ class Definition(Strict):
     controls: list[Control] = Field(default_factory=list, max_length=100)
     joints: list[Joint] = Field(default_factory=list, max_length=200)
     followers: list[Follower] = Field(default_factory=list, max_length=100)
+    motion_details: list[MotionDetail] = Field(default_factory=list, max_length=200)
+    soil: Soil | None = None
 
     @model_validator(mode='after')
     def validate_graph(self):
@@ -70,9 +141,12 @@ class Definition(Strict):
                 raise ValueError('IDs must be unique')
         controls = {x.id for x in self.controls}
         joints = {x.id: x for x in self.joints}
+        if len({d.node for d in self.motion_details}) != len(self.motion_details) or any(d.joint not in joints for d in self.motion_details):
+            raise ValueError('Motion details need unique parts and existing joints')
         if any(j.parent is not None and j.parent not in joints for j in self.joints):
             raise ValueError('Unknown parent joint')
-        driven = [n for j in self.joints for n in [j.node, *j.members]] + [n for f in self.followers for n in (f.barrel, f.piston)]
+        follower_nodes = [n for f in self.followers for n in (f.barrel, f.piston) if n]
+        driven = [n for j in self.joints for n in [j.node, *j.members]] + follower_nodes
         if len(set(driven)) != len(driven) or any(not n for n in driven):
             raise ValueError('Each part may have only one driver; the equipment root cannot be driven')
         for control in self.controls:
@@ -100,11 +174,21 @@ class Definition(Strict):
             points = joint.response
             if points[0][0] != 0 or points[-1][0] != 1 or any(not 0 <= y <= 1 for _, y in points) or any(a[0] >= b[0] for a, b in zip(points, points[1:])):
                 raise ValueError('Response curve must have increasing inputs from 0 to 1 and outputs within 0 to 1')
+        visiting, done = set(), set()
+        def visit(follower):
+            if follower.id in done:
+                return
+            if follower.id in visiting:
+                raise ValueError('Cylinder or hose connections contain a cycle')
+            visiting.add(follower.id)
+            for other in self.followers:
+                if any(n == a or n.startswith(a + '/') for n in (follower.base_node, follower.tip_node) for a in (other.barrel, other.piston) if a):
+                    visit(other)
+            visiting.remove(follower.id)
+            done.add(follower.id)
         for follower in self.followers:
-            follower_nodes = [n for f in self.followers for n in (f.barrel, f.piston)]
-            if any(n == a or n.startswith(a + '/') for n in (follower.base_node, follower.tip_node) for a in follower_nodes):
-                raise ValueError('Cylinder attachments must reference joint parts or fixed parts, not followers')
-        if any(n != a and n.startswith(a + '/') for n in driven for a in [n for f in self.followers for n in (f.barrel, f.piston)]):
+            visit(follower)
+        if any(n != a and n.startswith(a + '/') for n in driven for a in follower_nodes):
             raise ValueError('Followers cannot be ancestors of another driven part')
         return self
 

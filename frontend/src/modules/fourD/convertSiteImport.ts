@@ -3,6 +3,7 @@ import { exportMorphTracks } from './exportMorphTracks'
 import { dataUriToBlob } from './dataUriBlob'
 import { prepareImportedOpacity } from './importOpacity'
 import { applyInitialAssetPose, captureAssetBindPose } from './assetPose'
+import { checkImportGeometry, EMPTY_MODEL_HELP } from './importGeometryCheck'
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
@@ -15,6 +16,7 @@ export interface ImportOptions { upAxis:'auto'|'y'|'z'; unitScale:number; includ
 export async function convertSiteImport(file:File, companions:File[], options:ImportOptions):Promise<File> {
  const ext=file.name.split('.').pop()?.toLowerCase()
  if(!['glb','gltf','fbx','obj'].includes(ext || ''))throw Error('Choose a GLB, glTF, FBX or OBJ model.')
+ await checkImportGeometry([file])
  if(ext==='glb' && (options.upAxis==='y'||options.upAxis==='auto') && (options.unitScale===1||options.unitScale===0) && options.includeAnimation)return file
  const manager=new THREE.LoadingManager(),urls:string[]=[],missing:string[]=[]
  manager.addHandler(/\.tga$/i,new TGALoader(manager))
@@ -50,6 +52,9 @@ export async function convertSiteImport(file:File, companions:File[], options:Im
   }else{const gltf=await new GLTFLoader(manager).parseAsync(bytes,'');object=gltf.scene;object.animations=gltf.animations}
   manager.itemEnd('prosota-import');await loaded
   if(missing.length)throw Error('Some textures could not be read. Include the model’s MTL and texture files.')
+  let hasGeometry=false
+  object.traverse(node=>{if((node as THREE.Mesh).isMesh && (node as THREE.Mesh).geometry.getAttribute('position')?.count>0)hasGeometry=true})
+  if(!hasGeometry)throw Error(`The model contains no mesh geometry. ${EMPTY_MODEL_HELP}`)
   convertMeshesToStandardMaterial(object)
   // glTF stores opacity in the colour image. Preserve FBX/MTL alpha maps
   // explicitly because GLTFExporter does not export a separate alphaMap.
@@ -88,6 +93,7 @@ export async function convertSiteImportSet(files: File[], options: ImportOptions
  const models=files.filter(f=>/\.(glb|gltf|fbx|obj)$/i.test(f.name))
  if(!models.length)throw Error('Select at least one GLB, glTF, FBX or OBJ model.')
  if(models.length===1)return convertSiteImport(models[0],files.filter(f=>f!==models[0]),options)
+ await checkImportGeometry(models)
  const root=new THREE.Group();root.name=name || 'Assembly'
  const clips:THREE.AnimationClip[]=[]
  for(const model of models){

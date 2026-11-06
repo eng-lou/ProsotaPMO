@@ -209,3 +209,8 @@ app.include_router(public_clash_router, prefix="/api/v1")
 
 from app.api.equipment_rigs import router as equipment_rigs_router
 app.include_router(equipment_rigs_router, prefix='/api/v1', dependencies=_auth_approved)
+from app.api.ifc_revisions import router as ifc_revisions_router
+app.include_router(ifc_revisions_router, prefix='/api/v1', dependencies=_auth_approved)
+
+from app.api.simulations import router as simulations_router
+app.include_router(simulations_router, prefix="/api/v1", dependencies=_auth_approved)

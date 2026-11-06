@@ -2,19 +2,29 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { undoHistory } from '@/lib/undoHistory'
 import type { PathPoint } from './paths'
+import type { GeographicContext } from './geographicContext'
 
 export interface SiteObjectState {
   content_position: PathPoint; content_rotation: PathPoint; content_scale: PathPoint
   pivot: PathPoint|null; pivot_rotation: PathPoint|null; base_position: PathPoint|null; base_rotation: PathPoint|null
   base_content_position: PathPoint|null; base_content_rotation: PathPoint|null
 }
-export interface PathMotion { bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number }
+export interface SitePathKey { date: string; progress: number; interpolation: 'linear' | 'smooth' | 'hold' }
+export interface PathMotion { bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
 export interface SiteItem {
+  motion_actions?: import('./workerActions').WorkerAction[]
+  attachment?: import('./workerActions').SiteAttachment | null
+  asset_part?: import('./assetParts').AssetPart | null
+  assembly_id?: string | null
+  assembly_name?: string | null
+  rig_disabled?: boolean
+  instance_overrides?: Record<number,import('./geographicContext').FeatureReplacement>
+  geographic?: GeographicContext | null
   operation_inputs?: string[]
   path_motion?: PathMotion | null
   object_state?: SiteObjectState|null
   animation_playing?: boolean; animation_clip?: number; animation_speed?: number
-  id: string; name: string; kind: 'fence' | 'context' | 'cabin' | 'tree' | 'person' | 'arrow' | 'asset' | 'shape' | 'array' | 'scatter'
+  id: string; name: string; kind: 'fence' | 'context' | 'cabin' | 'tree' | 'person' | 'arrow' | 'asset' | 'shape' | 'array' | 'scatter' | 'geographic'
   asset_id?: string | null
   generator_version: 1; up_axis: 'y' | 'z'; units: 'm'; position: PathPoint
   yaw: number; width: number; depth: number; height: number; color: string; locked: boolean
@@ -27,6 +37,7 @@ export interface SiteItem {
   layout?: { footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
 }
 export interface SiteScene { revision: number; items: SiteItem[] }
+export type SiteTransformPatch = Partial<Pick<SiteItem, 'position' | 'rotation' | 'scale' | 'object_state' | 'attachment'>>
 export const recipe = ({ layout: _layout, ...item }: SiteItem): SiteItem => ({ ...item, operation_inputs: item.operation_inputs ?? [], asset_id: item.asset_id ?? null,
   rotation: item.rotation ?? { x: 0, y: 0, z: 0 }, scale: item.scale ?? { x: 1, y: 1, z: 1 } })
 function stableRecipe(value: unknown): string {
@@ -44,9 +55,10 @@ export function useSiteScene(projectId: string | undefined) {
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState<SiteItem | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
+  const [detailSelection,setDetailSelection]=useState<{itemId:string;featureId?:string;surface?:string;instanceIndex?:number}|null>(null)
   const [placing, setPlacing] = useState(false)
   const [placement, setPlacement] = useState<{ point: PathPoint; serial: number } | null>(null)
-  const transforms = useRef(new Map<string, Pick<SiteItem, 'position' | 'rotation' | 'scale' | 'object_state'>>())
+  const transforms = useRef(new Map<string, SiteTransformPatch>())
   const [transformVersion, setTransformVersion] = useState(0)
   const current = useRef(scene), project = useRef(projectId), pending = useRef(false)
   project.current = projectId
@@ -97,11 +109,12 @@ export function useSiteScene(projectId: string | undefined) {
     }, 350)
     return () => window.clearTimeout(timer)
   }, [transformVersion, busy, ready, projectId])
-  const updateTransforms = (changes: Map<string, Pick<SiteItem, 'position' | 'rotation' | 'scale' | 'object_state'>>) => {
+  const updateTransforms = (changes: Map<string, SiteTransformPatch>) => {
     for (const [id, transform] of changes) transforms.current.set(id, transform)
     setTransformVersion(v => v + 1)
   }
-  return { scene, error, setError, ready, busy, draft, setDraft, selected, setSelected, save, reload,
+  useEffect(()=>{setDetailSelection(old=>old?.itemId===selected?old:null)},[projectId,selected])
+  return { scene, error, setError, ready, busy, draft, setDraft, selected, setSelected, save, reload, detailSelection,setDetailSelection,
     updateTransforms,
     placing, setPlacing, placement, place: (point: PathPoint) => { setPlacement({ point, serial: Date.now() }); setPlacing(false) } }
 }

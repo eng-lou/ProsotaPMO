@@ -84,7 +84,8 @@ def run(config=None):
 
 if __name__ == "__main__":
     # Existing workers invoke sys.executable with their source-file path.
-    workers = {"ifc_conversion_worker": "app.services.ifc_conversion_worker",
+    workers = {"ifc_revision_worker": "app.services.ifc_revision_worker",
+               "ifc_conversion_worker": "app.services.ifc_conversion_worker",
                "ifc_planning_snapshot": "app.services.ifc_planning_snapshot"}
     if len(sys.argv) == 4 and Path(sys.argv[1]).stem in workers:
         import runpy

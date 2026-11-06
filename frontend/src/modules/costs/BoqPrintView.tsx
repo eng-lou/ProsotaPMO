@@ -62,7 +62,7 @@ export function BoqPrintView({ lines, total, projectName, letterhead, activities
         <td className="py-1 pr-2 text-gray-400">{showSr ? sr : ''}</td>
         <td className="py-1 pr-2" style={{ paddingLeft: indent * 12 }}>{label}</td>
         <td className="py-1 pr-2 text-gray-400 font-mono" style={{ fontSize: '9px' }}>{line.cost_code ?? ''}</td>
-        <td className="py-1 pr-2 text-right">{Number(line.qty).toLocaleString()}</td>
+        <td className="py-1 pr-2 text-right">{Number(line.qty).toLocaleString()}{line.quantity_review_required ? ' (review required)' : ''}</td><td className="py-1 pr-2 text-right">{line.area_m2 == null ? '—' : Number(line.area_m2).toLocaleString()}</td>
         <td className="py-1 pr-2 text-gray-500">{line.unit ?? '—'}</td>
         <td className="py-1 pr-2 text-right">{formatCurrency(Number(line.rate))}</td>
         <td className="py-1 pr-2 text-right font-medium">{formatCurrency(Number(line.total))}</td>
@@ -105,7 +105,7 @@ export function BoqPrintView({ lines, total, projectName, letterhead, activities
             <th className="py-1.5 pr-2 w-8">Sr.</th>
             <th className="py-1.5 pr-2">Name of Item</th>
             <th className="py-1.5 pr-2">Cost Code</th>
-            <th className="py-1.5 pr-2 text-right">Quantity</th>
+            <th className="py-1.5 pr-2 text-right">Quantity</th><th className="py-1.5 pr-2 text-right">Area (m²)</th>
             <th className="py-1.5 pr-2">Unit</th>
             <th className="py-1.5 pr-2 text-right">Rate</th>
             <th className="py-1.5 pr-2 text-right">Amount</th>
@@ -118,7 +118,7 @@ export function BoqPrintView({ lines, total, projectName, letterhead, activities
                 <td className="py-1 pr-2"></td>
                 <td className="py-1 pr-2 font-bold">{section.label}</td>
                 <td className="py-1 pr-2 text-gray-400 font-mono" style={{ fontSize: '9px' }}>{section.key}</td>
-                <td colSpan={3}></td>
+                <td colSpan={4}></td>
                 <td className="py-1 pr-2 text-right font-bold">{formatCurrency(section.subtotal)}</td>
               </tr>
               {section.elements.map(element => (
@@ -127,7 +127,7 @@ export function BoqPrintView({ lines, total, projectName, letterhead, activities
                     <td className="py-1 pr-2"></td>
                     <td className="py-1 pr-2 font-semibold text-gray-600" style={{ paddingLeft: 12 }}>{element.label}</td>
                     <td className="py-1 pr-2 text-gray-400 font-mono" style={{ fontSize: '9px' }}>{element.key}</td>
-                    <td colSpan={3}></td>
+                    <td colSpan={4}></td>
                     <td className="py-1 pr-2 text-right font-semibold text-gray-600">{formatCurrency(element.subtotal)}</td>
                   </tr>
                   {element.activities.map(activity => (
@@ -144,7 +144,7 @@ export function BoqPrintView({ lines, total, projectName, letterhead, activities
         </tbody>
         <tfoot>
           <tr className="border-t-2 border-gray-400 font-bold">
-            <td colSpan={6} className="py-1.5 pr-2 text-right">Total Cost</td>
+            <td colSpan={7} className="py-1.5 pr-2 text-right">Total Cost</td>
             <td className="py-1.5 pr-2 text-right">{formatCurrency(total)}</td>
           </tr>
         </tfoot>

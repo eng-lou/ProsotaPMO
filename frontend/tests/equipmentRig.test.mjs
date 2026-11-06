@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
-const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/equipmentRig'; export * from './src/modules/fourD/equipmentAssembly'; export * as THREE from 'three'; export { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'; export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
-const { THREE, GLTFExporter, GLTFLoader, assembleEquipment, bindEquipment, equipmentNodes, validateEquipment, controlValue, emptyEquipment } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
+const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/equipmentRig'; export * from './src/modules/fourD/equipmentAssembly'; export * from './src/modules/fourD/equipmentPreset'; export * as THREE from 'three'; export { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'; export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
+const { THREE, GLTFExporter, GLTFLoader, assembleEquipment, bindEquipment, equipmentNodes, validateEquipment, controlValue, emptyEquipment, importEquipmentPreset, jointOffset, setJointTravel, sampleEquipmentNode } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
 const near = (a, b) => assert.ok(Math.abs(a-b)<1e-7, `${a} != ${b}`)
 function setup() {
  const root = new THREE.Group(); root.name = 'Backhoe'
@@ -14,6 +14,47 @@ function setup() {
  def.joints=[{id:'boom',name:'Boom',node:keys[0],parent:null,control:'lift',kind:'hinge',pivot:[0,0,0],axis:[0,0,1],minimum:0,maximum:90,response:[[0,0],[1,1]]},{id:'arm',name:'Arm',node:keys[1],parent:'boom',control:'curl',kind:'hinge',pivot:[2,0,0],axis:[0,0,1],minimum:0,maximum:90,response:[[0,0],[1,1]]},{id:'bucket',name:'Bucket',node:keys[2],parent:'arm',control:'curl',kind:'hinge',pivot:[3,0,0],axis:[0,0,1],minimum:0,maximum:0,response:[[0,0],[1,1]]}]
  return {root,def,keys}
 }
+
+test('rigid links aim about either endpoint without a dummy piston or moving the root',()=>{
+ const {root,def,keys}=setup();def.joints=def.joints.slice(0,1)
+ root.children[3].position.set(0,-1,0);root.children[4].position.set(2,0,0)
+ def.followers=[{id:'a',name:'Base link',barrel:keys[3],piston:'',base_node:'',tip_node:keys[0],base_point:[0,-1,0],tip_point:[2,0,0]},
+ {id:'b',name:'Tip link',barrel:keys[4],piston:'',base_node:keys[0],tip_node:'',base_point:[2,0,0],tip_point:[0,-1,0]}]
+ const before=JSON.stringify(def),rig=bindEquipment(root,def)
+ for(const t of [1,0,.5,1])rig.evaluate(null,{lift:t})
+ near(root.children[3].position.y,-1);near(root.children[4].position.x,0);near(root.children[4].position.y,2);near(root.position.y,0)
+ rig.restore();near(root.children[4].position.x,2);assert.equal(JSON.stringify(def),before)
+ const bad=structuredClone(def);bad.followers[0].barrel='';assert.throws(()=>validateEquipment(bad,equipmentNodes(root)))
+ bad.followers[0].barrel=keys[3];bad.followers[0].base_node=keys[4];validateEquipment(bad,equipmentNodes(root))
+ bad.followers[1].base_node=keys[3];assert.throws(()=>validateEquipment(bad,equipmentNodes(root)),/cycle/)
+})
+
+test('preset wrapper adaptation preserves full articulated motion, links, slides and source data',()=>{
+ const {root,def,keys}=setup();def.joints[1].kind='slide';def.joints[1].maximum=3;def.joints[0].pivot_rotation=[.1,.2,.3]
+ def.followers=[{id:'f',name:'Link',barrel:keys[3],piston:'',base_node:'',tip_node:keys[2],base_point:[0,-1,0],tip_point:[1,0,0]}]
+ def.controls[0].keys=[{date:'2026-01-01T00:00:00Z',value:1,interpolation:'linear'}]
+ const copy=root.clone(true),outer=new THREE.Group(),wrapper=new THREE.Group();outer.add(wrapper);wrapper.add(copy)
+ wrapper.position.set(5,-3,8);wrapper.rotation.set(.3,.6,.1);wrapper.scale.setScalar(2);outer.scale.set(0,0,0)
+ const before=JSON.stringify(def),adapted=importEquipmentPreset(def,outer)
+ assert.equal(adapted.controls[0].keys.length,0);assert.equal(JSON.stringify(def),before)
+ const a=bindEquipment(root,def),b=bindEquipment(outer,adapted);outer.scale.set(1,1,1);outer.updateMatrixWorld(true)
+ const transform=wrapper.matrix.clone();assert.equal(adapted.followers[0].base_node,'/0:/0:Backhoe');assert.equal(adapted.followers[0].piston,'')
+ for(const pose of [{lift:0,curl:0},{lift:1,curl:.5},{lift:.3,curl:1}]){
+  a.evaluate(null,pose);b.evaluate(null,pose)
+  for(let i=0;i<root.children.length;i++){
+   const expected=transform.clone().multiply(root.children[i].matrixWorld)
+   expected.elements.forEach((n,j)=>near(copy.children[i].matrixWorld.elements[j],n))
+  }
+ }
+})
+
+test('preset import rejects missing groups, duplicate machines, stretch and mirror',()=>{
+ const {root,def}=setup(),outer=new THREE.Group();outer.add(root)
+ const before=JSON.stringify(def);root.children[0].name='Different';assert.throws(()=>importEquipmentPreset(def,outer),/Part missing/)
+ root.children[0].name='Boom';outer.add(root.clone(true));assert.throws(()=>importEquipmentPreset(def,outer),/Several matching/)
+ outer.remove(outer.children[1]);root.scale.set(2,1,1);assert.throws(()=>importEquipmentPreset(def,outer),/stretched/)
+ root.scale.set(-1,1,1);assert.throws(()=>importEquipmentPreset(def,outer),/mirrored/);assert.equal(JSON.stringify(def),before)
+})
 test('articulated sibling meshes follow joint chain and equipment root transform',()=>{
  const {root,def}=setup(); const rig=bindEquipment(root,def)
  root.position.set(10,20,0); rig.evaluate(null,{lift:1,curl:1})
@@ -40,6 +81,35 @@ test('multiple cylinders follow moving endpoints without scaling',()=>{
  def.followers=[{id:'f',name:'Hydraulic',barrel:keys[3],piston:keys[4],base_node:'',tip_node:keys[0],base_point:[0,-1,0],tip_point:[2,0,0]},{id:'f2',name:'Hydraulic2',barrel:keys[5],piston:keys[6],base_node:'',tip_node:keys[0],base_point:[0,-2,0],tip_point:[3,0,0]}]
  const rig=bindEquipment(root,def);rig.evaluate(null,{lift:1});near(root.children[3].position.y,-1);near(root.children[4].position.x,0);near(root.children[4].position.y,2);near(root.children[6].position.y,3);near(root.children[4].scale.x,1)
  rig.evaluate(null,{lift:0});near(root.children[4].position.x,2)
+})
+
+test('cylinder inherits mounting roll when both endpoints rotate together',()=>{
+ const {root,def,keys}=setup();def.joints=def.joints.slice(0,1);def.joints[0].axis=[1,0,0]
+ root.children[3].position.set(0,1,0)
+ def.followers=[{id:'f',name:'Cylinder',barrel:keys[3],piston:'',base_node:keys[0],tip_node:keys[0],base_point:[0,0,0],tip_point:[2,0,0]}]
+ const runtime=bindEquipment(root,def);runtime.evaluate(null,{lift:1})
+ near(root.children[3].position.y,0);near(root.children[3].position.z,1);runtime.dispose()
+})
+
+test('dependent followers evaluate in dependency order regardless of saved order',()=>{
+ const {root,def,keys}=setup();def.joints=def.joints.slice(0,1)
+ def.followers=[{id:'dependent',name:'Attached link',barrel:keys[5],piston:'',base_node:keys[3],tip_node:keys[0],base_point:[0,0,0],tip_point:[2,0,0]},
+ {id:'driver',name:'Cylinder',barrel:keys[3],piston:keys[4],base_node:'',tip_node:keys[0],base_point:[0,-1,0],tip_point:[2,0,0]}]
+ const runtime=bindEquipment(root,def);runtime.evaluate(null,{lift:.7});const expected=root.children[5].matrix.clone();runtime.dispose()
+ def.followers.reverse();const second=bindEquipment(root,def);second.evaluate(null,{lift:.7});root.children[5].matrix.elements.forEach((n,i)=>near(n,expected.elements[i]));second.dispose()
+})
+
+test('flexible hose pins endpoints, preserves shared geometry, samples safely and restores',()=>{
+ const {root,def,keys}=setup();def.joints=def.joints.slice(0,1);def.joints[0].kind='slide';def.joints[0].axis=[0,1,0];def.joints[0].maximum=2
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute([0,0,0, .01,.05,0, 2,0,0, 1.99,.05,0, 1,0,0, 1,.05,0],3));g.computeVertexNormals()
+ const hose=new THREE.Mesh(g),shared=new THREE.Mesh(g);hose.name='Hose';root.add(hose,shared);const hoseKey=[...equipmentNodes(root)].find(([,n])=>n===hose)[0]
+ def.followers=[{id:'h',name:'Hose',barrel:hoseKey,piston:'',base_node:'',tip_node:keys[0],base_point:[0,0,0],tip_point:[2,0,0],flex_curve:[[0,0,0],[1,0,0],[2,0,0]]}]
+ const original=Array.from(g.attributes.position.array),runtime=bindEquipment(root,def);runtime.evaluate(null,{lift:1})
+ assert.notEqual(hose.geometry,g);assert.equal(shared.geometry,g);assert.deepEqual(Array.from(g.attributes.position.array),original)
+ const p=hose.geometry.attributes.position;near(p.getY(0),0);near(p.getY(2),2);near(p.getY(4),1)
+ const surface=Array.from(p.array);assert.ok(sampleEquipmentNode(root,def,hoseKey,{lift:0}));assert.deepEqual(Array.from(p.array),surface)
+ runtime.restore();assert.deepEqual(Array.from(p.array),original);runtime.dispose();assert.equal(hose.geometry,g)
+ const bad=structuredClone(def);bad.followers[0].flex_curve=[[0,0,0],[0,0,0]];assert.throws(()=>bindEquipment(root,bad),/centreline/);assert.equal(hose.geometry,g)
 })
 test('rejects cycles, missing parts, duplicate drivers, zero axes, invalid curves and feedback',()=>{
  const {root,def,keys}=setup(); const check=(mutate)=>{const d=structuredClone(def);mutate(d);assert.throws(()=>validateEquipment(d,equipmentNodes(root)))}
@@ -124,4 +194,55 @@ test('changing pivot orientation preserves rest pose and changes the motion axis
  const expected=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,-1,0),Math.PI/2)
  near(root.children[0].quaternion.angleTo(expected),0)
  rt.restore();near(root.children[0].quaternion.angleTo(new THREE.Quaternion()),0)
+})
+
+
+test('travel endpoints apply to keyed shared controls without rebasing linked mechanisms',()=>{
+ const {root,def}=setup();def.controls[1].rest=.5
+ def.controls[1].keys=[{date:'2026-01-01T00:00:00Z',value:.3,interpolation:'linear'}]
+ const sibling=structuredClone(def.joints[2]),controls=structuredClone(def.controls)
+ const next=setJointTravel(def,'arm',-40,110),j=next.joints[1],c=next.controls[1]
+ near(jointOffset(j,c,0),-40);near(jointOffset(j,c,.5),0);near(jointOffset(j,c,1),110)
+ assert.deepEqual(next.controls,controls);assert.deepEqual(next.joints[2],sibling)
+ validateEquipment(next,equipmentNodes(root))
+ const reverse=setJointTravel(next,'arm',110,-40)
+ near(jointOffset(reverse.joints[1],c,0),110);near(jointOffset(reverse.joints[1],c,1),-40)
+ const reloaded=JSON.parse(JSON.stringify(next));near(jointOffset(reloaded.joints[1],reloaded.controls[1],1),110)
+ assert.throws(()=>setJointTravel(def,'arm',20,80),/imported pose/)
+ assert.throws(()=>setJointTravel(def,'boom',-10,80),/rest pose/)
+})
+
+test('capture samples the requested pose from rest, then restores the visible Setup pose',()=>{
+ const {root,def,keys}=setup(),runtime=bindEquipment(root,def)
+ root.position.set(5,2,1);root.rotation.y=.3
+ runtime.evaluate(null,{lift:.8,curl:.2},{boom:17})
+ const before=[...equipmentNodes(root).values()].map(n=>n.matrix.toArray())
+ const sampled=sampleEquipmentNode(root,def,keys[2],{lift:.3,curl:1})
+ assert.ok(sampled);assert.deepEqual([...equipmentNodes(root).values()].map(n=>n.matrix.toArray()),before)
+ runtime.evaluate(null,{lift:.3,curl:1});const expected=equipmentNodes(root).get(keys[2]).matrixWorld
+ sampled.elements.forEach((v,i)=>near(v,expected.elements[i]))
+ assert.ok(sampleEquipmentNode(root,structuredClone(def),keys[2],{lift:0}))
+ const changed=structuredClone(def);changed.joints[0].maximum=120
+ assert.equal(sampleEquipmentNode(root,changed,keys[2],{lift:0}),undefined)
+})
+
+test('minor fittings hide only outside the rest clearance and restore on seek, sampling and disposal',()=>{
+ const {root,def,keys}=setup();def.motion_details=[{node:keys[1],joint:'boom',threshold:.5}]
+ const t0='2026-01-01T00:00:00Z',t1='2026-01-01T00:00:10Z'
+ def.controls[0].keys=[{date:t0,value:0,interpolation:'linear'},{date:t1,value:1,interpolation:'linear'}]
+ const rig=bindEquipment(root,def),fitting=root.children[1]
+ rig.evaluate(Date.parse(t1));assert.equal(fitting.visible,false)
+ sampleEquipmentNode(root,def,keys[2],{lift:0,curl:0});assert.equal(fitting.visible,false)
+ rig.evaluate(Date.parse(t0));assert.equal(fitting.visible,true)
+ rig.evaluate(null,{}, {boom:20});assert.equal(fitting.visible,false)
+ rig.restore();assert.equal(fitting.visible,true)
+ fitting.visible=false;rig.evaluate(Date.parse(t0));rig.dispose();assert.equal(fitting.visible,false)
+ fitting.visible=true;const outer=new THREE.Group();outer.add(root)
+ const adapted=importEquipmentPreset(JSON.parse(JSON.stringify(def)),outer)
+ assert.equal(adapted.motion_details[0].node,'/0:Backhoe'+keys[1])
+ const other=bindEquipment(outer,adapted);other.evaluate(null,{lift:1});assert.equal(fitting.visible,false)
+ other.dispose();assert.equal(fitting.visible,true)
+ for(const bad of [{node:'',joint:'boom',threshold:.5},{node:keys[1],joint:'unknown',threshold:.5},{node:keys[1],joint:'boom',threshold:-1}]){
+  assert.throws(()=>validateEquipment({...def,motion_details:[bad]}))
+ }
 })

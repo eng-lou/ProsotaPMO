@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.activity_relationship import RelationshipType
 from app.schemas.resource import ResourceType
+from app.schemas.animation_profile import AnimationProfileConfig
 
 
 # One staged, already-computed schedule (2026-07-13, per Maro's "generate a
@@ -48,6 +49,8 @@ class BulkActivityInput(BaseModel):
     # activity has a real id — see model_element_link.py's own docstring
     # on why element_ref is a loose string, not a hard FK.
     element_refs: list[str] = []
+    source_kind: Literal['ifc', 'site'] = 'ifc'
+    animation_profile_id: uuid.UUID | None = None
     # Same order/length as element_refs (2026-07-22, per Maro: "another
     # column to see the dropdown of 3d elements assigned so i browse down
     # the list" — see bulk_generate's own ModelElementLink write below for
@@ -158,6 +161,9 @@ class ScheduleBulkGenerateRequest(BaseModel):
     # Activity.calendar_id already means everywhere else in this app
     # (activity.py's own _CalendarLookup.resolve).
     calendar_id: uuid.UUID | None = None
+    # Optional shared construction recipe for the generated site-object links.
+    site_animation_profile: AnimationProfileConfig | None = None
+    site_animation_profile_name: str = Field(default='3D construction sequence', min_length=1, max_length=200)
     activities: list[BulkActivityInput] = []
     resources: list[BulkResourceInput] = []
     assignments: list[BulkAssignmentInput] = []

@@ -23,3 +23,32 @@ test('static mesh export tracks may be ignored but animated non-bone motion is r
  const track=new THREE.VectorKeyframeTrack('Body.position',[0,1],[0,0,0,0,0,0]);a.root.animations=[new THREE.AnimationClip('Dig',1,[track,new THREE.VectorKeyframeTrack('Hip.position',[0,1],[0,0,0,0,1,0])])]
  assert.equal(transferMotion(a.root,b.root)[0].tracks.length,1);track.values[4]=1;assert.throws(()=>transferMotion(a.root,b.root),/non-bone/)
 })
+
+function ccRig(scale=1,angle=0){
+ const root=new THREE.Group(),nodes={}
+ const add=(name,parent,p=[0,0,0])=>{const b=new THREE.Bone();b.name=name;b.position.fromArray(p).multiplyScalar(scale);(nodes[parent]||root).add(b);nodes[name]=b;return b}
+ add('RL_BoneRoot','');add('CC_Base_Hip','RL_BoneRoot',[0,0,100]);add('CC_Base_Pelvis','CC_Base_Hip');add('CC_Base_Spine01','CC_Base_Pelvis',[0,0,20]);add('CC_Base_Head','CC_Base_Spine01',[0,0,30])
+ for(const s of ['L','R']){let p='CC_Base_Pelvis';for(const n of ['Thigh','Calf','Foot']){add(`CC_Base_${s}_${n}`,p,[0,0,-20]);p=`CC_Base_${s}_${n}`}p='CC_Base_Spine01';for(const n of ['Upperarm','Forearm','Hand']){add(`CC_Base_${s}_${n}`,p,[20,0,0]);p=`CC_Base_${s}_${n}`}}
+ nodes.CC_Base_L_Upperarm.rotation.z=angle;nodes.CC_Base_L_Forearm.rotation.x=angle/2;captureAssetBindPose(root)
+ return {root,nodes}
+}
+test('CC motion adapts rest axes and body proportions without manual mapping',()=>{
+ const a=ccRig(),b=ccRig(.9,.4),bone=a.nodes.CC_Base_L_Forearm,dest=b.nodes.CC_Base_L_Forearm
+ const q=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),.7)
+ a.root.animations=[new THREE.AnimationClip('Work',1,[new THREE.QuaternionKeyframeTrack(bone.name+'.quaternion',[0,1],[...bone.quaternion.toArray(),...q.toArray()]),new THREE.VectorKeyframeTrack('CC_Base_Hip.position',[0,1],[0,0,100,0,0,110])])]
+ const c=transferMotion(a.root,b.root)[0],r=c.tracks[0]
+ assert.ok(new THREE.Quaternion().fromArray(r.values,0).angleTo(dest.quaternion)<1e-6)
+ const expected=b.nodes.CC_Base_L_Upperarm.quaternion.clone().invert().multiply(q).multiply(b.nodes.CC_Base_L_Upperarm.quaternion).multiply(dest.quaternion)
+ assert.ok(new THREE.Quaternion().fromArray(r.values,4).normalize().angleTo(expected.normalize())<1e-6)
+ assert.equal(c.tracks[1].values[5],99)
+ b.nodes.CC_Base_Head.parent.remove(b.nodes.CC_Base_Head);b.nodes.CC_Base_Hip.add(b.nodes.CC_Base_Head)
+ assert.throws(()=>transferMotion(a.root,b.root),/rest skeleton/)
+})
+test('CC source placement is removed while travel and height are preserved; face channels do not reject body motion',()=>{
+ const a=ccRig(),b=ccRig(.9),face=new THREE.Object3D();face.name='Face';a.root.add(face)
+ a.root.animations=[new THREE.AnimationClip('Walk',1,[new THREE.VectorKeyframeTrack('RL_BoneRoot.position',[0,1],[30,700,2,50,710,7]),new THREE.NumberKeyframeTrack('Face.morphTargetInfluences[0]',[0,1],[0,1])])]
+ const notices=new Set(),c=transferMotion(a.root,b.root,notices)[0]
+ assert.equal(c.tracks.length,1);assert.equal(notices.size,1)
+ Array.from(c.tracks[0].values).forEach((v,i)=>assert.ok(Math.abs(v-[0,0,1.8,18,9,6.3][i])<1e-5))
+ assert.equal(a.root.animations[0].tracks[0].values[1],700)
+})

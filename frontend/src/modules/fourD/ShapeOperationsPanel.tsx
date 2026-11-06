@@ -7,7 +7,7 @@ import { Bounds, OrbitControls } from '@react-three/drei'
 import { computeShapeBoolean, disposeBooleanResults, type BooleanResult, type ShapeOperation } from './shapeBoolean'
 import { importSiteAsset } from './siteAssets'
 import { siteError, type SiteItem, type useSiteScene } from './siteScene'
-export interface ShapeSource {backupRef?:string;id:string;name:string;object:THREE.Object3D}
+export interface ShapeSource {backupRef?:string;id:string;name:string;object:THREE.Object3D;geographic?:{itemId:string;featureId:string};dispose?():void}
 export interface ShapeOperationsProps {
   projectId:string; upAxis:'y'|'z'; sources:ShapeSource[]; state:ReturnType<typeof useSiteScene>
   selectedSources():ShapeSource[]
@@ -21,10 +21,11 @@ export function ShapeOperationsPanel(p:ShapeOperationsProps) {
   const [results,setResults]=useState<BooleanResult[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState('')
   const [hide,setHide]=useState(true),[message,setMessage]=useState('')
   const owned=useRef(results)
+  const ownedSources=useRef(new Set<ShapeSource>())
   function clear(){disposeBooleanResults(owned.current);owned.current=[];setResults([]);setError('');setMessage('')}
-  useEffect(()=>()=>{disposeBooleanResults(owned.current)},[])
+  useEffect(()=>()=>{disposeBooleanResults(owned.current);ownedSources.current.forEach(s=>s.dispose?.())},[])
   function selected(which:'a'|'b'){
-    try{const sources=p.selectedSources();if(sources.length!==1)throw Error('Select one object or one IFC element, then use this button.');clear();(which==='a'?setA:setB)(sources[0])}catch(e){setError(siteError(e))}
+    try{const sources=p.selectedSources();if(sources.length!==1)throw Error('Select one object or one IFC element, then use this button.');clear();if(sources[0].dispose)ownedSources.current.add(sources[0]);(which==='a'?setA:setB)(sources[0])}catch(e){setError(siteError(e))}
   }
   async function preview(){
     if(!a||!b)return
@@ -47,12 +48,13 @@ export function ShapeOperationsPanel(p:ShapeOperationsProps) {
         try{bytes=await new GLTFExporter().parseAsync(exportMesh,{binary:true,onlyVisible:false}) as ArrayBuffer}finally{exportMesh.geometry.dispose()}
         const position=result.position.clone().add(anchor.applyAxisAngle(new THREE.Vector3(1,0,0),p.upAxis==='z'?Math.PI/2:0))
         const asset=await importSiteAsset(p.projectId,new File([bytes],label+'.glb',{type:'model/gltf-binary'}),'Other',()=>{},label)
-        items.push({id:crypto.randomUUID(),name:label,kind:'asset',asset_id:asset.id,operation_inputs:hide?([a!.backupRef || a!.id,b!.backupRef || b!.id]):[],...asset.dimensions,
+        items.push({id:crypto.randomUUID(),name:label,kind:'asset',asset_id:asset.id,operation_inputs:hide?[a!,b!].filter(s=>!s.geographic).map(s=>s.backupRef||s.id):[],...asset.dimensions,
           generator_version:1,up_axis:p.upAxis,units:'m',position:{x:position.x,y:position.y,z:position.z},
           yaw:0,color:'#ffffff',locked:false,activity_id:null,path_id:null,points:[],closed:false,module_length:2,gate_start:0,gate_width:0})
       }
       let restore:(()=>void)|undefined
-      await p.state.save([...p.state.scene.items,...items], 'Shape '+operation, hide?{redo:()=>{restore=p.hideSources([a!.id,b!.id])},undo:()=>restore?.()}:undefined)
+      const originals=p.state.scene.items.map(item=>hide&&item.geographic?{...item,geographic:{...item.geographic,features:item.geographic.features.map(f=>[a!,b!].some(s=>s.geographic?.itemId===item.id&&s.geographic.featureId===f.id)?{...f,hidden:true}:f)}}:item)
+      await p.state.save([...originals,...items], 'Shape '+operation, hide?{redo:()=>{restore=p.hideSources([a!,b!].filter(s=>!s.geographic).map(s=>s.id))},undo:()=>restore?.()}:undefined)
       p.state.setSelected(items[0].id);clear();setMessage('Created '+items.length+' object(s). Select a result to edit materials, transforms or link an activity/profile. Originals are retained. Undo restores the inputs.')
     }catch(e){setError(siteError(e))}finally{setBusy(false)}
   }

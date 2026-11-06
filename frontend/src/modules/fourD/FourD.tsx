@@ -1,5 +1,12 @@
+import { useWorkingSequence } from '../simulator/useWorkingSequence'
+import { Simulator } from '../simulator/Simulator'
+import type { Scenario as SimulationScenario } from '../simulator/types'
+import { equipmentNodes as simulationEquipmentNodes } from './equipmentRig'
+import { geographicMaterialInfo } from './geographicSelection'
 import { SitePathBindings } from './SitePathBindings'
-import { buildPathCurve } from './pathCurve'
+import { sitePathRange } from './sitePathMotion'
+import { buildPathCurve, appendPathPoint, materializePathSegments, setPathSegmentMode } from './pathCurve'
+import type { PathDrawOptions } from './pathDrawing'
 import { motionDuration, type CameraMotion } from './cameraMotion'
 import { createPoeIfcTools } from './poeIfcTools'
 import { createPoeEquipmentTools, type EquipmentProposal } from './poeEquipmentTools'
@@ -41,6 +48,7 @@ import { isBundle, unpackBundle } from './fileBundle'
 import { createPointCloudObject, parseXyzFile } from './pointCloud'
 import { deleteSavedEnvironment, loadCustomEnvironment, loadSavedEnvironment, saveEnvironment, type SavedEnvironment } from './environmentHdr'
 import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
+import { createSiteContextUpdates } from './siteContextUpdates'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
 import { findLinkedExpressIds } from './linkedMaterials'
 import { parseElementKey, resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, resolveIsolationTargetsToActivityIds, selectionToElementKeys } from './linkedElements'
@@ -98,6 +106,7 @@ import { DataPanel } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
 import { captureSiteObjectState } from './siteObjectTransform'
+import { captureAttachmentTransform } from './attachmentTransform'
 import { computeVisibleActivities, ScheduleWindow, type ScheduleWindowEditableField } from './ScheduleWindow'
 import { SplitRow } from './SplitRow'
 import { TimelineWindow } from './TimelineWindow'
@@ -109,6 +118,7 @@ import { ElementRigPanel } from './ElementRigPanel'
 import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoint } from './paths'
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
+import { SiteScheduleWizard } from './SiteScheduleWizard'
 import { SiteToolsPanel } from './SiteToolsPanel'
 import { loadSiteAsset, importSiteAsset } from './siteAssets'
 import { siteMaterialInfo, primitiveMaterialInfo } from './siteAssetMaterials'
@@ -301,6 +311,11 @@ function applyElementTransform(object: Object3D, t: ElementTransform | undefined
 }
 
 export function FourD({ active = true }: { active?: boolean } = {}) {
+  const [simulatorOpen,setSimulatorOpen]=useState(false)
+  const [previewScenario,setSimulationScenario]=useState<SimulationScenario|null>(null)
+  const [simulationError,setSimulationError]=useState('')
+  const [sequenceExport,setSequenceExport]=useState<{nonce:number;durationSec:number}|null>(null)
+  const [sequenceVideoSeconds,setSequenceVideoSeconds]=useState(30)
   const { selectedProject } = useProject()
   // hasEverBeenActive (2026-07-20, optimization pass) — flips true the
   // first time this tab is actually opened and stays true for the rest of
@@ -337,9 +352,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // same now-wrong period id — asking the right question of the wrong
   // period, however many times you ask it.
   const { period, refetch: refetchPeriod } = useActiveScheduleVariant(selectedProject?.id)
+  const workingSequence=useWorkingSequence(selectedProject?.id,period?.id)
+  const simulationScenario=previewScenario??workingSequence.scenario
   const { period: costPeriod } = useActivePeriod(selectedProject?.id)
 
   const [activities, setActivities] = useState<Activity[]>([])
+  const simulationActivities=useMemo(()=>{
+    const derived=new Map(simulationScenario?.result?.activities.filter(a=>a.start&&a.finish).map(a=>[a.activity_id,a])??[])
+    return activities.map(a=>{const d=derived.get(a.id);return d?{...a,start:d.start!,finish:d.finish!}:a})
+  },[activities,simulationScenario])
   const siteScene = useSiteScene(selectedProject?.id)
   const [siteSourceRoots,setSiteSourceRoots]=useState<Map<string,Object3D>>(new Map())
   const registerSiteSourceRoot=useCallback((id:string,object:Object3D|null)=>{
@@ -1032,6 +1053,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [pathFollowers, setPathFollowers] = useState<PathFollower[]>([])
   const [pathError, setPathError] = useState<string | null>(null)
   const [addingPointsForPathId, setAddingPointsForPathId] = useState<string | null>(null)
+  const [pathDrawOptions, setPathDrawOptions] = useState<Record<string, PathDrawOptions>>({})
+  const [savingPaths, setSavingPaths] = useState<Set<string>>(new Set())
+  const savingPathsRef = useRef(new Set<string>())
+  const pathSaveQueues = useRef(new Map<string, Promise<void>>())
   useEffect(() => {
     if (!selectedProject || !hasEverBeenActive) return
     let cancelled = false
@@ -1057,18 +1082,39 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleUpdatePath = async (id: string, data: Partial<Pick<Path, 'curve_mode' | 'name' | 'points' | 'closed' | 'visible' | 'color' | 'line_style' | 'show_arrow' | 'show_label' | 'line_width' | 'dash_size' | 'gap_size' | 'animate' | 'animation_loop' | 'opacity' | 'show_in_viewport' | 'show_in_render'>>) => {
-    try {
-      setPathError(null)
-      const updated = await updatePath(id, data)
-      setPaths(prev => prev.map(p => (p.id === id ? updated : p)))
-    } catch (err) {
-      setPathError(pathErrorMessage(err, 'Failed to update path'))
+    savingPathsRef.current.add(id)
+    setSavingPaths(new Set(savingPathsRef.current))
+    const pending = (pathSaveQueues.current.get(id) || Promise.resolve()).then(async () => {
+      try {
+        setPathError(null)
+        const updated = await updatePath(id, data)
+        setPaths(prev => prev.map(p => (p.id === id ? updated : p)))
+      } catch (err) {
+        setPathError(pathErrorMessage(err, 'Failed to update path'))
+      }
+    })
+    pathSaveQueues.current.set(id, pending)
+    await pending
+    if (pathSaveQueues.current.get(id) === pending) {
+      pathSaveQueues.current.delete(id)
+      savingPathsRef.current.delete(id)
+      setSavingPaths(new Set(savingPathsRef.current))
     }
+  }
+  const handlePathSegmentMode = (id: string, end: number, mode: 'curved' | 'straight') => {
+    const path = paths.find(p => p.id === id)
+    if (!path) return
+    const points = materializePathSegments(path.points, path.closed, path.curve_mode)
+    handleUpdatePath(id, {points:setPathSegmentMode(points,end,mode)})
   }
   const handleRenamePath = (id: string, name: string) => handleUpdatePath(id, { name })
   const handleTogglePathClosed = (id: string) => {
     const path = paths.find(p => p.id === id)
-    if (path) handleUpdatePath(id, { closed: !path.closed })
+    if (path) {
+      let points = materializePathSegments(path.points, path.closed, path.curve_mode)
+      if (!path.closed) points = setPathSegmentMode(points, 0, pathDrawOptions[id]?.mode || path.curve_mode || 'curved')
+      handleUpdatePath(id, { closed: !path.closed, points })
+    }
   }
   const handleTogglePathVisible = (id: string) => {
     const path = paths.find(p => p.id === id)
@@ -1098,22 +1144,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleRemoveLastPathPoint = (id: string) => {
     const path = paths.find(p => p.id === id)
     if (!path || path.points.length === 0) return
-    handleUpdatePath(id, { points: path.points.slice(0, -1) })
+    let points = materializePathSegments(path.points,path.closed,path.curve_mode).slice(0,-1)
+    if (path.closed) points = setPathSegmentMode(points,0,path.points[0]?.segment_mode || path.curve_mode || 'curved')
+    handleUpdatePath(id, { points })
   }
-  // Click-to-place (PathGizmo.tsx's PathAddPointCatcher) appends straight
-  // to the server copy — no local-only preview needed here since each click
-  // is already a discrete, deliberate action (unlike a continuous drag).
-  // Every point lands exactly where clicked, height included — no ground
-  // lock, no surface-snap refinement (2026-07-29, per Maro: removed after
-  // "Trace on ground"/"Snap to surface" went through several attempts —
-  // rooftop-arcing fix, lock-to-first-point, a vertical-refine raycast,
-  // a pending-point confirm step — and still wasn't reliable; plain
-  // per-click placement, with PathGizmo.tsx's own drag-to-real-surface fix
-  // and handleSetPathElevation's manual nudge below, "works better").
+  // The catcher previews and solves the explicit axis constraints. Commit the
+  // exact same point plus this segment's geometry, preserving earlier spans.
   const handleAddPathPoint = (id: string, point: PathPoint) => {
+    if (savingPathsRef.current.has(id)) return
     const path = paths.find(p => p.id === id)
     if (!path) return
-    handleUpdatePath(id, { points: [...path.points, point] })
+    const options = pathDrawOptions[id] || {mode:path.curve_mode || 'curved',locks:[]}
+    const last = path.points[path.points.length-1]
+    if (last && Math.hypot(point.x-last.x,point.y-last.y,point.z-last.z)<1e-6) return
+    handleUpdatePath(id, { points: appendPathPoint(path.points,path.closed,path.curve_mode || 'curved',point,options.mode,options.locks) })
   }
   // Path has no dedicated `elevation` column the way Zone does (path.py's
   // points are a genuine 3D curve, not a flat footprint) — computed here
@@ -1417,6 +1461,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // separate CesiumJS panel was tried and dropped first, see that file's
   // own header. Same singleton GET/PUT shape as Timeline Strip above.
   const [siteContext, setSiteContext] = useState<SiteContext | null>(null)
+  const [isolateViewRequest, setIsolateViewRequest] = useState(0)
+  const [reconstructionViewRequest,setReconstructionViewRequest]=useState<{serial:number;action:'plan'|'capture'|'orbit'}|null>(null)
+  const [reconstructionArea,setReconstructionArea]=useState<import('./reconstructionPlan').ReconstructionArea|null>(null)
   const [siteContextError, setSiteContextError] = useState<string | null>(null)
   useEffect(() => {
     if (!selectedProject || !hasEverBeenActive) return
@@ -1425,13 +1472,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return () => { cancelled = true }
   }, [selectedProject, hasEverBeenActive, undoRevision])
 
+  const latestSiteContext = useRef(siteContext)
+  const siteContextProject = useRef(selectedProject?.id)
+  latestSiteContext.current = siteContext
+  siteContextProject.current = selectedProject?.id
+  const queuedSiteContextUpdate = useMemo(() => createSiteContextUpdates(
+    () => latestSiteContext.current,
+    () => siteContextProject.current,
+    saveSiteContext,
+    value => { latestSiteContext.current = value; setSiteContext(value) },
+  ), [])
   const handleUpdateSiteContext = async (patch: Partial<Omit<SiteContext, 'id' | 'project_id' | 'created_at' | 'updated_at'>>) => {
     if (!siteContext || !selectedProject) return
-    const { id: _id, created_at: _created_at, updated_at: _updated_at, ...current } = siteContext
     try {
       setSiteContextError(null)
-      const updated = await saveSiteContext({ ...current, project_id: selectedProject.id, ...patch })
-      setSiteContext(updated)
+      await queuedSiteContextUpdate(selectedProject.id, patch)
     } catch (err) {
       setSiteContextError(pathErrorMessage(err, 'Failed to update site context'))
     }
@@ -1883,8 +1938,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [equipmentPreview, setEquipmentPreview] = useState<{ model: string; values: Record<string, number>; time: number | null } | null>(null)
   const [equipmentRuntimeError, setEquipmentRuntimeError] = useState<string | null>(null)
   const instanceEquipment = useMemo(() => {
-    const explicit = equipment.rigs.filter(r=>!r.model_ref.startsWith('asset:'))
+    const explicit = equipment.rigs.filter(r=>!r.model_ref.startsWith('asset:')&&!siteScene.scene.items.some(i=>i.rig_disabled&&r.model_ref==='site:'+i.id))
     const inherited = siteScene.scene.items.flatMap(item=>{
+      if(item.rig_disabled)return []
       const template=equipment.rigs.find(r=>r.model_ref==='asset:'+item.asset_id)
       return template && !explicit.some(r=>r.model_ref==='site:'+item.id) ? [{...template,id:'',model_ref:'site:'+item.id,name:item.name}] : []
     })
@@ -1896,6 +1952,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   useEffect(() => { setEquipmentDraft(null); setEquipmentPreview(null) }, [selectedProject?.id])
   const equipmentRange = useMemo(() => {
     const times = playbackEquipment.flatMap(r => r.definition.controls.flatMap(c => c.keys.map(k => Date.parse(k.date)))).filter(Number.isFinite)
+    for(const r of playbackEquipment){const s=r.definition.soil;if(s?.enabled)times.push(Date.parse(s.start),Date.parse(s.end)+(Date.parse(s.end)-Date.parse(s.start))*(5+s.duration_seconds/s.steps)/s.duration_seconds)}
     return times.length ? { start: new Date(times.reduce((a, b) => Math.min(a, b), Infinity)), end: new Date(times.reduce((a, b) => Math.max(a, b), -Infinity)) } : null
   }, [playbackEquipment])
 
@@ -1982,14 +2039,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [speedDaysPerSecond, setSpeedDaysPerSecond] = useState(7)
   const timelineRange = useMemo(
     () => {
-      let base = unionRanges(unionRanges(computeScheduleRange(activities), computeKeyframeRange(elementKeyframes.keyframes)), equipmentRange)
+      if(previewScenario?.result)return {start:new Date(previewScenario.result.start),end:new Date(previewScenario.result.finish)}
+      let base = unionRanges(unionRanges(computeScheduleRange(simulationActivities), computeKeyframeRange(elementKeyframes.keyframes)), equipmentRange)
+      if(simulationScenario?.result)base=unionRanges(base,{start:new Date(simulationScenario.result.start),end:new Date(simulationScenario.result.finish)})
       for (const item of siteScene.scene.items) {
+        for(const interval of [...(item.motion_actions||[]),...(item.attachment?[item.attachment]:[])])base=unionRanges(base,{start:new Date(interval.start),end:new Date(interval.end)})
         const motion=item.path_motion, path=paths.find(p=>p.id===motion?.path_id)
         if (!motion || !path) continue
         const curve=buildPathCurve(path.points,path.closed,path.curve_mode)
         if (!curve) continue
-        const start=new Date(motion.start), end=new Date(start.getTime()+curve.getLength()/motion.speed*speedDaysPerSecond*86400000)
-        base=unionRanges(base,{start,end})
+        base=unionRanges(base,sitePathRange(motion,curve.getLength(),speedDaysPerSecond))
       }
       const motions = cameras.filter(c => c.motion?.shots.length)
       if (!motions.length) return padDegenerateRange(base)
@@ -1997,7 +2056,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const duration = Math.max(...motions.map(c => motionDuration(c.motion!.shots)))
       return { start, end: new Date(Math.max(base?.end.getTime() ?? start.getTime(), start.getTime() + duration * speedDaysPerSecond * 86400000)) }
     },
-    [activities, elementKeyframes.keyframes, equipmentRange, cameras, speedDaysPerSecond, siteScene.scene.items, paths],
+    [simulationActivities, simulationScenario, previewScenario, elementKeyframes.keyframes, equipmentRange, cameras, speedDaysPerSecond, siteScene.scene.items, paths],
   )
   // Seeds the shared "current date" the moment there's anything to seed it
   // from — schedule or keyframes — falling back to today if there's neither
@@ -2536,6 +2595,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   })
   const toggleRigPanelDock = () => {
+    if(equipmentEditing||equipment.busy){window.alert('Save or discard your rig or cycle changes before moving Rigging to the other dock. Switching tabs keeps them.');return}
     setRigPanelDock(prev => {
       const next = prev === 'left' ? 'right' : 'left'
       localStorage.setItem(RIG_PANEL_DOCK_KEY, next)
@@ -3177,6 +3237,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }, [ifcHandles, elementSplits, settings.upAxis])
 
   const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false)
+  const [siteScheduleIds,setSiteScheduleIds]=useState<string[]|null>(null)
 
   // Resolves each element-scoped SectionBox's own GlobalId (element_ref)
   // to an expressID within whichever specific IFC model it belongs to
@@ -5571,6 +5632,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     })
   }
   const [selectedActivityIds, setSelectedActivityIds] = useState<Set<string>>(new Set())
+  useEffect(()=>{const open=(event:Event)=>{const id=(event as CustomEvent<{activityId:string}>).detail?.activityId;if(id)setSelectedActivityIds(new Set([id]));sessionStorage.removeItem('prosota-simulator-activity');setSimulatorOpen(true)};window.addEventListener('prosota-open-simulator',open);const pending=sessionStorage.getItem('prosota-simulator-activity');if(pending)open(new CustomEvent('prosota-open-simulator',{detail:{activityId:pending}}));return()=>window.removeEventListener('prosota-open-simulator',open)},[])
   const toggleActivitySelected = (id: string) => {
     setSelectedActivityIds(prev => {
       const next = new Set(prev)
@@ -5933,6 +5995,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     for (const item of siteScene.scene.items) {
       if (item.locked || !selectedObjectIds.has('site:' + item.id)) continue
       const object = siteRoots.get(item.id)
+      const attachmentPatch=object&&captureAttachmentTransform(item,object)
+      if(attachmentPatch){
+        if(JSON.stringify(attachmentPatch.attachment)!==JSON.stringify(item.attachment)||JSON.stringify(attachmentPatch.scale)!==JSON.stringify(item.scale))changes.set(item.id,attachmentPatch)
+        continue
+      }
       const objectState = object ? captureSiteObjectState(object) : null
       if (object && (JSON.stringify(objectState) !== JSON.stringify(item.object_state) || (['x', 'y', 'z'] as const).some(axis =>
         Math.abs(object.position[axis] - item.position[axis]) > 1e-8 ||
@@ -5962,7 +6029,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [realisticEntries, setRealisticEntries] = useState<RealisticMaterialEntry[]>([])
   const [realisticEntryModels, setRealisticEntryModels] = useState<Record<string, RealisticEntryModel[]>>({})
   const [siteRealisticSources, setSiteRealisticSources] = useState<{objectId:string; name:string; isIfc:boolean; info:RealisticModelInfo}[]>([])
-  const siteMaterialSignature = JSON.stringify([...siteScene.scene.items, ...(siteScene.draft ? [siteScene.draft] : [])].map(i=>[i.id,i.asset_id,i.name,i.kind,i.finish,i.placement_kind]))
+  const siteMaterialSignature = JSON.stringify([...siteScene.scene.items, ...(siteScene.draft ? [siteScene.draft] : [])].map(i=>[i.id,i.asset_id,i.name,i.kind,i.finish,i.placement_kind,i.geographic,i.asset_part]))
   const [realisticAnalysing, setRealisticAnalysing] = useState(false)
   useEffect(() => {
     if (settings.renderMode !== 'realistic') return
@@ -5988,9 +6055,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         if (o.kind === 'ifc' || o.object.userData.realisticMaterialInfo) continue
         o.object.userData.realisticMaterialInfo = extractMeshRealisticInfo(o.object)
       }
-      const siteSources = await Promise.all((JSON.parse(siteMaterialSignature) as string[][]).map(async ([id,assetId,name,kind,finish,placement_kind]) => {
+      const siteSources = await Promise.all((JSON.parse(siteMaterialSignature) as any[][]).map(async ([id,assetId,name,kind,finish,placement_kind,geographic,assetPart]) => {
+        if (geographic) return {objectId:'site:'+id,name,isIfc:false,info:geographicMaterialInfo(id,geographic)}
         if (!assetId) return {objectId:'site:'+id,name,isIfc:false,info:primitiveMaterialInfo({id,name,kind,finish,placement_kind})}
-        try { return {objectId:'site:'+id,name,isIfc:false,info:siteMaterialInfo(await loadSiteAsset(assetId),assetId)} }
+        try { return {objectId:'site:'+id,name,isIfc:false,info:siteMaterialInfo(await loadSiteAsset(assetId,assetPart),assetId)} }
         catch { return null }
       }))
       if (cancelled) return
@@ -6353,7 +6421,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!active || equipmentVisual) return
     const capture = () => {
       const targets = new Set<Object3D>()
-      if (activeTransformObject) targets.add(activeTransformObject)
+      if (activeTransformObject && !activeObjectId?.startsWith('site:')) targets.add(activeTransformObject)
       for (const row of sceneObjects) if (selectedObjectIds.has(row.id) && row.id !== activeObjectId) targets.add(row.object)
       transformBefore.current = [...targets].map(object => ({ object, state: captureTransform(object) }))
     }
@@ -6392,6 +6460,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleTransformChange = () => {
+    if (simulationScenario) return
     persistSiteTransforms()
     recordTransformUndo()
     setTransformTick(t => t + 1)
@@ -6944,7 +7013,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       case 'timeline':
         return (
           <TimelineWindow
-            siteMotionTracks={siteScene.scene.items.flatMap(item=>{const motion=item.path_motion,path=paths.find(p=>p.id===motion?.path_id);const curve=path?buildPathCurve(path.points,path.closed,path.curve_mode):null;return motion&&curve?[{id:item.id,name:item.name,start:motion.start,duration:curve.getLength()/motion.speed}]:[]})}
+            playbackSuspended={!!previewScenario||!!sequenceExport}
+            siteMotionTracks={siteScene.scene.items.flatMap(item=>{
+              const tracks=(item.motion_actions||[]).map(a=>({id:item.id+':'+a.id,name:item.name+' · '+a.name,kind:'Action',start:a.start,duration:(Date.parse(a.end)-Date.parse(a.start))/(86400000*speedDaysPerSecond)}))
+              if(item.attachment)tracks.push({id:item.id+':attachment',name:item.name,kind:'Attachment',start:item.attachment.start,duration:(Date.parse(item.attachment.end)-Date.parse(item.attachment.start))/(86400000*speedDaysPerSecond)})
+              const motion=item.path_motion,path=paths.find(p=>p.id===motion?.path_id),curve=path?buildPathCurve(path.points,path.closed,path.curve_mode):null
+              if(motion&&curve){const range=sitePathRange(motion,curve.getLength(),speedDaysPerSecond);tracks.unshift({id:item.id,name:item.name,kind:'Follow path',start:range.start.toISOString(),duration:(range.end.getTime()-range.start.getTime())/(86400000*speedDaysPerSecond)})}
+              return tracks
+            })}
             equipmentTracks={<EquipmentTracks rigs={equipment.rigs} start={timelineRange?.start ?? null} end={timelineRange?.end ?? null} onSeek={handleSeekTimelineTo} onSave={equipment.save} disabled={equipment.busy || equipmentEditing} />}
             scheduleStart={timelineRange?.start ?? null}
             scheduleEnd={timelineRange?.end ?? null}
@@ -7123,7 +7199,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   if (siteToolsOpen && selectedProject) dockablePanels.push({
     id: 'site-tools', label: '3D Site tools', keepMounted: true, dock: siteToolsDock, onToggleDock: () => setSiteToolsDock(side => side === 'right' ? 'left' : 'right'),
     onClose: () => { setSiteToolsOpen(false); siteScene.setDraft(null) },
-    content: <SiteToolsPanel selectedShapeSources={() => {
+    content: <SiteToolsPanel onEditAttachment={mode=>{setGizmoMode(mode);setGizmoSpace('world');setEditPivot(false);setSnapToSurface(false)}} timelineFormat={{scheduleStart:timelineRange?.start||timelineDateRef.current||new Date(),timeDisplayMode,speedDaysPerSecond,fps}} timelineDateRef={timelineDateRef} onSeek={handleSeekTimelineTo} extractionBlocks={Object.fromEntries(siteScene.scene.items.flatMap(i=>elementKeyframes.keyframes.some(k=>k.source_kind==='mesh'&&k.element_ref==='site:'+i.id)?[[i.id,'Remove the whole-object transform keys before extracting; the new parts will have their own keys.']]:Object.keys(customTextures['site:'+i.id]||{}).length||customOpacity['site:'+i.id]!==undefined?[[i.id,'Clear the whole-object custom material override before extracting. Authored materials are retained; apply custom overrides to the individual parts afterwards.']]:[]))} riggedIds={new Set(instanceEquipment.map(r=>r.model_ref))} onGenerateSchedule={ids=>setSiteScheduleIds(ids)} selectedShapeSources={() => {
       if (selectedExpressIds.size && activeObjectId) {
         const handle = getIfcHandleFor(activeObjectId)
         if (!handle) return []
@@ -7328,8 +7404,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           paths={resolvedPaths}
           error={pathError}
           addingPointsForPathId={addingPointsForPathId}
+          drawOptions={pathDrawOptions}
+          savingPaths={savingPaths}
+          onDrawOptions={(id, options) => setPathDrawOptions(prev=>({...prev,[id]:options}))}
+          onSegmentMode={handlePathSegmentMode}
           upAxis={settings.upAxis}
-          siteBindings={path => <SitePathBindings path={path} items={siteScene.scene.items} busy={siteScene.busy} onChange={(id,motion) => { void siteScene.save(siteScene.scene.items.map(item=>item.id===id?{...item,path_motion:motion}:item),'Change path motion').catch(error=>setPathError(pathErrorMessage(error,'Failed to update path motion'))) }} />}
+          siteBindings={path => <SitePathBindings path={path} items={siteScene.scene.items} busy={siteScene.busy} dateRef={timelineDateRef} format={timelineRange?{scheduleStart:timelineRange.start,timeDisplayMode,speedDaysPerSecond,fps}:null} onSeek={handleSeekTimelineTo} onChange={(id,motion) => { void siteScene.save(siteScene.scene.items.map(item=>item.id===id?{...item,path_motion:motion}:item),'Change path motion').catch(error=>setPathError(pathErrorMessage(error,'Failed to update path motion'))) }} />}
           bindTarget={pathBindTarget}
           followers={pathFollowers}
           onCreate={handleCreatePath}
@@ -7427,6 +7507,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       content: (
         <SiteContextPanel
           ctx={siteContext}
+          onIsolateView={() => setIsolateViewRequest(n=>n+1)}
+          planArea={reconstructionArea} onPlan={action=>{if(action==='plan')setSettings({...settings,orthographic:true});setReconstructionViewRequest({serial:Date.now(),action})}}
+          sceneState={siteScene}
           error={siteContextError}
           apiKey={siteTilesApiKey}
           onUpdate={handleUpdateSiteContext}
@@ -7523,22 +7606,34 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   if (rigPanelOpen) {
     dockablePanels.push({
       id: 'rigging', label: 'Rigging', dock: rigPanelDock,
+      keepMounted: true,
       onToggleDock: toggleRigPanelDock, onClose: toggleRigPanel,
       content: (
         <div className="flex-1 overflow-y-auto">
-        <EquipmentPanel key={selectedProject?.id} proposal={equipmentProposal?.rig.project_id === selectedProject?.id ? equipmentProposal : null} onProposalConsumed={() => setEquipmentProposal(null)} projectId={selectedProject?.id ?? ''} objects={equipmentObjects} rigs={instanceEquipment}
+        <EquipmentPanel upAxis={settings.upAxis} siteItems={siteScene.scene.items} paths={paths} onSaveRoute={async(model,motion)=>{
+          const item=siteScene.scene.items.find(i=>'site:'+i.id===model)
+          if(!item||item.locked)throw Error('Unlock the equipment before saving its route.')
+          await siteScene.save(siteScene.scene.items.map(i=>i.id===item.id?{...i,path_motion:motion}:i),'Create equipment cycle route')
+        }} format={timelineRange?{scheduleStart:timelineRange.start,timeDisplayMode,speedDaysPerSecond,fps}:null} key={selectedProject?.id} proposal={equipmentProposal?.rig.project_id === selectedProject?.id ? equipmentProposal : null} onProposalConsumed={() => setEquipmentProposal(null)} projectId={selectedProject?.id ?? ''} objects={equipmentObjects} rigs={instanceEquipment}
           busy={equipment.busy} error={equipment.error} runtimeError={equipmentRuntimeError} dateRef={timelineDateRef}
           onSaveAsset={async rig=>{
             const item=siteScene.scene.items.find(i=>'site:'+i.id===rig.model_ref)
-            if(!item?.asset_id)throw Error('Place an imported library asset to save a reusable equipment rig.')
+            if(!item?.asset_id||item.asset_part)throw Error('Use a complete imported asset to save a reusable equipment rig.')
             const existing=equipment.rigs.find(r=>r.model_ref==='asset:'+item.asset_id)
-            const ok=await equipment.save({...rig,id:existing?.id || '',version:existing?.version || 1,model_ref:'asset:'+item.asset_id})
+            const definition=structuredClone(rig.definition);delete definition.soil
+            const ok=await equipment.save({...rig,definition,id:existing?.id || '',version:existing?.version || 1,model_ref:'asset:'+item.asset_id})
             if(!ok)throw Error('Could not save the library equipment rig.')
             const assets=await api.get('/api/v1/site-assets/',{params:{project_id:selectedProject?.id}})
             const asset=assets.data.find((a:any)=>a.id===item.asset_id)
             await api.patch('/api/v1/site-assets/'+item.asset_id,{name:asset?.name || item.name,category:'Equipment'})
             window.dispatchEvent(new Event('prosota-site-assets-changed'))
-          }} onVisual={setEquipmentVisual} onAssemble={handleAssembleEquipment} onSave={equipment.save} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
+          }} onVisual={setEquipmentVisual} onAssemble={handleAssembleEquipment} onSave={async rig=>{
+            const item=siteScene.scene.items.find(i=>'site:'+i.id===rig.model_ref)
+            const previous=item?.rig_disabled?equipment.rigs.find(r=>r.model_ref===rig.model_ref):undefined
+            const saved=await equipment.save(previous?{...rig,id:previous.id,version:previous.version}:rig)
+            if(saved&&item?.rig_disabled)await siteScene.save(siteScene.scene.items.map(i=>i.id===item.id?{...i,rig_disabled:false}:i),'Enable replacement rig')
+            return saved
+          }} onRemove={equipment.remove} onDraft={setEquipmentDraft} onEditing={setEquipmentEditing} onPreview={setEquipmentPreview} onSeek={handleSeekTimelineTo} />
         <ElementRigPanel
           elementParents={elementParents}
           error={elementParentError}
@@ -7589,7 +7684,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // duplicating the entire prop list.
   const viewport3DElement = (
     <Viewport3D
-      siteScene={{ customTextures, customOpacity, onSourceRegister:registerSiteSourceRoot, onGeometryReady: siteGeometryReady, objects: siteViewportObjects, onRegister: registerSiteRoot, selectedIds: selectedObjectIds, hiddenIds, isolate: isolateMode, isolatedIds: isolatedObjectIds, materialMapping: settings.renderMode === 'realistic' ? realisticMapping : undefined, glassTransmission: settings.realisticGlassTransmission, placing: siteScene.placing, onPlace: siteScene.place, onMove: point => siteScene.setDraft(old => old ? { ...old, position: point } : null), items: siteScene.scene.items, preview: siteScene.draft, selected: siteScene.selected, onSelect: (id, additive) => { handleSelectExpressId(null); if (siteRoots.has(id)) { handleSelectObject('site:' + id, additive); setPropertiesOpen(true); setEditPivot(false) } else handleSelectObject(null); siteScene.setSelected(id); setSiteToolsOpen(true) } }}
+      siteScene={{ detailSelection:siteScene.detailSelection,onDetailSelect:siteScene.setDetailSelection, customTextures, customOpacity, onSourceRegister:registerSiteSourceRoot, onGeometryReady: siteGeometryReady, objects: siteViewportObjects, onRegister: registerSiteRoot, selectedIds: selectedObjectIds, hiddenIds, isolate: isolateMode, isolatedIds: isolatedObjectIds, materialMapping: settings.renderMode === 'realistic' ? realisticMapping : undefined, glassTransmission: settings.realisticGlassTransmission, placing: siteScene.placing, onPlace: siteScene.place, onMove: point => siteScene.setDraft(old => old ? { ...old, position: point } : null), items: siteScene.scene.items, preview: siteScene.draft, selected: siteScene.selected, onSelect: (id, additive) => { handleSelectExpressId(null); if (siteRoots.has(id)) { handleSelectObject('site:' + id, additive); setPropertiesOpen(true); setEditPivot(false) } else handleSelectObject(null); siteScene.setSelected(id); setSiteToolsOpen(true) } }}
       equipmentObjects={equipmentObjects} equipmentVisual={equipmentVisual} equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
       key="primary"
       settings={settings}
@@ -7646,7 +7741,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       costProfileResourceBreakdown={costProfileResourceBreakdown}
       timelineDateRef={timelineDateRef}
       timelineSceneObjects={sceneObjects}
-      timelineActivities={activities}
+      simulationScenario={simulationScenario}
+      onSimulationError={setSimulationError}
+      sequenceExportRequest={sequenceExport}
+      onSequenceExportDone={error=>{setSequenceExport(null);if(error)setSimulationError(error)}}
+      timelineActivities={simulationActivities}
       timelineLinks={modelElementLinks}
       timelineProfiles={animationProfiles.profiles}
       timelineElementKeyframes={elementKeyframes.keyframes}
@@ -7678,12 +7777,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onExitCameraView={handleExitCameraView}
       onKeyCameraPose={handleKeyCameraPose}
       siteContext={siteContext}
+      isolateViewRequest={isolateViewRequest}
+      reconstructionViewRequest={reconstructionViewRequest} onReconstructionArea={setReconstructionArea}
+      onIsolateView={planes=>void handleUpdateSiteContext({ view_isolation: planes, cutout_active: false })}
       siteTilesApiKey={siteTilesApiKey}
       onExportVideo={handleExportVideoUpload}
       paths={resolvedPaths}
       pathAnimWindows={pathAnimWindows}
       pathFollowers={pathFollowers}
       addingPointsForPathId={addingPointsForPathId}
+      pathDrawOptions={addingPointsForPathId ? pathDrawOptions[addingPointsForPathId] : undefined}
+      pathPointSaving={addingPointsForPathId ? savingPaths.has(addingPointsForPathId) : false}
       onPathDragMove={handlePathDragMove}
       onPathDragEnd={handlePathDragEnd}
       onAddPathPoint={handleAddPathPoint}
@@ -7925,10 +8029,32 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiFourDBridge, activities, modelElementLinks, sceneObjects, ifcHandles, settings, clashTests, selectedObjectIds, selectedExpressIds, activeIfcModelId, selectedProject, collections])
 
+  const simulationObjects=useMemo(()=>equipmentObjects.map(o=>({ref:o.name,label:siteScene.scene.items.find(i=>'site:'+i.id===o.name)?.name??o.name,parts:o.kind==='mesh'?[...simulationEquipmentNodes(o.object)].filter(([id])=>!!id).map(([id,node])=>({id,name:node.name||id})):[]})),[equipmentObjects,siteScene.scene.items])
+  useEffect(()=>{setSimulationScenario(null);setSimulationError('');setSequenceExport(null)},[selectedProject?.id,period?.id])
+  useEffect(()=>{const timer=setTimeout(()=>void workingSequence.refresh(),400);return()=>clearTimeout(timer)},[workingSequence.refresh,undoRevision,activities,siteScene.scene.items,paths])
   if (!selectedProject) return null
 
   return (
     <div className="h-screen flex flex-col">
+      {period&&<Simulator key={selectedProject.id+period.id} projectId={selectedProject.id} periodId={period.id} open={simulatorOpen} onClose={()=>setSimulatorOpen(false)} selectedActivities={selectedActivityIds} objects={simulationObjects} items={siteScene.scene.items} paths={paths} onPreview={setSimulationScenario} onSeek={handleSeekTimelineTo} onAccepted={()=>{refreshSchedule();void workingSequence.refresh()}} onPromoted={value=>{workingSequence.install(value);setSimulationScenario(null);setSimulationError('');if(value.scenario.result)handleSeekTimelineTo(new Date(value.scenario.result.start))}} onExport={(scenario,durationSec)=>{setSimulationScenario(scenario);setSimulationError('');setSequenceExport({nonce:Date.now(),durationSec})}} onSelection={async()=>{
+        const site=[...selectedObjectIds].filter(id=>id.startsWith('site:'));
+        if(site.length===1)return {model_ref:site[0]}
+        if(activeIfcHandle&&selectedExpressIds.size===1){const {getElementInfo}=await import('./ifcModel');const info=await getElementInfo(activeIfcHandle,[...selectedExpressIds][0]);const object=sceneObjects.find(o=>o.object===activeIfcHandle.object);if(!object||!info.globalId)throw Error('Select a loaded IFC element with a GlobalId.');return {model_ref:object.name,element_id:info.globalId}}
+        const selected=sceneObjects.filter(o=>selectedObjectIds.has(o.id)&&o.kind==='mesh');if(selected.length!==1)throw Error('Select one IFC element or one 3D object in the viewport.');return {model_ref:selected[0].name}
+      }}/ >}
+      {previewScenario&&<div className="px-4 py-1 text-xs bg-blue-100 dark:bg-blue-950 flex gap-3"><strong>Scenario: {previewScenario.name}</strong><span>Operational preview · Exit to edit model transforms</span><button onClick={()=>setSimulatorOpen(true)}>Open Simulator</button><button onClick={()=>setSimulationScenario(null)}>Exit scenario view</button>{simulationError&&<span role="alert" className="text-red-500">{simulationError}</span>}</div>}
+
+      {!previewScenario&&workingSequence.value&&<div className="px-4 py-2 text-xs bg-blue-100 dark:bg-blue-950 flex flex-wrap items-center gap-3">
+        <strong>Working sequence: {workingSequence.value.scenario.name}</strong>
+        <button className="border rounded px-2 py-1" aria-pressed={workingSequence.detailed} disabled={workingSequence.value.status!=='current'} onClick={()=>{workingSequence.setDetailed(true);setSimulationError('')}}>Detailed sequence</button>
+        <button className="border rounded px-2 py-1" aria-pressed={!workingSequence.detailed} onClick={()=>{workingSequence.setDetailed(false);setSimulationError('')}}>Simple 4D</button>
+        <span>{workingSequence.value.status==='stale'?'Source changed — rerun and promote again. Simple 4D is shown.':workingSequence.detailed?'Fitted to parent activity dates · Switch to Simple 4D to edit':'Original activity profiles and model editing'}</span>
+        <button onClick={()=>setSimulatorOpen(true)}>Open Simulator</button>
+        {workingSequence.scenario&&<><label>Video seconds <input className="w-16 border rounded" aria-label="Working sequence video seconds" type="number" min={1} max={3600} value={sequenceVideoSeconds} onChange={e=>setSequenceVideoSeconds(Number(e.target.value))}/></label><button disabled={!!sequenceExport||!Number.isFinite(sequenceVideoSeconds)||sequenceVideoSeconds<1||sequenceVideoSeconds>3600} onClick={()=>{setSimulationError('');setSequenceExport({nonce:Date.now(),durationSec:sequenceVideoSeconds})}}>Export combined sequence video</button></>}
+        {simulationError&&<span role="alert" className="text-red-500">{simulationError}</span>}
+      </div>}
+      {workingSequence.error&&<div className="px-4 py-1 text-xs" role="alert">{workingSequence.error} <button onClick={()=>void workingSequence.refresh()}>Retry</button></div>}
+
       <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 dark:border-prosota-line bg-white dark:bg-prosota-panel shrink-0 flex-wrap">
         <h1 className="text-sm font-bold text-gray-900 dark:text-prosota-paper mr-2">BIM, Simulations &amp; Reality Capture</h1>
         {ALL_WINDOW_KEYS.map(key => (
@@ -8072,6 +8198,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         >
           Point Cloud
         </button>
+        <button onClick={()=>setSimulatorOpen(v=>!v)} className="text-xs px-2.5 py-1 rounded-md border font-medium">Simulator</button>
         <button
           onClick={toggleRigPanel}
           title="Rig one part as the child of another (crane base -> jib -> trolley -> hook) — rotating/moving the parent carries the child along"
@@ -8155,6 +8282,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             ⏳ {name} {percent}%
           </span>
         ))}
+        {siteScene.scene.items.length>0&&<button className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line" onClick={()=>setSiteScheduleIds(siteScene.scene.items.map(i=>i.id))} title="Create reviewed activities and animation links for independent 3D objects">{ifcHandles.length?'Generate 3D Schedule':'Generate Schedule'}</button>}
         {ifcHandles.length > 0 && (
           <button
             onClick={() => setScheduleWizardOpen(true)}
@@ -8180,7 +8308,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       <div className="flex flex-1 min-h-0">
         <PropertiesPanel
           siteSelectionPanel={activeSiteItem ? <div className="px-3 text-xs">{siteScene.busy ? "Saving object…" : siteScene.error}</div> : null}
-          equipmentPivot={equipmentVisual?.joint && equipmentVisual.pivot && equipmentObjects.find(o=>o.name===equipmentVisual.model)
+          equipmentPivot={!simulationScenario && equipmentVisual?.joint && equipmentVisual.pivot && equipmentObjects.find(o=>o.name===equipmentVisual.model)
             ? {state:equipmentVisual,root:equipmentObjects.find(o=>o.name===equipmentVisual.model)!.object} : null}
           open={propertiesOpen}
           onToggle={toggleProperties}
@@ -8192,7 +8320,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onUploadEnvironment={handleUploadEnvironment}
           onClearEnvironment={handleClearEnvironment}
           environmentError={environmentError}
-          activeObject={activeSceneObject && activeTransformObject ? {
+          activeObject={simulationScenario ? null : activeSceneObject && activeTransformObject ? {
             id: activeSceneObject.id, name: activeSceneObject.name, sourceUpAxis: activeSceneObject.sourceUpAxis, object: activeTransformObject,
           } : activeSiteItem && activeSiteRoot ? {id: 'site:'+activeSiteItem.id,name:activeSiteItem.name,sourceUpAxis:activeSiteItem.up_axis,object:activeSiteRoot,isSite:true,locked:activeSiteItem.locked} : null}
           isElementTransform={isElementTransform}
@@ -8305,6 +8433,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onAssignProfile={handleAssignProfile}
         />
       </div>
+      {siteScheduleIds && selectedProject && <SiteScheduleWizard key={selectedProject.id+':'+(period?.id||'')} projectId={selectedProject.id} schedulePeriodId={period?.id} items={siteScene.scene.items.filter(i=>siteScheduleIds.includes(i.id))} profiles={animationProfiles.profiles} links={modelElementLinks} upAxis={settings.upAxis} calendars={calendars} onCancel={()=>setSiteScheduleIds(null)} onGenerated={()=>{setSiteScheduleIds(null);refreshSchedule();void listModelElementLinks(selectedProject.id).then(setModelElementLinks);void animationProfiles.refetch()}}/>}
       {scheduleWizardOpen && selectedProject && period && (
         <IfcScheduleWizard
           models={ifcHandles.map(handle => ({
@@ -8355,6 +8484,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       )}
       {reloadIfcTarget && (
         <ReloadIfcDialog
+          fileId={reloadIfcTarget.fileId}
           fileName={reloadIfcTarget.fileName}
           unloadedElements={unloadedElementsByFileId.get(reloadIfcTarget.fileId) ?? []}
           onReload={handleReloadIfc}

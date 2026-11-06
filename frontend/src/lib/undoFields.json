@@ -197,6 +197,8 @@
   "cost-rate-lines": {
     "method": "patch",
     "fields": [
+      "area_m2",
+      "quantity_review_required",
       "description",
       "qty",
       "unit",

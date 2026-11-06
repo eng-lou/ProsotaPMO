@@ -36,6 +36,28 @@ async def test_create_and_list_path(client: AsyncClient, project: Project):
     assert any(p["id"] == created["id"] for p in listing)
 
 
+async def test_mixed_segments_round_trip_and_edit_independently(client: AsyncClient, project: Project):
+    points = [
+        {"x": 0, "y": 0, "z": 2},
+        {"x": 10, "y": 0, "z": 2, "segment_mode": "curved",
+         "segment_controls": [{"x": 3, "y": 2, "z": 0}, {"x": -3, "y": 0, "z": 0}]},
+        {"x": 10, "y": 10, "z": 2, "segment_mode": "straight"},
+    ]
+    resp = await client.post('/api/v1/paths/', json={'project_id': str(project.id), 'points': points})
+    assert resp.status_code == 201, resp.text
+    original = resp.json()
+    end = {'x': 20, 'y': 10, 'z': 2, 'segment_mode': 'straight'}
+    patched = await client.patch(f"/api/v1/paths/{original['id']}", json={'points': original['points'] + [end]})
+    assert patched.status_code == 200, patched.text
+    rows = (await client.get('/api/v1/paths/', params={'project_id': str(project.id)})).json()
+    saved = next(p for p in rows if p['id'] == original['id'])
+    assert saved['points'][:3] == original['points']
+    assert saved['points'][1]['segment_controls'] == points[1]['segment_controls']
+    assert saved['points'][2]['segment_mode'] == 'straight'
+    bad = await client.patch(f"/api/v1/paths/{original['id']}", json={'points': [{'x':0,'y':0,'z':0,'segment_mode':'invalid'}]})
+    assert bad.status_code == 422
+
+
 async def test_style_path(client: AsyncClient, project: Project):
     created = (await client.post("/api/v1/paths/", json={"project_id": str(project.id), "points": _points(2)})).json()
 
@@ -208,7 +230,7 @@ async def test_deleting_path_cascades_its_followers(client: AsyncClient, project
 async def test_site_path_binding_survives_reload_and_route_deletion(client: AsyncClient, project: Project):
     path = (await client.post('/api/v1/paths/', json={'project_id': str(project.id), 'points': _points()})).json()
     motion = dict(bind_origin=dict(x=23,y=-15,z=-31), path_id=path['id'], start='2026-10-23T00:00:00Z', speed=1.4, loop=False,
-                  orient=True, heading=-90, animation_reference_speed=1.4)
+                  orient=True, heading=-90, animation_reference_speed=1.4, progress_keys=[dict(date='2026-10-23T00:00:00Z',progress=25,interpolation='linear'), dict(date='2026-10-24T00:00:00Z',progress=25,interpolation='hold'), dict(date='2026-10-25T00:00:00Z',progress=90,interpolation='smooth')])
     items = [dict(id=str(uuid.uuid4()), name='Same name', kind='context', up_axis='z',
                   position=dict(x=0,y=0,z=0), path_motion=motion) for _ in range(2)]
     url = f'/api/v1/site-scenes/{project.id}'

@@ -622,7 +622,7 @@ export interface ResourceRecipeActivity {
 export interface ResourceRecipeResource {
   temp_id: string
   name: string
-  resource_type: 'crew' | 'equipment' | 'material'
+  resource_type: 'crew' | 'labour' | 'equipment' | 'material'
   unit: string
   rate: number
 }
@@ -673,7 +673,7 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
   const assignments: ResourceRecipeAssignment[] = []
   let nextTempId = 0
 
-  const tempIdFor = (name: string, resource_type: 'crew' | 'equipment' | 'material', unit: string, rate: number): string => {
+  const tempIdFor = (name: string, resource_type: 'crew' | 'labour' | 'equipment' | 'material', unit: string, rate: number): string => {
     const existing = resourceByName.get(name)
     if (existing) return existing.temp_id
     const temp_id = `res-${nextTempId++}`

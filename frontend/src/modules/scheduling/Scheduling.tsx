@@ -22,7 +22,7 @@ import { useUserDefinedFieldDefinitions, useUserDefinedFieldValues } from '@/lib
 import { listModelElementLinks, type ModelElementLink } from '@/modules/fourD/modelElementLinks'
 import { stringifyUdfValue } from '@/modules/fourD/scheduleScope'
 import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
-import { buildResourceRecipe, type ResourceRecipeActivity } from '@/modules/fourD/scheduleGeneration'
+import { buildScheduleResourcePlan } from './scheduleResourceGeneration'
 import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
 import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
@@ -2145,38 +2145,13 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     setError(null)
   }
 
-  // buildResourceRecipe's own ResourceRecipeActivity expects real numbers
-  // for schedule_material_quantity/schedule_material_cost_per_unit
-  // (2026-07-27, per Maro: "how is concrete and steel catered for if they
-  // exist") — Activity itself carries them as strings, same "Decimal
-  // serializes as a string over the wire" convention schedule_quantity
-  // already follows (never converted to a number anywhere before now,
-  // since nothing inside buildResourceRecipe read it until this feature).
-  // Shared by both call sites just below rather than inlined twice.
-  const toResourceRecipeActivities = (source: Activity[]): ResourceRecipeActivity[] =>
-    source.map(a => ({
-      id: a.id, schedule_category: a.schedule_category, schedule_phase_key: a.schedule_phase_key,
-      schedule_material_name: a.schedule_material_name,
-      schedule_material_quantity: a.schedule_material_quantity !== null ? Number(a.schedule_material_quantity) : null,
-      schedule_material_unit: a.schedule_material_unit,
-      schedule_material_cost_per_unit: a.schedule_material_cost_per_unit !== null ? Number(a.schedule_material_cost_per_unit) : null,
-    }))
-
-  // "Generate Resources" — stage 1 of Maro's two-stage flow: reads every
-  // activity's own schedule_category/schedule_phase_key (set at IFC
-  // schedule-generation time, see Activity.schedule_category's backend
-  // docstring), derives the crew/equipment each one needs off the same rate
-  // table schedule generation itself used to use, and populates the
-  // Resource Pool with them — no assignments yet, so the user can freely
-  // edit/delete/rename what lands here before anything gets linked to real
-  // work. dedupe_resources_by_name means running this again later (e.g.
-  // after linking more IFC elements and regenerating) only adds resources
-  // for genuinely new crew/equipment names, never duplicates.
+  // Pool creation and assignment are separate reviewable actions for any schedule.
   const handleGenerateResources = async () => {
     if (!period) return
-    const { resources: recipeResources } = buildResourceRecipe(toResourceRecipeActivities(activities))
+    const { resources: recipeResources, issues } = buildScheduleResourcePlan(activities, resources, modelElementLinks)
+    setResourceAssignmentIssues(issues)
     if (recipeResources.length === 0) {
-      setResourceGenMessage('This shortcut needs IFC-generated activity categories. For brief-based or imported schedules, ask Poe to assign the existing resource pool to the schedule.')
+      setResourceGenMessage('No clear resource suggestions. Review the activities below, or add resources manually in the Resource Pool.')
       return
     }
     setResourceGenBusy('generate')
@@ -2190,7 +2165,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
       await refresh()
       const reused = recipeResources.length - data.resource_count
       setResourceGenMessage(
-        `Resource pool updated — ${data.resource_count} new resource(s)${reused > 0 ? `, ${reused} already existed` : ''}.`
+        `Resource pool updated — ${data.resource_count} new resource(s)${reused > 0 ? `, ${reused} reused` : ''}. Review rates and capacity below, then use Auto-assign resources. Suggestions from activity descriptions start at zero rate.`
       )
     } catch (err) {
       setResourceGenMessage(axios.isAxiosError(err)
@@ -2206,9 +2181,9 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   const [resourceAssignmentIssues, setResourceAssignmentIssues] = useState<string[]>([])
   const handleAutoAssignResources = async () => {
     if (!period) return
-    const recipe = buildResourceRecipe(toResourceRecipeActivities(activities))
+    const recipe = buildScheduleResourcePlan(activities, resources, modelElementLinks)
     const plan = buildDirectAssignments(activities, resources, resourceAssignments, recipe, modelElementLinks)
-    setResourceAssignmentIssues(plan.issues)
+    setResourceAssignmentIssues([...new Set([...recipe.issues, ...plan.issues])])
     if (plan.assignments.length === 0) {
       setResourceGenMessage(plan.issues.length ? 'No new clear matches. Review the unmatched activities below.' : 'No new assignments needed.')
       return
@@ -2816,24 +2791,24 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                 <details className="relative text-xs">
                   <summary className="cursor-pointer text-amber-700">Review {resourceAssignmentIssues.length} matching notices</summary>
                   <div className="absolute right-0 top-full z-30 w-96 max-h-72 overflow-auto rounded border bg-white dark:bg-prosota-panel p-3 shadow-lg">
-                    <p className="mb-2">Only clear matches were assigned at 100% utilisation. Check capacity separately. Package allowances and materials without measured quantities require manual assignment.</p>
+                    <p className="mb-2">Automatic crew/equipment assignments use 100% utilisation. Review rates and capacity before using cost totals. Package allowances and materials without measured quantities require manual assignment.</p>
                     <ul className="list-disc pl-4">{resourceAssignmentIssues.map((message, i) => <li key={i}>{message}</li>)}</ul>
                   </div>
                 </details>
               )}
               {resourceGenMessage && (
-                <div className="text-[11px] text-gray-500 dark:text-prosota-muted max-w-xs truncate" title={resourceGenMessage}>{resourceGenMessage}</div>
+                <div className="text-[11px] text-gray-500 dark:text-prosota-muted max-w-md whitespace-normal" title={resourceGenMessage}>{resourceGenMessage}</div>
               )}
               <button
                 onClick={handleGenerateResources}
                 disabled={resourceGenBusy !== null}
-                title="Populates the Resource Pool below from every IFC-generated activity's own crew/equipment recipe — no assignments yet, review/edit the pool first"
+                title="Suggest crews and equipment from activity descriptions or IFC recipes. Review the Resource Pool and rates before assigning."
                 className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
               >{resourceGenBusy === 'generate' ? 'Generating…' : 'Generate Resources'}</button>
               <button
                 onClick={handleAutoAssignResources}
                 disabled={resourceGenBusy !== null}
-                title="Assign existing resources directly using IFC recipes and activity descriptions; ambiguous matches are left for review"
+                title="Assign the existing Resource Pool to imported, manual or IFC-generated activities. Ambiguous matches are left for review."
                 className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 disabled:opacity-40 disabled:cursor-not-allowed"
               >{resourceGenBusy === 'assign' ? 'Assigning…' : 'Auto Assign Resources'}</button>
               <div className="w-px h-4 bg-gray-200 mx-1" />

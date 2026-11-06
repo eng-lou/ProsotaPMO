@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal, Annotated
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+
+Finite = Annotated[float, Field(allow_inf_nan=False)]
+ViewPlanes = Annotated[list[tuple[Finite, Finite, Finite, Finite]], Field(min_length=6, max_length=6)]
 
 
 class SiteContextUpsert(BaseModel):
@@ -20,6 +24,8 @@ class SiteContextUpsert(BaseModel):
     scale: float = Field(default=1.0, gt=0)
     cutout_zone_id: uuid.UUID | None = None
     cutout_active: bool = False
+    cutout_mode: Literal['remove', 'isolate'] = 'remove'
+    view_isolation: ViewPlanes | None = None
 
 
 class SiteContextResponse(BaseModel):
@@ -42,5 +48,7 @@ class SiteContextResponse(BaseModel):
     scale: float
     cutout_zone_id: uuid.UUID | None
     cutout_active: bool
+    cutout_mode: Literal['remove', 'isolate'] = 'remove'
+    view_isolation: ViewPlanes | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

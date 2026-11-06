@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import type { UnloadedElementInfo } from './model3dFiles'
+import { IfcRevisionDialog } from './IfcRevisionDialog'
 
 interface Props {
+  fileId: string
   fileName: string
   unloadedElements: UnloadedElementInfo[]
   onReload: (guidsToRestore: string[]) => void
@@ -16,8 +18,10 @@ interface Props {
 // unless actively picked) — the safer default given a full reload is a
 // real, disruptive action, matching this dialog's own "choose which ones"
 // framing rather than "everything comes back unless you opt out".
-export function ReloadIfcDialog({ fileName, unloadedElements, onReload, onCancel }: Props) {
+export function ReloadIfcDialog({ fileId, fileName, unloadedElements, onReload, onCancel }: Props) {
+  const [sync, setSync] = useState(false)
   const [checkedGuids, setCheckedGuids] = useState<Set<string>>(new Set())
+  if (sync) return <IfcRevisionDialog fileId={fileId} fileName={fileName} onClose={() => setSync(false)} />
 
   const toggle = (guid: string) => {
     setCheckedGuids(prev => {
@@ -32,6 +36,7 @@ export function ReloadIfcDialog({ fileName, unloadedElements, onReload, onCancel
       <div className="w-[420px] max-h-[80vh] flex flex-col bg-white dark:bg-prosota-panel rounded-lg shadow-xl border border-gray-200 dark:border-prosota-line" onClick={e => e.stopPropagation()}>
         <div className="px-4 py-3 border-b border-gray-100 dark:border-prosota-line">
           <h3 className="text-sm font-bold text-gray-800 dark:text-prosota-paper">Reload "{fileName}"</h3>
+          <button className="my-3 px-3 py-2 rounded bg-blue-600 text-white text-sm" onClick={() => setSync(true)}>Compare updated IFC / revision history</button>
           <p className="text-[11px] text-gray-400 dark:text-prosota-muted mt-1">
             Re-downloads and re-parses this file fresh, then keeps everything unchecked below still unloaded.
             Check the elements you want brought back.

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,15 +15,38 @@ from app.services import site_context as svc
 
 router = APIRouter(prefix="/site-context", tags=["site-context"])
 
+class OpenMapRequest(BaseModel):
+    project_id: uuid.UUID
+    lat: float = Field(ge=-85, le=85)
+    lon: float = Field(ge=-180, le=180)
+    width: float = Field(default=800, ge=100, le=1500)
+    depth: float = Field(default=650, ge=100, le=1500)
+    provider: Literal['main', 'community'] = 'main'
+
+from app.core.auth import get_db_user
+from app.services.clash_access import owned_project
+
+@router.post('/open-map')
+async def open_map(data: OpenMapRequest, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    from app.services.geographic_context import fetch_context
+    import httpx
+    await owned_project(db, data.project_id, user)
+    try:
+        return await fetch_context(data.lat, data.lon, data.width, data.depth, data.provider)
+    except (ValueError, httpx.HTTPError) as exc:
+        raise HTTPException(422, 'Could not obtain complete open map data. Try again or choose a smaller area.') from exc
+
 
 @router.get("/", response_model=SiteContextResponse)
 async def get_site_context(
     project_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
+    user=Depends(get_db_user),
 ):
     """The one, project-wide real-world anchor for the Site Context
     CesiumJS panel. Returns an in-memory default (never a 404) if nothing
     has been saved yet, same convention as GET /timeline-strips/."""
+    await owned_project(db, project_id, user)
     return await svc.get_or_default(db, project_id)
 
 
@@ -30,7 +54,14 @@ async def get_site_context(
 async def save_site_context(
     data: SiteContextUpsert,
     db: AsyncSession = Depends(get_db),
+    user=Depends(get_db_user),
 ):
+    await owned_project(db, data.project_id, user)
+    if data.cutout_zone_id:
+        from app.models.zone import Zone
+        zone = await db.get(Zone, data.cutout_zone_id)
+        if not zone or zone.project_id != data.project_id:
+            raise HTTPException(422, 'Choose a zone in this project')
     return await svc.upsert(db, data)
 
 

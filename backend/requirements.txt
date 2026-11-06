@@ -34,3 +34,4 @@ google-genai==2.21.0
 openpyxl==3.1.5
 # Native schema migration for IFC4 integrated exports.
 ifcopenshell==0.8.5
+shapely>=2.0,<3
