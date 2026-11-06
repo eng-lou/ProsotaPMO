@@ -18,8 +18,16 @@ independent scene objects; this release does not claim that freeze is resolved.
 Before packaging, the frontend suite passed 290 tests (2 skipped), all 11 desktop
 configuration checks passed, and both web and desktop builds passed. The packaged
 application smoke test also passed, including save/reopen, portable backup,
-IFC revision review and promoted simulation sequences. The full backend suite
-is being run against a disposable database before publication.
+IFC revision review and promoted simulation sequences. Backend validation completed
+with 1,155 tests passed, 7 skipped and 28 subtests passed after rerunning four
+database-name safety guards with the required `_test` suffix. The installer was
+published and the production deployment succeeded; the live website serves the
+0.2.43 download link and its protected backend responds as expected.
+
+The hosted frontend check caught an old 0.2.42 expectation in the release-page
+test after the version bump. Updated it to check both the Stable version and its
+exact installer link. This follow-up changes only tests and this log; the published
+installer still corresponds to application source commit `4fd02c9`.
 
 ## 2026-11-06 — DGN V8 crane sample tested; solid conversion remains unresolved
 
