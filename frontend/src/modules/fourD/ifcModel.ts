@@ -3,8 +3,10 @@ import {
   IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
   IFCPROJECT, IFCSTYLEDITEM, IFCCURTAINWALL,
 } from 'web-ifc'
-import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
-import { buildElementMaterial, disposeEdgesBatch, finalizeIndividualMesh, type BatchState, type EdgesBatch } from './elementBatching'
+import { disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
+import { disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
+
+import { buildIfcScene } from './ifcGeometryStream'
 
 /** Explicit IFC assembly identity, used only by the opt-in tower recipe. */
 export function getCurtainWallAssemblies(handle: IfcModelHandle): Map<number, string> {
@@ -105,62 +107,6 @@ export interface IfcModelHandle {
   batch: BatchState | null
 }
 
-function colorToThree(c: { x: number; y: number; z: number; w: number }): THREE.Color {
-  return new THREE.Color(c.x, c.y, c.z)
-}
-
-// Box-projected UVs (2026-07-11, per Maro: applied a concrete texture to
-// slabs, got a flat, detail-less grey instead) — web-ifc's own interleaved
-// vertex buffer is strictly position+normal, 6 floats per vertex (verified
-// against a real file, see this file's own header); it carries no UV/
-// texture-coordinate data at all, for any IFC geometry, ever. Without a
-// `uv` attribute, three.js's MeshStandardMaterial has no coordinates to
-// sample a `map` texture against and silently falls back to a flat,
-// untextured surface — that flat grey slab was never a render-mode
-// setting, it was a materially missing attribute. Generated here
-// per-vertex from each vertex's own *local* position (stable under a later
-// move/rotate, since TransformPanel edits the mesh's transform, not its
-// geometry) using the dominant axis of that vertex's own normal to pick
-// which two position components become U/V — the standard "box
-// projection" technique for CAD/BREP geometry with no native UV unwrap.
-// Exactly right (no seams) for the flat, axis-aligned faces that make up
-// most structural BIM elements (slabs/walls/columns/beams); a genuinely
-// curved face (this file has some curtain-wall panels) can show a seam
-// where the dominant axis flips — true triplanar blending would avoid
-// that, but needs a custom shader; deferred until it's actually reported
-// as a problem. UVs are left in raw model-space units (1 UV unit = 1 raw
-// unit, e.g. 1 foot for this file, see getLengthUnitToMetres's own header)
-// rather than pre-scaled to some guessed tile size — TextureFields.tsx's
-// own Tile Size control divides this back down via texture.repeat, so the
-// actual visual tiling density is a live, adjustable choice, not baked in
-// here.
-//
-// Factored out (2026-07-17) so ensureMaterialized below can build the
-// exact same geometry shape a batched element would have gotten had it
-// never been batched at all — one geometry-construction implementation,
-// reused whether an element becomes a mesh eagerly at import or lazily on
-// first interaction.
-function buildGeometryFromIfc(vertexData: Float32Array, indexData: Uint32Array): THREE.BufferGeometry {
-  const vertexCount = vertexData.length / 6
-  const positions = new Float32Array(vertexCount * 3)
-  const normals = new Float32Array(vertexCount * 3)
-  const uvs = new Float32Array(vertexCount * 2)
-  for (let v = 0, p = 0, u = 0; v < vertexData.length; v += 6, p += 3, u += 2) {
-    positions[p] = vertexData[v]; positions[p + 1] = vertexData[v + 1]; positions[p + 2] = vertexData[v + 2]
-    normals[p] = vertexData[v + 3]; normals[p + 1] = vertexData[v + 4]; normals[p + 2] = vertexData[v + 5]
-    const nx = Math.abs(normals[p]), ny = Math.abs(normals[p + 1]), nz = Math.abs(normals[p + 2])
-    if (nx >= ny && nx >= nz) { uvs[u] = positions[p + 1]; uvs[u + 1] = positions[p + 2] }
-    else if (ny >= nx && ny >= nz) { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 2] }
-    else { uvs[u] = positions[p]; uvs[u + 1] = positions[p + 1] }
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
-  geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
-  geometry.setIndex(new THREE.BufferAttribute(indexData, 1))
-  return geometry
-}
-
 // Shared across every loadIfcModel call in this session (2026-07-19 fix,
 // per Maro: "you've seriously fucked the coordinates of my ifc files, i
 // imported site and structurals and facade etc. and they're in different
@@ -193,336 +139,20 @@ export function resetRecenterOffset(): void {
 
 export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
   const api = await createApi()
-  const buffer = new Uint8Array(await file.arrayBuffer())
-  let modelID: number
+  let modelID: number | undefined
   try {
-    modelID = api.OpenModel(buffer)
-  } catch (err) {
-    api.Dispose()
-    throw err
+    // Keep the input buffer out of the scene-building scope: a large IFC's
+    // bytes can be reclaimed once OpenModel has parsed the records.
+    modelID = api.OpenModel(new Uint8Array(await file.arrayBuffer()))
+    const { object, batch, recenterOffset } = buildIfcScene(api, modelID, file.name, sharedRecenterOffset)
+    sharedRecenterOffset = recenterOffset
+    return { api, modelID: nextAppModelId++, ifcModelID: modelID, object, batch }
+  } catch (error) {
+    // Geometry extraction can fail too; never leave its native engine alive.
+    if (modelID !== undefined) { try { api.CloseModel(modelID) } catch { /* engine may have aborted */ } }
+    try { api.Dispose() } catch { /* preserve the original import error */ }
+    throw error
   }
-
-  const group = new THREE.Group()
-  group.name = file.name
-
-  const flatMeshes = api.LoadAllGeometry(modelID)
-  const meshCount = flatMeshes.size()
-
-  // Filters out flatMeshes owned by non-product geometric-resource/style
-  // entities (2026-07-28, per Maro: "select all... shows even non 3d
-  // elements... elements that are not even visible when you isolate. its a
-  // waste" — confirmed directly via the Filter Selection dialog: "Styled
-  // Item", "Surface Style", "Surface Style Rendering", "Trimmed Curve",
-  // "Vector" were showing up as real, selectable "elements" for Select
-  // All/Filter/Isolate to burn instances and UI space on, despite never
-  // being real occurrence elements a PM would want to schedule/isolate/
-  // select. A real IfcProduct occurrence never resolves to one of these
-  // types — some IFC exports leave orphaned/malformed geometric-resource
-  // entities that LoadAllGeometry's own occurrence-resolution falls back
-  // to using as a flatMesh's owning expressID when it can't trace a proper
-  // parent product back to it. Checked once per flatMesh here (same
-  // GetLineType+GetNameFromTypeCode pattern getIfcTypeName already uses
-  // elsewhere in this file), not per placement, and skipped across every
-  // one of the three passes below via this same array — these never enter
-  // occurrenceCount, never get their geometry built, and never become a
-  // selectable batch instance or individual mesh at all.
-  const NON_PRODUCT_IFC_TYPES = new Set(['IFCSTYLEDITEM', 'IFCSURFACESTYLE', 'IFCSURFACESTYLERENDERING', 'IFCTRIMMEDCURVE', 'IFCVECTOR'])
-  const skipFlatMesh = new Array<boolean>(meshCount)
-  for (let i = 0; i < meshCount; i++) {
-    const typeName = api.GetNameFromTypeCode(api.GetLineType(modelID, flatMeshes.get(i).expressID))
-    skipFlatMesh[i] = NON_PRODUCT_IFC_TYPES.has(typeName)
-  }
-
-  // Pass 1 (cheap — just reads the already-computed flatMesh structure, no
-  // GetGeometry/GetVertexArray calls): tally how many placements reference
-  // each geometryExpressID. Every geometry goes into the shared batch below
-  // regardless of this count (2026-07-21 — see elementBatching.ts's own
-  // header for why this used to stop at count > 1 and no longer does); the
-  // count itself is still needed for BatchedMesh's fixed-capacity
-  // construction (Pass 2) and to size each geometry's own instance array.
-  const occurrenceCount = new Map<number, number>()
-  // Recenter offset (2026-07-19 fix, per Maro: columns specifically
-  // shaking while orbiting — confirmed via direct evidence, not assumed:
-  // a real Frame Selected run logged its own computed box at
-  // (417585, 224, -78735) to (417646, 259, -78660) — a real project sited
-  // at real-world/site coordinates roughly 400,000 units from the three.js
-  // origin. WebGL vertex math is 32-bit float throughout (~7 significant
-  // decimal digits); at that magnitude there's only ~0.05 units of
-  // precision left for anything *within* the model. An ordinary THREE.Mesh
-  // survives this because three.js precomputes its camera-relative
-  // modelViewMatrix on the CPU in full 64-bit JS doubles before the GPU
-  // ever sees it — the dangerous "huge minus huge" cancellation happens
-  // somewhere safe. THREE.BatchedMesh instead does the equivalent
-  // per-instance matrix math *inside the GPU vertex shader*, in 32-bit
-  // float the whole way through — the same huge-coordinate magnitude that's
-  // harmless for a normal mesh becomes visible per-frame jitter for a
-  // batched one, exactly matching "shakes, but stops the instant you select
-  // it" (selecting materializes it onto the safe, CPU-precomputed
-  // individual-mesh path). The standard fix for real-world-coordinate BIM/
-  // GIS data is recentering near the origin at load time, not working
-  // around float32 precision after the fact — every element's own
-  // placement gets this same offset subtracted below (Pass 3), preserving
-  // every relative position/rotation between elements exactly; only the
-  // absolute reference point moves. The MEAN of every placement's own
-  // translation is used as that reference (2026-07-19 fix, replacing an
-  // initial version that just used the first placement found) — per Maro:
-  // "shadows looking crazy, floating." A directional light's shadow camera
-  // defaults to looking at world origin (0,0,0); the first-placement
-  // version could recenter the whole model around an arbitrary corner
-  // element rather than its middle, leaving the actual geometry sitting
-  // well outside where the shadow camera was actually looking even after
-  // recentering. The mean of every element's own origin is a cheap (no
-  // extra geometry reads, just the translations Pass 1 already has to
-  // iterate anyway), reasonable proxy for "the middle of the model" — not
-  // a true geometric bounding-box centroid, but close enough to land the
-  // recentered model right around the origin, exactly where the shadow
-  // camera already expects it.
-  // Only the FIRST file loaded this session actually computes an offset —
-  // see sharedRecenterOffset's own header above for why every subsequent
-  // file must reuse that exact same value instead of computing its own.
-  const computingSharedOffset = sharedRecenterOffset === null
-  let offsetSum: THREE.Vector3 | null = null
-  let offsetCount = 0
-  for (let i = 0; i < meshCount; i++) {
-    if (skipFlatMesh[i]) continue
-    const flatMesh = flatMeshes.get(i)
-    for (let j = 0; j < flatMesh.geometries.size(); j++) {
-      const placed = flatMesh.geometries.get(j)
-      const geomId = placed.geometryExpressID
-      occurrenceCount.set(geomId, (occurrenceCount.get(geomId) ?? 0) + 1)
-      if (computingSharedOffset) {
-        const t = placed.flatTransformation
-        if (offsetSum === null) offsetSum = new THREE.Vector3(t[12], t[13], t[14])
-        else offsetSum.add(new THREE.Vector3(t[12], t[13], t[14]))
-        offsetCount++
-      }
-    }
-  }
-  if (computingSharedOffset && offsetSum && offsetCount > 0) {
-    sharedRecenterOffset = offsetSum.divideScalar(offsetCount)
-  }
-  const recenterOffset = sharedRecenterOffset
-
-  // Pass 2: build the BufferGeometry once per unique shape (also dedupes the
-  // redundant GetGeometry/GetVertexArray calls the old one-call-per-placement
-  // code used to make even for identical geometry — a free import-time
-  // speedup, not just a rendering one), and tally the exact vertex/index/
-  // instance totals THREE.BatchedMesh needs fixed at construction time (no
-  // capacity growth in three@0.169 — verified directly in
-  // node_modules/three/src/objects/BatchedMesh.js, not assumed).
-  //
-  // Every geometry, not just ones occurring more than once (2026-07-21 — see
-  // elementBatching.ts's own header) — batching every shape (unique or
-  // repeated) into the one shared BatchedMesh is what actually consolidates
-  // a real building's draw calls, since most schedulable elements (walls,
-  // beams, ducts) have unique geometry and the repeated-only version never
-  // touched them at all.
-  let totalVertexCount = 0
-  let totalIndexCount = 0
-  let totalInstanceCount = 0
-  const batchGeometries = new Map<number, THREE.BufferGeometry>()
-  for (const [geomId, count] of occurrenceCount) {
-    const ifcGeom = api.GetGeometry(modelID, geomId)
-    const vertexData = api.GetVertexArray(ifcGeom.GetVertexData(), ifcGeom.GetVertexDataSize())
-    const indexData = api.GetIndexArray(ifcGeom.GetIndexData(), ifcGeom.GetIndexDataSize())
-    batchGeometries.set(geomId, buildGeometryFromIfc(vertexData, indexData))
-    totalVertexCount += vertexData.length / 6
-    totalIndexCount += indexData.length
-    totalInstanceCount += count
-    ifcGeom.delete()
-  }
-
-  let batch: BatchState | null = null
-  if (batchGeometries.size > 0) {
-    // Base colour white — each batched element's own real colour rides on
-    // its *per-instance* colour (setColorAt below), which three.js's
-    // batching shader multiplies against this material colour; a non-white
-    // base would tint every batched element uniformly regardless of its
-    // own actual colour.
-    const batchedMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide })
-    const batchedMesh = new THREE.BatchedMesh(totalInstanceCount, totalVertexCount, totalIndexCount, batchedMaterial)
-    batchedMesh.name = 'batched-elements'
-    // Both default to true on THREE.BatchedMesh itself (verified directly
-    // in node_modules/three/src/objects/BatchedMesh.js) — every frame the
-    // camera moves, onBeforeRender re-runs a per-instance frustum-vs-
-    // bounding-sphere test (perObjectFrustumCulled) and re-sorts draw order
-    // by camera distance (sortObjects). 2026-07-19 fix, per Maro: "its some
-    // elements mainly the columns" shaking while orbiting — columns are
-    // exactly the kind of numerous element that ends up batched, and an
-    // instance whose bounding sphere sits near a frustum
-    // boundary can flip in/out of that per-frame test purely from floating-
-    // point noise in the recomputed projection*view matrix during
-    // continuous rotation, a well-documented flicker source for batched/
-    // instanced rendering. Neither is actually needed here: this app's own
-    // batched elements are opaque (no transparency-sort dependency) and
-    // reasonably clustered per model (whole-batch culling via the
-    // BatchedMesh's own aggregate bounds, still automatic, already skips
-    // the draw call entirely once the whole thing is off-screen) — the
-    // small GPU cost of drawing a handful of individually off-screen-but-
-    // batch-in-view instances is a good trade for not flickering.
-    batchedMesh.perObjectFrustumCulled = false
-    batchedMesh.sortObjects = false
-    const geometryByIfcId = new Map<number, { geometry: THREE.BufferGeometry; geometryId: number }>()
-    // Keyed the other way round from geometryByIfcId (2026-07-21 perf fix)
-    // — see BatchState.geometryById's own header in elementBatching.ts.
-    const geometryById = new Map<number, THREE.BufferGeometry>()
-    for (const [geomId, geometry] of batchGeometries) {
-      const geometryId = batchedMesh.addGeometry(geometry)
-      geometryByIfcId.set(geomId, { geometry, geometryId })
-      geometryById.set(geometryId, geometry)
-    }
-    batch = { mesh: batchedMesh, byExpressId: new Map(), expressIdByInstanceId: new Map(), geometryByIfcId, geometryById }
-    group.add(batchedMesh)
-  }
-
-  // Pass 3: place every element — a batch instance for anything whose
-  // placement matrix isn't mirrored, or the individual THREE.Mesh path for
-  // the (typically small) mirrored fraction. Same final visual result
-  // either way, just a different draw-call cost.
-  // Counted (not just tallied via batch.mesh.instanceCount, which the
-  // BatchedMesh API doesn't expose as a public getter anyway) so the
-  // console.info below can report, per file, exactly what fraction of a
-  // real load actually reached the batched path (2026-07-21, per Maro
-  // reporting "still slow" after the ALL-geometry batching fix landed and
-  // asking directly whether it was even running against the model he was
-  // testing — this makes that answerable from the browser console on the
-  // next real test instead of staying a guess: if mirroredCount turns out
-  // to be a *large* fraction of a real file rather than the "typically
-  // small" one assumed above, the individual-mesh fallback would still
-  // dominate the draw-call count despite this fix being live and correct).
-  let batchedInstanceCount = 0
-  let individualMeshCount = 0
-  let mirroredCount = 0
-  for (let i = 0; i < meshCount; i++) {
-    if (skipFlatMesh[i]) continue
-    const flatMesh = flatMeshes.get(i)
-    for (let j = 0; j < flatMesh.geometries.size(); j++) {
-      const placed = flatMesh.geometries.get(j)
-
-      const matrix = new THREE.Matrix4().fromArray(placed.flatTransformation)
-      // Recenter near the origin (2026-07-19 fix) — see this function's own
-      // recenterOffset comment above (Pass 1) for the full "why". Only the
-      // translation (elements 12/13/14 in three.js's own column-major
-      // Matrix4 layout) shifts; the rotation/scale sub-matrix, and thus
-      // every element's orientation and every relative position between
-      // elements, is untouched.
-      if (recenterOffset) {
-        matrix.elements[12] -= recenterOffset.x
-        matrix.elements[13] -= recenterOffset.y
-        matrix.elements[14] -= recenterOffset.z
-      }
-      // THREE.BatchedMesh.setMatrixAt explicitly does not support negatively
-      // scaled matrices (documented directly on the method, not assumed) —
-      // and real IFC files genuinely have these (IfcMappedItem reflections,
-      // e.g. a mirrored fastener type placed on the opposite side of
-      // something — the exact same class of data this session's Unreal work
-      // already found in this file family). Anything with a negative
-      // determinant falls back to the individual-mesh path unconditionally
-      // — correctness over the batching win for the (typically small)
-      // fraction of placements this affects.
-      const isMirrored = matrix.determinant() < 0
-      if (isMirrored) mirroredCount++
-      if (batch && !isMirrored) {
-        const entry = batch.geometryByIfcId.get(placed.geometryExpressID)
-        if (!entry) continue
-        const instanceId = batch.mesh.addInstance(entry.geometryId)
-        batch.mesh.setMatrixAt(instanceId, matrix)
-        const color = colorToThree(placed.color)
-        batch.mesh.setColorAt(instanceId, color)
-        // Pushed onto an array, not a single-slot overwrite (2026-07-17) —
-        // one expressID can genuinely own more than one placed geometry
-        // piece; see BatchState.byExpressId's own header in
-        // elementBatching.ts for why a single slot would silently drop
-        // every piece but the last.
-        const infos = batch.byExpressId.get(flatMesh.expressID) ?? []
-        infos.push({ geometryId: entry.geometryId, instanceId, color, colorAlpha: placed.color.w, matrix, ifcGeometryId: placed.geometryExpressID })
-        batch.byExpressId.set(flatMesh.expressID, infos)
-        batch.expressIdByInstanceId.set(instanceId, flatMesh.expressID)
-        batchedInstanceCount++
-        continue
-      }
-
-      const ifcGeom = api.GetGeometry(modelID, placed.geometryExpressID)
-      const vertexData = api.GetVertexArray(ifcGeom.GetVertexData(), ifcGeom.GetVertexDataSize())
-      const indexData = api.GetIndexArray(ifcGeom.GetIndexData(), ifcGeom.GetIndexDataSize())
-      const geometry = buildGeometryFromIfc(vertexData, indexData)
-      const mesh = new THREE.Mesh(geometry, buildElementMaterial(placed.color))
-      mesh.userData.ifcGeometryId = placed.geometryExpressID
-      mesh.userData.ifcColorAlpha = placed.color.w
-      finalizeIndividualMesh(mesh, flatMesh.expressID, matrix, group)
-      ifcGeom.delete()
-      individualMeshCount++
-    }
-    // No flatMesh.delete() here despite web-ifc-api.d.ts declaring one
-    // (2026-07-11 fix — real IFC file import threw "flatMesh.delete is not
-    // a function") — IfcGeometry above is a genuine embind class_ instance
-    // needing manual disposal, but FlatMesh comes back from LoadAllGeometry
-    // as a plain value_object-converted JS struct with no delete method at
-    // runtime in this web-ifc build; the .d.ts's delete(): void on it is
-    // wrong. Nothing to free here either way — it's just a plain object.
-  }
-
-  // Hard evidence for the 2026-07-21 batching fix actually running against
-  // whatever's being loaded right now, not a reassurance to take on faith
-  // (per Maro asking directly, after "still slow" persisted, whether it was
-  // even reaching the model he was testing) — check this line in the
-  // browser console on the next real-file test. A low batched% here is a
-  // real, different finding (most of this particular file's placements are
-  // mirrored, so they're legitimately falling back to the slow individual-
-  // mesh path per the isMirrored comment above) rather than the fix not
-  // being live at all.
-  const totalPlacements = batchedInstanceCount + individualMeshCount
-  console.info(
-    `[4D] ${file.name}: ${totalPlacements} placements — `
-    + `${batchedInstanceCount} batched (${totalPlacements ? Math.round(batchedInstanceCount / totalPlacements * 100) : 0}%), `
-    + `${individualMeshCount} individual (${mirroredCount} mirrored, ${batchGeometries.size} unique shapes)`,
-  )
-
-  // Forces one fresh shader compile now that every real per-instance
-  // colour (Pass 3's own setColorAt calls above) is actually in place
-  // (2026-07-21 fix, per Maro: "not selecting... i dont see the highlight
-  // color change" — traced all the way down to a genuine three.js
-  // 0.169.0 bug, not anything in this app's own code: WebGLRenderer.js's
-  // own staleness check for whether a BatchedMesh's cached shader program
-  // still matches its current colour state reads `object.colorTexture`
-  // — a property that doesn't exist on BatchedMesh at all (verified
-  // directly in three.js's own source, same as this file's other verified-
-  // not-assumed precedents) — the real internal field is `_colorsTexture`,
-  // so that check can never actually fire. If this material's shader ever
-  // got compiled even once before colours existed (plausible depending on
-  // exact render/mount timing, effectively a race this app has no control
-  // over), it stays permanently missing per-instance colour support for
-  // the rest of the session, with zero automatic recovery — setColorAt
-  // keeps writing correct data (confirmed directly: read back byte-for-
-  // byte identical to what was written) into a texture the shader was
-  // simply never told to sample. `needsUpdate` bypasses that whole broken
-  // staleness check by forcing a normal fresh compile, which reads
-  // `object._colorsTexture` correctly (WebGLPrograms.js's own initial
-  // parameter computation, unaffected by the bug above) — one-time cost,
-  // right here, guaranteed after every real colour is already in place.
-  if (batch) {
-    const mat = batch.mesh.material
-    if (Array.isArray(mat)) mat.forEach(m => { m.needsUpdate = true }); else mat.needsUpdate = true
-  }
-
-  // No axis-conversion rotation baked in here (2026-07-08 fix, per Maro:
-  // default Rotation X showing -90 and the whole model rendering off-axis)
-  // — this `group` is the exact object TransformPanel/gizmo edit, so baking
-  // a fixed correction onto it made "no manual edits yet" look like
-  // "rotated -90 already" and fought against Viewport3D.tsx's own Z-up/Y-up
-  // display conversion (which was designed to correct Y-up-native content,
-  // and IFC is natively Z-up already — the two corrections compounded
-  // instead of cancelling). IFC is genuinely Z-up per its own spec; any
-  // display-axis correction now lives entirely in Viewport3D.tsx's
-  // axisCorrectionRotation (upAxis.ts), applied via a wrapper group around
-  // this object rather than onto it.
-  captureBaseline(group)
-  // Same userData-threading idiom as expressID/sceneObjectId elsewhere in
-  // this module — lets ensureMaterialized (and Viewport3D.tsx's raycast
-  // hit resolution) reach the batch state from just an Object3D reference,
-  // without needing the full IfcModelHandle in scope.
-  group.userData.batch = batch
-  return { api, modelID: nextAppModelId++, ifcModelID: modelID, object: group, batch }
 }
 
 // GlobalId -> expressID (2026-07-11) — model_element_link.py's ifc-kind
@@ -625,25 +255,15 @@ export function disposeIfcModel(handle: IfcModelHandle) {
 }
 
 export function getTypeCounts(handle: IfcModelHandle): { typeName: string; count: number }[] {
-  const types = handle.api.GetAllTypesOfModel(handle.ifcModelID)
-  return types
-    .map(t => ({ typeName: t.typeName, count: handle.api.GetLineIDsWithType(handle.ifcModelID, t.typeID).size() }))
-    .filter(t => t.count > 0)
-    .sort((a, b) => b.count - a.count)
+  const counts = new Map<string, number>()
+  for (const name of buildIfcTypeByExpressId(handle).values()) counts.set(name, (counts.get(name) ?? 0) + 1)
+  return Array.from(counts, ([typeName, count]) => ({ typeName, count })).sort((a, b) => b.count - a.count)
 }
 
-// Every expressID of one IFC type (2026-07-11, per Maro: "select all the
-// doors" — Select by Type) — getTypeCounts above already looks up typeID
-// via the same GetAllTypesOfModel call, but only ever keeps the *count*,
-// discarding the actual ids. Reuses the exact .size()/.get(i) Vector
-// idiom this file already uses at loadIfcModel above for flatMeshes/
-// geometries.
+// Select from the same placed-element index as the type list and Materials.
 export function getExpressIdsForType(handle: IfcModelHandle, typeName: string): number[] {
-  const match = handle.api.GetAllTypesOfModel(handle.ifcModelID).find(t => t.typeName === typeName)
-  if (!match) return []
-  const ids = handle.api.GetLineIDsWithType(handle.ifcModelID, match.typeID)
   const out: number[] = []
-  for (let i = 0; i < ids.size(); i++) out.push(ids.get(i))
+  for (const [id, name] of buildIfcTypeByExpressId(handle)) if (name === typeName) out.push(id)
   return out
 }
 
@@ -670,21 +290,28 @@ const elementPropertyDataCache = new WeakMap<IfcModelHandle, Promise<{
   loadBearingByExpressId: Map<number, boolean>
 }>>()
 
-// The inverse of getExpressIdsForType — every real element's own IFC type
-// name, in one bulk pass (2026-07-26, for the Filter dialog's Category
-// fallback — ElementFilterDialog.tsx) — iterates GetAllTypesOfModel's own
-// small, fixed list of distinct types actually present (never one call per
-// element) exactly like getTypeCounts above already does, just keeping the
-// ids themselves instead of only their count.
+// Index elements, not the geometry records that describe them. A faceted
+// model can have millions of points/faces per few thousand elements; indexing
+// those records exhausted the JS Map limit on Fort Tower. Bulk-read element
+// types, then cover rendered non-elements (e.g. spaces and annotations).
 export function buildIfcTypeByExpressId(handle: IfcModelHandle): Map<number, string> {
   const cached = ifcTypeByExpressIdCache.get(handle)
   if (cached) return cached
   const result = new Map<number, string>()
-  const types = handle.api.GetAllTypesOfModel(handle.ifcModelID)
-  for (const { typeID, typeName } of types) {
+  // GetAllTypesOfModel enumerates line IDs for every schema type internally,
+  // including millions of points/faces. Filter schema codes before querying WASM.
+  for (const typeID of handle.api.GetIfcEntityList(handle.ifcModelID)) {
+    if (!handle.api.IsIfcElement(typeID)) continue
+    const typeName = handle.api.GetNameFromTypeCode(typeID)
     const ids = handle.api.GetLineIDsWithType(handle.ifcModelID, typeID)
     for (let i = 0; i < ids.size(); i++) result.set(ids.get(i), typeName)
   }
+  const addRenderedType = (id: number) => {
+    if (!result.has(id)) result.set(id, handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.ifcModelID, id)))
+  }
+  if (handle.batch) for (const id of handle.batch.byExpressId.keys()) addRenderedType(id)
+  const meshIndex = handle.object.userData.expressIdMeshIndex as Map<number, THREE.Mesh[]> | undefined
+  if (meshIndex) for (const id of meshIndex.keys()) addRenderedType(id)
   ifcTypeByExpressIdCache.set(handle, result)
   return result
 }

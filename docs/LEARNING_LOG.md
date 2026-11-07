@@ -8507,3 +8507,90 @@ All specified cleanup targets are absent. C: finished with 128.73 GiB free;
 47.88 GiB of file content was relocated or deleted (other system activity can
 affect the net free-space change). The relocation and cleanup scripts are scoped
 to explicit paths and refuse junctions in deletion targets.
+
+### 6 November 2026 — Fort Tower IFC native-memory abort
+
+Reproduced `Aborted(native code called abort())` with the user's original
+`Fort Tower_R2023.ifc` (1,986,263,821 bytes, IFC2X3). The IFC records opened,
+but `LoadAllGeometry` retained generated geometry until the 32-bit WebAssembly
+heap reached its limit. This export contains roughly 9.8 million faceted faces.
+Changing file names or re-exporting the model was not necessary.
+
+The shared IFC loader now uses `StreamAllMeshes`, extracts owned geometry buffers
+inside each callback, and copies placement matrices and colours before the
+native per-element cache is released. It retains the existing batched renderer,
+selectable element identities, material UVs, reflected geometry handling and
+shared federation origin. Failed loads dispose the API and temporary geometry;
+the shared origin is committed only after a successful scene build. IFC
+properties remain available through the open model.
+
+Validation: TypeScript passed; six focused tests passed, including real IFC
+parity, callback lifetime, repeated and multipart geometry, mirrors, selection,
+shared origin and failure cleanup. The complete original Fort Tower file built
+11,724 elements and 27,657 unique shapes. A separate Electron test using the
+actual frontend loader rendered it successfully in about 27.5 seconds, with
+54,811 placements and no WebGL error or lost context. Sampled IFC GlobalIds and
+selection/materialisation checks passed. The rendered screenshot was reviewed.
+Evidence is in `outputs/fort-tower-render-result.json`,
+`outputs/fort-tower-render.png` and `outputs/fort-tower-scene-result.json`.
+
+This removes the demonstrated native geometry-cache failure, not the overall
+memory cost of very large IFCs; the full scene CPU test used about 9 GB RSS.
+Desktop hotfix version is 0.2.44 on the existing Stable application identity,
+so it opens the user's existing Stable workspace. The public website release
+catalogue remains at its published version until a separate publishing request.
+
+Packaged and verified `Prosota-Planner-Stable-0.2.44-Setup.exe` (282,706,418
+bytes). The packaged UI matches the tested build and contains the streaming IFC
+loader; the packaged application identifies itself as Stable 0.2.44. Installer
+SHA-256 matches its release manifest:
+`E6A37B7D4E9475EBE219AD0B9BAC23A447B4C2788BB26BD59398F389A676841D`.
+
+## 2026-11-06 — IFC material mapping after the Fort Tower streaming fix
+
+The geometry loaded in 0.2.44, but the Materials panel incorrectly reported
+"No model materials loaded." Reproduced `Map maximum size exceeded` during
+`extractRealisticMaterialInfo`: the type lookup indexed every IFC record,
+including millions of geometry points and faces. The caller then cached an
+empty mapping as though the read had succeeded. This was a Prosota lookup
+failure, not missing material definitions in the user's export.
+
+The type index now bulk-loads only IFC elements, plus any rendered non-element
+types such as spaces and annotations. It keeps the per-model cache and includes
+selected pieces materialised out of the renderer's batches. Failed material
+reads no longer become cached empty successes; the panel identifies the failed
+models and offers Retry material lookup.
+
+Validation: 12 focused tests and TypeScript passed, covering bounded indexing,
+native model IDs, styles, direct material overrides, inherited layers, selected
+pieces, reopened handles and the existing streaming/material checks. The hidden
+Electron test loaded and rendered the complete original Fort Tower IFC, then
+read 65 material entries covering all 11,724 elements in about 0.151 seconds.
+Concrete, brick, glass and grass mappings were present. The complete load,
+selection and material check took about 24 seconds; the render was reviewed.
+Evidence: `outputs/fort-tower-render-result.json` and
+`outputs/fort-tower-render.png`.
+
+Prepared local Stable hotfix 0.2.45 using the existing application identity and
+workspace. Public release catalogue and website are unchanged; installation
+is left to the user.
+
+Packaged and verified `Prosota-Planner-Stable-0.2.45-Setup.exe` (282,706,553
+bytes). All 52 packaged UI files match the tested build, and the packaged app
+identifies itself as Stable 0.2.45. The installer checksum matches its manifest:
+`7250A94602320635816A6808108D95E660735DE6C55C309EAE3EC2C623E84816`.
+
+## 2026-11-07 · Fort Tower material lookup on reopening (Stable 0.2.46)
+
+The installed app could draw the complete tower, then abort in the native IFC
+reader before the Materials panel populated. The isolated material test missed
+an important part of reopening a project: the IFC Data panel also enumerated
+every entity type, including the geometry records. The two panels now share
+one index. It asks the reader only about IFC element types and adds other
+rendered products (such as spaces) from the scene. Closing the model releases
+the index with its handle.
+
+Regression check: open the real 1.99 GB IFC, render, read the spatial tree,
+expand IFC Data, select an element and read material mappings in the same
+session. The renderer completed 17,785,021 triangles; material lookup returned
+65 mappings for 11,724 elements, including brick, concrete, glass and grass.

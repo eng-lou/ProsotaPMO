@@ -6031,10 +6031,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [siteRealisticSources, setSiteRealisticSources] = useState<{objectId:string; name:string; isIfc:boolean; info:RealisticModelInfo}[]>([])
   const siteMaterialSignature = JSON.stringify([...siteScene.scene.items, ...(siteScene.draft ? [siteScene.draft] : [])].map(i=>[i.id,i.asset_id,i.name,i.kind,i.finish,i.placement_kind,i.geographic,i.asset_part]))
   const [realisticAnalysing, setRealisticAnalysing] = useState(false)
+  const [realisticLoadErrors, setRealisticLoadErrors] = useState<string[]>([])
+  const [realisticRetry, setRealisticRetry] = useState(0)
   useEffect(() => {
     if (settings.renderMode !== 'realistic') return
     let cancelled = false
     const run = async () => {
+      const errors: string[] = []
+      setRealisticLoadErrors([])
       const missingIfc = ifcHandles.filter(h => !h.object.userData.realisticMaterialInfo)
       if (missingIfc.length > 0) {
         setRealisticAnalysing(true)
@@ -6043,11 +6047,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           if (cancelled) break
           // Yield between models so the "Analysing" state can paint.
           await new Promise(resolve => setTimeout(resolve, 0))
+          if (cancelled) return
           try {
             handle.object.userData.realisticMaterialInfo = extractRealisticMaterialInfo(handle)
           } catch (err) {
             console.error('[4D] Realistic Materials: material extraction failed', err)
-            handle.object.userData.realisticMaterialInfo = { entries: new Map(), keyByPiece: new Map(), keyByExpressId: new Map() }
+            // A failed read must remain retryable, not become a cached empty success.
+            errors.push(sceneObjects.find(o => o.object === handle.object)?.name || 'IFC model')
           }
         }
       }
@@ -6064,6 +6070,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       if (cancelled) return
       const siteModels = siteSources.filter((s): s is NonNullable<typeof s> => s !== null)
       setSiteRealisticSources(siteModels)
+      setRealisticLoadErrors(errors)
       setRealisticAnalysing(false)
       setRealisticEntries(mergeRealisticEntries([...sceneObjects.map(o => o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined), ...siteModels.map(s=>s.info)]))
       setRealisticEntryModels(entryModelsByKey([...sceneObjects.map(o => ({
@@ -6072,9 +6079,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       })), ...siteModels]))
       setRealisticInfoVersion(v => v + 1)
     }
-    run()
+    run().catch(err => {
+      console.error('[4D] Realistic Materials: material analysis failed', err)
+      if (!cancelled) {
+        setRealisticLoadErrors(['the loaded models'])
+        setRealisticAnalysing(false)
+      }
+    })
     return () => { cancelled = true }
-  }, [settings.renderMode, ifcHandles, sceneObjects, siteMaterialSignature])
+  }, [settings.renderMode, ifcHandles, sceneObjects, siteMaterialSignature, realisticRetry])
 
   // Material keys used by the current selection (2026-10-02, per Maro: "when
   // i select the element i want to see filter to see the element in the
@@ -7262,6 +7275,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           </div>}
           entries={realisticEntries} mapping={realisticMapping} onMappingChange={setRealisticMapping}
           analysing={realisticAnalysing} entryModels={realisticEntryModels} onSelectEntry={handleSelectRealisticEntry}
+          loadErrors={realisticLoadErrors} onRetry={() => setRealisticRetry(value => value + 1)}
           selectionKeys={selectedRealisticKeys}
           glassTransmission={settings.realisticGlassTransmission}
           onGlassTransmissionChange={value => setSettings({ ...settings, realisticGlassTransmission: value })}

@@ -52,7 +52,7 @@ function shortModelName(name: string): string {
 // only a person can settle them.
 export function RealisticMaterialsPanel({
   entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry, glassTransmission, onGlassTransmissionChange,
-  selectionKeys = null, customEditor,
+  selectionKeys = null, customEditor, loadErrors = [], onRetry,
 }: {
   // Materials used by the current viewport selection (null = nothing
   // selected). When set, the list narrows to just those (2026-10-02).
@@ -62,6 +62,8 @@ export function RealisticMaterialsPanel({
   mapping: RealisticMaterialMap
   onMappingChange: (mapping: RealisticMaterialMap) => void
   analysing: boolean
+  loadErrors?: string[]
+  onRetry?: () => void
   // Which IFC models use each entry — one Select button per model
   // (2026-09-29, per Maro: to see what an unmatched "IfcBeam (no material)"
   // actually is before mapping it).
@@ -140,7 +142,13 @@ export function RealisticMaterialsPanel({
           </>
         )}
       </div>
-      {!analysing && entries.length === 0 && (
+      {!analysing && loadErrors.length > 0 && (
+        <div role="alert" className="px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+          <p>Could not read material mapping for {loadErrors.join(', ')}.</p>
+          {onRetry && <button onClick={onRetry} className="mt-2 rounded border border-current px-2 py-1">Retry material lookup</button>}
+        </div>
+      )}
+      {!analysing && loadErrors.length === 0 && entries.length === 0 && (
         <p className="px-3 py-2 text-[11px] text-gray-400 dark:text-prosota-muted">No model materials loaded.</p>
       )}
       <div className="shrink-0 divide-y divide-gray-100 dark:divide-prosota-line">
