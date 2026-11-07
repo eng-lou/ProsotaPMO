@@ -1,3 +1,4 @@
+import { materialScope } from './materialScope'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { type ThreeEvent, useFrame } from '@react-three/fiber'
 import { applySitePath } from './sitePathMotion'
@@ -30,7 +31,7 @@ function ShapeMaterial({ item, mapping, transmission, preview, colour, textures,
     // Tint overrides must not mutate the authored colour across finish changes.
     if(!textures?.map)source.color.set(colour)
     source.userData.exportColour=textures?.map?'#ffffff':item.kind==='fence'?'#ffffff':slot==='trunk'?'#795548':slot==='windows'?'#334155':item.color
-    const result = mapping && !hasCustomTextures(textures) ? siteMaterialLook(source, primitiveMaterialKey(item.id, slot), item.finish==='water'?{[primitiveMaterialKey(item.id,slot)]:'water',...mapping}:mapping, !!transmission) : source
+    const result = mapping && !hasCustomTextures(textures) ? siteMaterialLook(source, primitiveMaterialKey(item.id, slot), item.finish==='water'?{...mapping,[primitiveMaterialKey(item.id,slot)]:mapping[primitiveMaterialKey(item.id,slot)] || 'water'}:mapping, !!transmission) : source
     result.userData.exportColour=source.userData.exportColour
     if(item.kind==='fence')result.userData.exportInstanceColour=item.color
     return result
@@ -75,7 +76,7 @@ function Fence({ item, selected, preview, select, state }: { state: SiteLayerSta
   }, [item, selected, preview])
   return <instancedMesh ref={mesh} args={[undefined, undefined, panels.length]} castShadow receiveShadow
     onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); if (!preview && event.delta <= 4 && event.instanceId !== undefined) select(panels[event.instanceId].id) }}>
-    <boxGeometry args={[1, 1, 1]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} colour="#ffffff" />
+    <boxGeometry args={[1, 1, 1]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={state.materialMapping && materialScope(state.materialMapping, 'site:' + item.id)} transmission={state.glassTransmission} preview={preview} colour="#ffffff" />
   </instancedMesh>
 }
 function FootprintGeometry({item}:{item:SiteItem}) {
@@ -133,7 +134,9 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     new THREE.Vector2(item.width / 2, item.depth * .1),
     new THREE.Vector2(0, item.depth * .5),
   ]), [item.width, item.depth])
-  const material = <ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} colour={colour} />
+  const ownerMapping = state.materialMapping && materialScope(state.materialMapping, 'site:' + item.id)
+  const mapping = ownerMapping && instanceIndex !== undefined ? materialScope(ownerMapping, 'instance:' + instanceIndex) : ownerMapping
+  const material = <ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={mapping} transmission={state.glassTransmission} preview={preview} colour={colour} />
   return <group ref={motionRoot}><group ref={selectable} position={[item.position.x, item.position.y, item.position.z]}
     rotation={[item.rotation?.x || 0, item.rotation?.y || 0, item.rotation?.z || 0]}
     scale={[item.scale?.x ?? 1, item.scale?.y ?? 1, item.scale?.z ?? 1]}
@@ -141,19 +144,19 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     <group>
     <group ref={root} userData={{ isSitePreview: preview }} visible={preview || !item.activity_id || presentAt(activity, dateRef.current)}>
     <group key={item.kind==='geographic'||item.kind==='asset'?item.id:item.color + ':' + state.selected + ':' + preview}>
-    {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={state.materialMapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface)=>{if(state.boxSelecting)return;state.onSelect(item.id);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :
+    {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={mapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface)=>{if(state.boxSelecting)return;state.onSelect(item.id);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :
     item.kind === 'shape' ? <mesh castShadow receiveShadow onClick={e=>{e.stopPropagation();if(!preview)state.onSelect(item.id,e.shiftKey||e.ctrlKey||e.metaKey)}}><FootprintGeometry item={item}/>{material}</mesh> :
     (item.kind==='array'||item.kind==='scatter') ? <group>{item.layout?.placements?.map((placement,index)=>{const override=item.instance_overrides?.[index];return <Item key={index} instance instanceIndex={index} item={{...item,...override,kind:override?'asset':item.placement_kind || 'tree',position:placement.position,yaw:placement.yaw+item.yaw,layout:null,activity_id:null,object_state:null,rotation:undefined,scale:undefined,animation_playing:override?false:item.animation_playing}} state={state} preview={preview} dateRef={dateRef} links={[]} activities={[]} profiles={[]} />})}</group> :
     item.kind === 'fence' ? <group><Fence state={state} item={item} selected={state.selected} preview={preview} select={state.onSelect} /></group> :
       <group quaternion={rotation}
         onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); if (!state.boxSelecting && !preview && e.delta <= 4) {state.onSelect(item.id, e.ctrlKey || e.metaKey || e.shiftKey);state.onDetailSelect?.({itemId:item.id,instanceIndex})} }}>
-        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
+        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={mapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
         {(item.kind === 'context' || item.kind === 'cabin') && <>
           <mesh position={[0, item.height / 2, 0]} castShadow receiveShadow><boxGeometry args={[item.width, item.height, item.depth]} />{material}</mesh>
-          {item.kind === 'cabin' && <mesh position={[0, item.height * .6, item.depth / 2 + .005]}><planeGeometry args={[item.width * .65, item.height * .3]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="windows" mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} colour="#334155" /></mesh>}
+          {item.kind === 'cabin' && <mesh position={[0, item.height * .6, item.depth / 2 + .005]}><planeGeometry args={[item.width * .65, item.height * .3]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="windows" mapping={mapping} transmission={state.glassTransmission} preview={preview} colour="#334155" /></mesh>}
         </>}
         {item.kind === 'tree' && <>
-          <mesh position={[0, item.height * .25, 0]} castShadow><cylinderGeometry args={[item.width * .035, item.width * .05, item.height * .5, 8]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="trunk" mapping={state.materialMapping} transmission={state.glassTransmission} preview={preview} colour="#795548" /></mesh>
+          <mesh position={[0, item.height * .25, 0]} castShadow><cylinderGeometry args={[item.width * .035, item.width * .05, item.height * .5, 8]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="trunk" mapping={mapping} transmission={state.glassTransmission} preview={preview} colour="#795548" /></mesh>
           <mesh position={[0, item.height * .65, 0]} scale={[item.width / 2, item.height * .35, item.depth / 2]} castShadow><sphereGeometry args={[1, 12, 8]} />{material}</mesh>
         </>}
         {item.kind === 'person' && <>

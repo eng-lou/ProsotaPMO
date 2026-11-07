@@ -1,3 +1,4 @@
+import { materialScope } from './materialScope'
 import * as T from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import type { GeographicContext, MapFeature, XY } from './geographicContext'
@@ -59,11 +60,12 @@ export function buildGeographicContext(data: GeographicContext, treeTemplate?: T
       const family=currentFeature.kind!=='building'?'surface':surface.startsWith('wall:')?'walls':surface
       const key=geographicMaterialKey(options.itemId||'',currentFeature.kind,family)
       const authored=currentFeature.replacement?currentFeature.surfaces?.[surface]:currentFeature.surfaces?.[surface] || currentFeature.surfaces?.[family] || currentFeature.surfaces?.surface
-      const cache=m.uuid+key+JSON.stringify(authored||{})
-      if((authored || options.mapping?.[key]) && m instanceof T.MeshStandardMaterial){
+      const mapping = options.mapping && materialScope(options.mapping, 'feature:' + currentFeature.id)
+      const cache = JSON.stringify([m.uuid, key, authored, mapping?.[key], mapping?.['colour:' + key], mapping?.['texture:' + key]])
+      if((authored || mapping?.[key] || mapping?.['colour:' + key]) && m instanceof T.MeshStandardMaterial){
         if(!overrides.has(cache)){let next=m.clone();if(authored?.color)next.color.set(authored.color)
           if(authored?.finish && authored.finish!=='original'){const variant=getRealisticVariant(next,REALISTIC_CLASSES.indexOf(authored.finish)+1,next.color.clone(),false) as T.MeshStandardMaterial;next.dispose();next=variant}
-          else if(!authored&&options.mapping)next=siteMaterialLook(next,key,options.mapping,false)
+          else if(!authored&&mapping)next=siteMaterialLook(next,key,mapping,false)
           overrides.set(cache,next)}m=overrides.get(cache)!
       }
     }
@@ -175,13 +177,24 @@ export function buildGeographicContext(data: GeographicContext, treeTemplate?: T
   if(trees.length && treeTemplate){
     treeTemplate.updateMatrixWorld(true)
     const b=new T.Box3().setFromObject(treeTemplate),size=b.getSize(new T.Vector3()),center=b.getCenter(new T.Vector3())
+    const treeKey = geographicMaterialKey(options.itemId || '', 'tree', 'surface')
+    const groups = new Map<string, {mapping: typeof options.mapping; trees: typeof trees}>()
+    for (const tree of trees) {
+      const mapping = options.mapping && materialScope(options.mapping, 'feature:' + tree.id)
+      const look = JSON.stringify([mapping?.[treeKey], mapping?.['colour:' + treeKey], mapping?.['texture:' + treeKey]])
+      const group = groups.get(look)
+      if (group) group.trees.push(tree)
+      else groups.set(look, {mapping, trees: [tree]})
+    }
     treeTemplate.traverse(o=>{if(!(o instanceof T.Mesh))return
       const geo=o.geometry.clone().applyMatrix4(o.matrixWorld).translate(-center.x,-b.min.y,-center.z)
       geo.rotateX(Math.PI/2);geo.scale(1/size.y,1/size.y,1/size.y)
-      const copy=(material:T.Material)=>{const value=material.clone();return options.mapping&&value instanceof T.MeshStandardMaterial?siteMaterialLook(value,geographicMaterialKey(options.itemId||'','tree','surface'),options.mapping,false):value}
-      const m=Array.isArray(o.material)?o.material.map(copy):copy(o.material),inst=new T.InstancedMesh(geo,m,trees.length)
-      for(const material of Array.isArray(m)?m:[m])if(material instanceof T.MeshStandardMaterial && material.alphaTest>0){material.alphaToCoverage=true;material.transparent=false;material.depthWrite=true;material.emissiveMap=material.map;material.emissive.set('#a6b78a');material.emissiveIntensity=.35}
-      inst.userData.featureInstances=trees.map(t=>t.id);inst.name='tree · Poly Haven';trees.forEach((t,i)=>{const rand=random(t.seed),height=t.height;inst.setMatrixAt(i,new T.Matrix4().compose(new T.Vector3(t.point[0],t.point[1],.14),new T.Quaternion().setFromAxisAngle(new T.Vector3(0,0,1),rand()*Math.PI*2),new T.Vector3(height,height,height)));inst.setColorAt(i,new T.Color().setHSL(.23+rand()*.05,.13+rand()*.1,.72+rand()*.15))});inst.castShadow=inst.receiveShadow=true;inst.computeBoundingSphere();root.add(inst)
+      for (const {mapping, trees: group} of groups.values()) {
+        const copy=(material:T.Material)=>{const value=material.clone();return mapping&&value instanceof T.MeshStandardMaterial?siteMaterialLook(value,treeKey,mapping,false):value}
+        const m=Array.isArray(o.material)?o.material.map(copy):copy(o.material),inst=new T.InstancedMesh(geo,m,group.length)
+        for(const material of Array.isArray(m)?m:[m])if(material instanceof T.MeshStandardMaterial && material.alphaTest>0){material.alphaToCoverage=true;material.transparent=false;material.depthWrite=true;material.emissiveMap=material.map;material.emissive.set('#a6b78a');material.emissiveIntensity=.35}
+        inst.userData.featureInstances=group.map(t=>t.id);inst.name='tree · Poly Haven';group.forEach((t,i)=>{const rand=random(t.seed),height=t.height;inst.setMatrixAt(i,new T.Matrix4().compose(new T.Vector3(t.point[0],t.point[1],.14),new T.Quaternion().setFromAxisAngle(new T.Vector3(0,0,1),rand()*Math.PI*2),new T.Vector3(height,height,height)));inst.setColorAt(i,new T.Color().setHSL(.23+rand()*.05,.13+rand()*.1,.72+rand()*.15))});inst.castShadow=inst.receiveShadow=true;inst.computeBoundingSphere();root.add(inst)
+      }
     })
   }
   // Imported replacements are baked at their own static pose and batched by material.

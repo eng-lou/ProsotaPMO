@@ -1,3 +1,4 @@
+import { materialScope } from './materialScope'
 import { SimulationPlayback } from '../simulator/SimulationPlayback'
 import { rememberDesignPose } from '../simulator/handling'
 import type { Scenario as SimulationScenario } from '../simulator/types'
@@ -116,6 +117,7 @@ import type { Measurement, MeasurementPoint } from './measurements'
 import type { MeasuringTool } from './MeasurementsPanel'
 
 export interface ImportedObject {
+  materialOwner?: string
   id: string
   kind: 'ifc' | 'mesh'
   // Chosen per-object at import time (ImportModelDialog.tsx), not inferred
@@ -1508,7 +1510,8 @@ function ModelObjects({
 
     let remainingSubdivisionBudget = MAX_TOTAL_SUBDIVIDED_TRIANGLES
     const isolatedModelsWithElements = modelsWithElementKeys(isolatedElementKeys)
-    for (const { id, kind, object } of objects) {
+    for (const { id, kind, object, materialOwner } of objects) {
+      const objectMapping = materialScope(realisticMapping, materialOwner ?? id)
       const isObjectSelected = selectedObjectIds.has(id)
       const isObjectIsolated = isolatedObjectIds.has(id)
       // Isolating with at least one specific sub-element in the frozen
@@ -1974,11 +1977,11 @@ function ModelObjects({
               const realisticInfo = object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
               const realisticClass = hasExplicitMaterial
                 ? 0
-                : classIndexForMesh(child, mat, realisticInfo, realisticMapping)
+                : classIndexForMesh(child, mat, realisticInfo, objectMapping)
               // A colour override (Realistic Materials panel) alone is
               // enough to use the realistic variant: with no class it's a
               // plain material in the chosen colour.
-              const colourOverride = hasExplicitMaterial ? null : colourOverrideForMesh(child, mat, realisticInfo, realisticMapping)
+              const colourOverride = hasExplicitMaterial ? null : colourOverrideForMesh(child, mat, realisticInfo, objectMapping)
               if (realisticClass > 0 || colourOverride) {
                 displayMaterials.push(getRealisticVariant(
                   mat, realisticClass, original?.color, settings.realisticGlassTransmission,
@@ -1987,7 +1990,7 @@ function ModelObjects({
                   // has to come from the import-time capture instead.
                   (child.userData.ifcColorAlpha as number | undefined) ?? 1,
                   colourOverride,
-                  textureSettingsForMesh(child, mat, realisticInfo, realisticMapping),
+                  textureSettingsForMesh(child, mat, realisticInfo, objectMapping),
                 ))
               } else {
                 disposeRealisticVariant(mat)
@@ -2233,7 +2236,7 @@ function ModelObjects({
           const wholeObjectOverride = customTextures[id]
           const suppressed = !!wholeObjectOverride && Object.values(wholeObjectOverride).some(Boolean)
           batch.mesh.material = applyRealisticToBatch(
-            batch, batchMat, object.userData.realisticMaterialInfo as RealisticModelInfo | undefined, realisticMapping,
+            batch, batchMat, object.userData.realisticMaterialInfo as RealisticModelInfo | undefined, objectMapping,
             suppressed, settings.realisticGlassTransmission, settings.shadows,
           )
         } else {

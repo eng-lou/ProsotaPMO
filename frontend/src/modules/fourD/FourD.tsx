@@ -1,3 +1,4 @@
+import { type MaterialTarget } from './materialScope'
 import { useWorkingSequence } from '../simulator/useWorkingSequence'
 import { Simulator } from '../simulator/Simulator'
 import type { Scenario as SimulationScenario } from '../simulator/types'
@@ -47,7 +48,7 @@ import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
 import { isBundle, unpackBundle } from './fileBundle'
 import { createPointCloudObject, parseXyzFile } from './pointCloud'
 import { deleteSavedEnvironment, loadCustomEnvironment, loadSavedEnvironment, saveEnvironment, type SavedEnvironment } from './environmentHdr'
-import { disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
+import { adjustSelectedTextures, type TextureAdjustment, disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
 import { createSiteContextUpdates } from './siteContextUpdates'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
 import { findLinkedExpressIds } from './linkedMaterials'
@@ -3384,7 +3385,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleSelectUnassigned = (objectIds: string[], expressIdsByObject: Map<string, number[]>) => {
     if (objectIds.length === 0 && expressIdsByObject.size === 0) return
     const allExpressIds = [...expressIdsByObject.values()].flat()
-    setSelectedExpressIds(new Set(allExpressIds))
+    setIfcPick(new Map([...expressIdsByObject].map(([owner, ids]) => [owner, new Set(ids)])))
     // Only a genuine single-element result gets a "primary" element
     // (2026-07-17 fix — see handleBoxSelect's own header for why).
     setSelectedExpressId(allExpressIds.length === 1 ? allExpressIds[0] : null)
@@ -4005,6 +4006,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // stays the single "primary" one (Object Information panel, the specific
   // blue tint) — this is the full set, for isolate/viewport highlighting.
   const [selectedExpressIds, setSelectedExpressIds] = useState<Set<number>>(new Set())
+  // Keep file ownership wherever a pick gives us qualified IFC IDs.
+  // Legacy selection consumers still use the flattened set for display.
+  const [qualifiedPick, setQualifiedPick] = useState<{ flat: Set<number>; byModel: Map<string, Set<number>> } | null>(null)
+  const pickedByModel = qualifiedPick?.flat === selectedExpressIds ? qualifiedPick.byModel : null
+  function currentIfcPick() {
+    if (pickedByModel) return new Map(pickedByModel)
+    return new Map(activeIfcModelId && selectedObjectIds.has(activeIfcModelId) && selectedExpressIds.size
+      && sceneObjects.filter(o => o.kind === 'ifc' && selectedObjectIds.has(o.id)).length === 1
+      ? [[activeIfcModelId, selectedExpressIds]] : [])
+  }
+  function setIfcPick(byModel: Map<string, Set<number>>) {
+    const flat = new Set<number>()
+    let count = 0
+    for (const ids of byModel.values()) {
+      count += ids.size
+      for (const id of ids) flat.add(id)
+    }
+    setQualifiedPick({ flat, byModel })
+    setSelectedExpressIds(flat)
+    setSelectedExpressId(count === 1 ? [...flat][0] : null)
+  }
   // Whole-object selection for the Transform panel/gizmo (2026-07-11, per
   // Maro) — distinct from selectedExpressId above (an IFC sub-element,
   // shown in the IFC Data tab); see Viewport3D.tsx's handleClick for how a
@@ -4829,7 +4851,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       const parsed = [...isolatedElementKeys].map(parseElementKey).filter((p): p is { objectId: string; expressId: number } => p !== null)
       const expressIds = [...new Set(parsed.map(p => p.expressId))]
       const models = [...new Set(parsed.map(p => p.objectId))]
-      setSelectedExpressIds(new Set(expressIds))
+      const byModel = new Map<string, Set<number>>()
+      for (const { objectId, expressId } of parsed) {
+        if (!byModel.has(objectId)) byModel.set(objectId, new Set())
+        byModel.get(objectId)!.add(expressId)
+      }
+      setIfcPick(byModel)
       // Only a genuine single-element result gets a "primary" element
       // (2026-07-17 fix — see handleBoxSelect's own header for why).
       setSelectedExpressId(expressIds.length === 1 ? expressIds[0] : null)
@@ -4847,7 +4874,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // about elements" — this used to only ever populate selectedObjectIds,
     // same bug class box-select's own element-level rework fixed earlier).
     const allExpressIds = [...expressIdsByObject.values()].flat()
-    setSelectedExpressIds(new Set(allExpressIds))
+    setIfcPick(new Map([...expressIdsByObject].map(([owner, ids]) => [owner, new Set(ids)])))
     // Only a genuine single-element result gets a "primary" element
     // (2026-07-17 fix — see handleBoxSelect's own header for why).
     setSelectedExpressId(allExpressIds.length === 1 ? allExpressIds[0] : null)
@@ -4876,19 +4903,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (objectIds.length === 0 && expressIdsByObject.size === 0) return
     const allExpressIds = [...expressIdsByObject.values()].flat()
     if (allExpressIds.length > 0) {
-      const nextExpressIds = new Set([...selectedExpressIds, ...allExpressIds])
-      setSelectedExpressIds(nextExpressIds)
-      // Only a genuine single-element result gets a "primary" element
-      // (2026-07-17 fix, per Maro: "select all elements and sectioning
-      // doesn't work" — box-select was setting this to whichever element
-      // happened to be "last" even across a multi-element drag, which
-      // handleCreateSectionBox's own selectedExpressId !== null check
-      // (and the TransformPanel gizmo's own target resolution) both read
-      // as "exactly one element is selected," silently misrouting any
-      // multi-element box-select into a bogus single-element scope. Same
-      // "null unless exactly one" convention handleSelectCollection/
-      // handleSelectCollectionMember already use.
-      setSelectedExpressId(nextExpressIds.size === 1 ? [...nextExpressIds][0] : null)
+      const pick = currentIfcPick()
+      for (const [owner, ids] of expressIdsByObject) pick.set(owner, new Set([...(pick.get(owner) ?? []), ...ids]))
+      setIfcPick(pick)
     }
     setSelectedObjectIds(prev => new Set([...prev, ...objectIds, ...expressIdsByObject.keys()]))
     const lastObjectId = allExpressIds.length > 0 ? [...expressIdsByObject.keys()].pop()! : objectIds[objectIds.length - 1]
@@ -4924,22 +4941,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       setSelectedExpressIds(new Set())
       return
     }
-    if (!additive) {
-      setSelectedExpressId(expressID)
-      setSelectedExpressIds(new Set([expressID]))
-    } else {
-      const next = new Set(selectedExpressIds)
-      if (next.has(expressID)) next.delete(expressID); else next.add(expressID)
-      setSelectedExpressIds(next)
-      // Only a genuine single-element result gets a "primary" element
-      // (2026-07-17 fix — see handleBoxSelect's own header for why) — a
-      // ctrl+click that leaves (or lands on) more than one element selected
-      // must not pin selectedExpressId to whichever one was just toggled.
-      setSelectedExpressId(next.size === 1 ? [...next][0] : null)
-    }
+    const owner = objectId ?? activeIfcModelId
+    if (!owner) return
+    const pick = additive ? currentIfcPick() : new Map<string, Set<number>>()
+    const ids = new Set(pick.get(owner))
+    if (additive && ids.has(expressID)) ids.delete(expressID)
+    else ids.add(expressID)
+    pick.set(owner, ids)
+    setIfcPick(pick)
     if (objectId) {
       setActiveIfcModelId(objectId)
-      setSelectedObjectIds(prev => (prev.has(objectId) ? prev : new Set([...prev, objectId])))
+      setSelectedObjectIds(prev => additive ? new Set([...prev, objectId]) : new Set([objectId]))
       setActiveObjectId(objectId)
     }
   }
@@ -4973,15 +4985,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const handle = getIfcHandleFor(objectId)
     const geometryFiltered = handle ? expressIDs.filter(id => hasGeometry(handle.object, id)) : expressIDs
     const resolvedIds = geometryFiltered.length > 0 ? geometryFiltered : expressIDs
-    const next = additive ? new Set([...selectedExpressIds, ...resolvedIds]) : new Set(resolvedIds)
-    setSelectedExpressIds(next)
-    // Only a genuine single-element result gets a "primary" element
-    // (2026-07-17 fix — see handleBoxSelect's own header for why); "select
-    // all the doors" matching more than one must not pin selectedExpressId
-    // to whichever door happened to resolve last.
-    setSelectedExpressId(next.size === 1 ? [...next][0] : null)
+    const pick = additive ? currentIfcPick() : new Map<string, Set<number>>()
+    pick.set(objectId, new Set([...(pick.get(objectId) ?? []), ...resolvedIds]))
+    setIfcPick(pick)
     setActiveIfcModelId(objectId)
-    setSelectedObjectIds(prev => (prev.has(objectId) ? prev : new Set([...prev, objectId])))
+    setSelectedObjectIds(prev => additive ? new Set([...prev, objectId]) : new Set([objectId]))
     setActiveObjectId(objectId)
   }
 
@@ -5497,18 +5505,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return changed ? next : prev
     })
   }
-  // Tile Size/Rotation's own forced re-render (2026-07-11) — TextureFields.tsx
-  // mutates each slot's live THREE.Texture.repeat/.rotation directly (its
-  // own Props header explains why: the renderer reads both every frame
-  // regardless, no React state needs to own either number itself), so
-  // nothing about `customTextures` actually changed shape here — this only
-  // exists to give those fields' own controlled inputs a fresh top-level
-  // object reference to re-render from, same trick TransformPanel.tsx's
-  // onFieldChange uses for object.position. Deliberately not
-  // onTransformChange (which also queues a debounced save to the
-  // element_transform endpoint) — a texture edit has nothing to do with
-  // that.
-  const handleTextureFieldChange = () => setCustomTextures(prev => ({ ...prev }))
+  const handleTextureFieldChange = (edit: TextureAdjustment) => {
+    const keys = resolveActiveTextureKeys()
+    setCustomTextures(prev => adjustSelectedTextures(prev, keys, edit))
+  }
 
   // Material Preset library (2026-07-09, per Maro: "Save the default
   // materials for the whole model... I can then add a new preset which
@@ -5586,32 +5586,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     if (!activeTextureKey || !activeObjectId) return
     const sourceValue = customTextures[activeTextureKey]?.[slot] ?? customTextures[resolveActiveTextureKeys()[0]]?.[slot]
     if (!sourceValue) return
-    if(!getIfcHandleFor(activeObjectId)) {
-      const keys=resolveActiveTextureKeys()
-      setCustomTextures(prev=>{const next={...prev};for(const key of keys)next[key]={...next[key],[slot]:sourceValue};return next});return
+    const targets = resolveActiveTextureKeys()
+    for (const [modelId, ids] of currentIfcPick()) {
+      const handle = getIfcHandleFor(modelId)
+      if (handle) for (const id of ids) ensureMaterialized(handle.object, id)
     }
-    // Materializes exactly the elements actually receiving this override,
-    // not the whole model (2026-08-24 perf fix, per Maro: "changing the
-    // textures makes the viewport laggy while orbiting" — see
-    // linkedMaterials.ts's own findLinkedExpressIds header for the full
-    // story). A still-batched instance has no way to carry its own texture
-    // at all — THREE.BatchedMesh shares one material across every
-    // instance — so an element that's actually getting a per-element
-    // texture override unavoidably has to become a real, individual mesh;
-    // this just scopes that unavoidable cost to only the elements this
-    // click is actually touching, the same as clicking each one
-    // individually would.
-    const handle = getIfcHandleFor(activeObjectId)
-    if (handle) {
-      for (const expressID of selectedExpressIds) ensureMaterialized(handle.object, expressID)
-      setMaterializeVersion(v => v + 1)
-    }
+    setMaterializeVersion(v => v + 1)
     setCustomTextures(prev => {
       const next = { ...prev }
-      for (const expressID of selectedExpressIds) {
-        const key = `${activeObjectId}::${expressID}`
-        next[key] = { ...next[key], [slot]: sourceValue }
-      }
+      for (const key of targets) next[key] = { ...next[key], [slot]: sourceValue }
       return next
     })
   }
@@ -5954,7 +5937,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // opening a side panel, anything — silently defeating the fix it exists
   // to honour.
   const viewportObjects: ImportedObject[] = useMemo(() => sceneObjects.map(o => ({
-    id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
+    id: o.id, materialOwner: o.fileId ?? o.object.uuid, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
     visible: !hiddenIds.has(o.id) && (!isolateMode || isolatedObjectIds.has(o.id)),
   })), [sceneObjects, hiddenIds, isolateMode, isolatedObjectIds])
   // Comparison views (2026-10-03, per Maro: "the isolate in the main view
@@ -5962,7 +5945,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // the main view's Isolate ignored; a view filters itself by its own
   // collection/scope instead.
   const paneObjects: ImportedObject[] = useMemo(() => sceneObjects.map(o => ({
-    id: o.id, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
+    id: o.id, materialOwner: o.fileId ?? o.object.uuid, kind: o.kind, sourceUpAxis: o.sourceUpAxis, object: o.object, name: o.name,
     visible: !hiddenIds.has(o.id),
   })), [sceneObjects, hiddenIds])
   const meshImports = sceneObjects.filter(o => o.kind === 'mesh').map(o => ({ id: o.id, name: o.name }))
@@ -6095,27 +6078,47 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // selected (panel shows everything). Element selections resolve through
   // each selected model's own per-piece material keys; a whole non-IFC
   // object contributes every material it has.
-  const selectedRealisticKeys = useMemo<Set<string> | null>(() => {
-    if (settings.renderMode !== 'realistic') return null
-
-    const ids = new Set(selectedExpressIds)
-    if (selectedExpressId !== null) ids.add(selectedExpressId)
-    if (ids.size === 0 && selectedObjectIds.size === 0) return null
-    const keys = new Set<string>()
-    for(const source of siteRealisticSources)if(selectedObjectIds.has(source.objectId))for(const key of source.info.entries.keys())keys.add(key)
-    for (const o of sceneObjects) {
-      if (!selectedObjectIds.has(o.id)) continue
-      const info = o.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
-      if (!info) continue
-      if (o.kind === 'ifc' && ids.size > 0) {
-        for (const id of ids) for (const key of keysForExpressId(info, id) ?? []) keys.add(key)
-      } else {
-        for (const key of info.entries.keys()) keys.add(key)
+  const selectedMaterialTargets = useMemo(() => {
+    if (!selectedObjectIds.size && !selectedExpressIds.size && selectedExpressId === null) return null
+    const targets = new Map<string, MaterialTarget[]>()
+    function include(keys: Iterable<string>, target: MaterialTarget) {
+      for (const key of keys) {
+        const list = targets.get(key)
+        if (list) list.push(target)
+        else targets.set(key, [target])
       }
     }
-    return keys
-    // realisticInfoVersion: re-run once material info has been extracted.
-  }, [settings.renderMode, selectedExpressId, selectedExpressIds, selectedObjectIds, sceneObjects, realisticInfoVersion, siteScene.selected, siteRealisticSources])
+    for (const source of siteRealisticSources) {
+      if (!selectedObjectIds.has(source.objectId)) continue
+      const item = siteScene.scene.items.find(i => 'site:' + i.id === source.objectId)
+      if (!item || item.locked) continue
+      const detail = siteScene.detailSelection
+      const target = [source.objectId]
+      if (detail?.itemId === item.id && detail.instanceIndex !== undefined) target.push('instance:' + detail.instanceIndex)
+      if (detail?.itemId === item.id && detail.featureId) {
+        target.push('feature:' + detail.featureId)
+        const feature = item.geographic?.features.find(f => f.id === detail.featureId)
+        const kind = feature?.kind ?? (detail.featureId.includes('~tree-') ? 'tree' : undefined)
+        if (kind) include([...source.info.entries.keys()].filter(key => key.startsWith('site-geo|' + item.id + '|' + kind + '|')), target)
+      } else include(source.info.entries.keys(), target)
+    }
+    const ids = new Set(selectedExpressIds)
+    if (selectedExpressId !== null) ids.add(selectedExpressId)
+    const selectedModels = sceneObjects.filter(o => selectedObjectIds.has(o.id))
+    for (const model of selectedModels) {
+      const info = model.object.userData.realisticMaterialInfo as RealisticModelInfo | undefined
+      if (!info || uploadProgress.has(model.id)) continue
+      const owner = model.fileId ?? model.object.uuid
+      if (model.kind === 'ifc' && (ids.size || pickedByModel?.has(model.id))) {
+        // Express IDs are file-local. A flattened, multi-file selection
+        // cannot identify their owners safely.
+        const elements = pickedByModel?.get(model.id) ?? (!pickedByModel && selectedModels.filter(o => o.kind === 'ifc').length === 1 ? ids : [])
+        for (const id of elements) include(keysForExpressId(info, id) ?? [], [owner, 'element:' + id])
+      } else include(info.entries.keys(), [owner])
+    }
+    return targets
+  }, [selectedObjectIds, selectedExpressIds, selectedExpressId, sceneObjects, realisticInfoVersion, siteRealisticSources,
+    siteScene.scene.items, siteScene.detailSelection, uploadProgress, pickedByModel])
 
   // Realistic Materials' own dock panel (2026-09-29, per Maro: mapping +
   // glass were "a bit compressed" inside 3D View Properties — "give them
@@ -6635,66 +6638,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // own whole-object override, or any other element's.
   const activeTextureKey = isElementTransform && activeObjectId ? `${activeObjectId}::${selectedExpressId}` : activeObjectId
 
-  // Clear Materials (2026-07-11, per Maro: "add a clear materials button so
-  // i can bulk wipe materials back to imported default") — the existing per-
-  // slot ✕ button already restores one channel to its captured original
-  // (see this file's own handleClearTexture and elementBaseline.ts's own
-  // header on what "original" means), this just does all six at once
-  // instead of six separate clicks. Removing each key entirely (rather than
-  // looping handleClearTexture per slot, which would leave a now-empty `{}`
-  // CustomTextureSet sitting in state) matches handleUnloadModel's own
-  // disposeCustomTextureSet usage elsewhere in this file — "no override at
-  // all" and "an override object with every slot cleared" should be the
-  // exact same state, not two representations of it.
-  //
-  // 2026-07-11 fix, per Maro: "clear materials doesnt work on bulk" — the
-  // very first version only ever cleared activeTextureKey, the *one*
-  // primary/last-clicked element. A multi-element pick (e.g. Select by Type
-  // scoped to a storey — IfcDataPanel.tsx's own Spatial Decomposition
-  // feature) very much expects "clear" to mean every selected element, not
-  // just the one that happened to be clicked last — exactly the same
-  // bulk-target resolution handleApplyToLinkedMaterial above already solved
-  // for the same "one action, many selected elements" shape, so this reuses
-  // that identical `${activeObjectId}::${expressID}` per selectedExpressIds
-  // key construction. hasAnyActiveTextureOverride shares the same
-  // resolution so the button's own visibility can't disagree with what
-  // clicking it would actually clear (a second, follow-up fix to the same
-  // report — the button was still only checking the *primary* element's
-  // own textures, so it could stay hidden entirely when the primary
-  // happened to carry no override but other selected elements did).
-  //
-  // Deliberately declared here, after activeTextureKey/isElementTransform
-  // above rather than up near this file's other texture handlers
-  // (2026-07-11 fix, per a real crash: "Cannot access 'isElementTransform'
-  // before initialization") — hasAnyActiveTextureOverride calls
-  // resolveActiveTextureKeys() *immediately*, during render, unlike
-  // handleClearAllActiveTextures itself (only invoked later, on click,
-  // by which point the whole render's `let`/`const` chain has already run
-  // once top-to-bottom) — so it genuinely needs activeIfcHandle to
-  // already exist at the point this line executes, not just by the time a
-  // user clicks something.
-  //
-  // Gated on activeIfcHandle, NOT isElementTransform (2026-07-29 fix, per
-  // Maro, after a real incident: box-selecting only the columns and
-  // applying a material changed the slabs too) — isElementTransform is only
-  // ever true for a genuine single-primary-element selection
-  // (handleSelectExpressId/handleSelectExpressIds both null out
-  // selectedExpressId the instant more than one expressID ends up selected,
-  // by design, so a click doesn't pin "primary" to whichever one happened
-  // to resolve last). That made this multi-key branch dead code for every
-  // *real* multi-element selection — a box-select or Select by Type/Storey
-  // covering more than one element always fell through to the
-  // single-activeTextureKey branch below, which resolves to the *whole
-  // object* the moment isElementTransform is false. Every write that used
-  // to go through this (Clear Materials, Opacity, and now Material Preset/
-  // texture upload/clear too) landed on the whole-model override instead of
-  // just the selected elements. activeIfcHandle only requires "this
-  // selection belongs to some loaded IFC model" — the actual per-element
-  // fan-out still depends on selectedExpressIds itself, same as before.
-  const resolveActiveTextureKeys = (): string[] =>
-    activeIfcHandle && activeObjectId && selectedExpressIds.size > 0
-      ? [...selectedExpressIds].map(expressID => `${activeObjectId}::${expressID}`)
-      : selectedObjectIds.size > 0 ? [...selectedObjectIds].filter(id => !siteScene.scene.items.some(i => 'site:'+i.id===id && i.locked)) : activeTextureKey ? [activeTextureKey] : []
+  const editingSiteDetail = siteScene.detailSelection && selectedObjectIds.has('site:' + siteScene.detailSelection.itemId)
+    && (siteScene.detailSelection.featureId !== undefined || siteScene.detailSelection.instanceIndex !== undefined)
+  const resolveActiveTextureKeys = (): string[] => {
+    if (editingSiteDetail) return []
+    const keys: string[] = []
+    const ifcPick = currentIfcPick()
+    for (const id of selectedObjectIds) {
+      if ((selectedExpressIds.size || ifcPick.has(id)) && getIfcHandleFor(id)) {
+        for (const element of ifcPick.get(id) ?? []) keys.push(id + '::' + element)
+      } else if (!siteScene.scene.items.some(item => item.locked && 'site:' + item.id === id)) keys.push(id)
+    }
+    return keys
+  }
   const hasAnyActiveTextureOverride = resolveActiveTextureKeys().some(key => {
     const set = customTextures[key]
     return (set && Object.keys(set).length > 0) || customOpacity[key] !== undefined
@@ -7264,7 +7220,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             <MaterialPresetPicker presets={materialPresets.presets} loading={materialPresets.loading}
               currentTextures={customTextures[resolveActiveTextureKeys()[0]] ?? {}} onApply={handleApplyMaterialPreset}
               onCreate={materialPresets.create} onUpdate={materialPresets.update} onDelete={materialPresets.remove} canApply={resolveActiveTextureKeys().length>0 && !activeSiteItem?.locked} />
-            {activeObjectId && <fieldset disabled={!!activeSiteItem?.locked}>
+            {activeObjectId && <fieldset disabled={!!activeSiteItem?.locked || !!editingSiteDetail}>
               <TextureFields textures={customTextures[resolveActiveTextureKeys()[0]]} opacity={customOpacity[resolveActiveTextureKeys()[0]]}
                 onOpacityChange={handleOpacityChange} onUploadTexture={handleUploadActiveTexture} onClearTexture={handleClearActiveTexture}
                 onFieldChange={handleTextureFieldChange} lengthUnitToMetres={activeIfcLengthUnitToMetres} unitDisplay={ifcUnitDisplay}
@@ -7276,7 +7232,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           entries={realisticEntries} mapping={realisticMapping} onMappingChange={setRealisticMapping}
           analysing={realisticAnalysing} entryModels={realisticEntryModels} onSelectEntry={handleSelectRealisticEntry}
           loadErrors={realisticLoadErrors} onRetry={() => setRealisticRetry(value => value + 1)}
-          selectionKeys={selectedRealisticKeys}
+          targetsByKey={selectedMaterialTargets}
           glassTransmission={settings.realisticGlassTransmission}
           onGlassTransmissionChange={value => setSettings({ ...settings, realisticGlassTransmission: value })}
         />

@@ -5,7 +5,8 @@ import { build } from 'esbuild'
 import * as THREE from 'three'
 
 const { outputFiles } = await build({
-  entryPoints: [fileURLToPath(new URL('../src/modules/fourD/realisticMaterials.ts', import.meta.url))],
+  stdin: { contents: "export * from './realisticMaterials'; export * from './materialScope'; export { adjustSelectedTextures } from './customTextures'",
+    resolveDir: fileURLToPath(new URL('../src/modules/fourD/', import.meta.url)) },
   bundle: true, write: false, format: 'esm', platform: 'node',
 })
 const m = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text + '\n//# sourceURL=realistic-materials-tests.mjs').toString('base64')}`)
@@ -94,4 +95,50 @@ test('batched transforms preserve glass geometry and use the same settings as in
   mesh.dispose()
   geometry.dispose()
   source.dispose()
+})
+
+
+test('two IFC walls sharing a finish keep independent batch and mesh appearances after reload', () => {
+  const owner = 'fort-tower-file'
+  const target = [owner, 'element:1']
+  const defaults = { wall: 'metal' }
+  const saved = m.editMaterialFields(defaults, [target], {
+    wall: 'brick', 'colour:wall': '#bb7010', 'texture:wall': JSON.stringify({ scale: 2, rotation: 90 }),
+  })
+  const restored = JSON.parse(JSON.stringify(saved))
+  const local = m.materialScope(restored, owner)
+  const otherFile = m.materialScope(restored, 'another-file')
+  const info = { entries: new Map(), keyByPiece: new Map([['1:1','wall'], ['2:1','wall']]), keyByExpressId: new Map() }
+  const mat = new THREE.MeshStandardMaterial()
+  const geo = new THREE.BoxGeometry()
+  const mesh = new THREE.BatchedMesh(2, 100, 200, mat)
+  const geometryId = mesh.addGeometry(geo)
+  const batch = { mesh, byExpressId: new Map(), geometryById: new Map([[geometryId, geo]]) }
+  for (const id of [1, 2]) {
+    batch.byExpressId.set(id, [{ instanceId: mesh.addInstance(geometryId), geometryId, ifcGeometryId: 1 }])
+    const piece = new THREE.Mesh(geo, mat)
+    piece.userData = {expressID: id, ifcGeometryId: 1}
+    assert.equal(m.classIndexForMesh(piece, mat, info, local), id === 1 ? 5 : 3)
+    assert.equal(m.classIndexForMesh(piece, mat, info, otherFile), 3)
+    assert.equal(m.colourOverrideForMesh(piece, mat, info, local)?.getHexString() ?? null, id === 1 ? 'bb7010' : null)
+  }
+  m.applyRealisticToBatch(batch, mat, info, local, false, false, false)
+  assert.deepEqual([...mesh.userData.realistic.classTexture.image.data.slice(0,8)], [5,3,1,0,3,2,0,0])
+  assert.equal(mesh.userData.realisticInstanceColours[0].getHexString(), 'bb7010')
+  assert.equal(mesh.userData.realisticInstanceColours[1], undefined)
+  const reset = m.editMaterialFields(restored, [target], {wall:null, 'colour:wall':null, 'texture:wall':null}, true)
+  assert.deepEqual(reset, defaults)
+  mesh.dispose(); mat.dispose(); geo.dispose()
+})
+
+test('two placed copies retain their own settings when a shared texture is edited', () => {
+  const original = {map:{name:'tool.png', dataUri:'data:image', texture:new THREE.Texture()}}
+  const next = m.adjustSelectedTextures({a:original, b:original}, ['b'], {rotation:Math.PI / 2})
+  assert.equal(next.a.map.texture.rotation, 0)
+  assert.equal(next.b.map.texture.rotation, Math.PI / 2)
+  assert.equal(next.b.map.texture.source, next.a.map.texture.source)
+  const key = 'site|asset-id|0'
+  const map = m.editMaterialFields({[key]:'metal'}, [['site:b']], {[key]:'brick'})
+  assert.equal(m.materialScope(map,'site:a')[key], 'metal')
+  assert.equal(m.materialScope(map,'site:b')[key], 'brick')
 })

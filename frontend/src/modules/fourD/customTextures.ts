@@ -31,6 +31,33 @@ export interface TextureSlotValue {
 
 export type CustomTextureSet = Partial<Record<TextureSlot, TextureSlotValue>>
 
+export type TextureAdjustment = { repeat: number } | { rotation: number } | { subdivision: number }
+
+export function adjustSelectedTextures(sets: Record<string, CustomTextureSet>, keys: string[], edit: TextureAdjustment) {
+  const next = { ...sets }
+  const clones = new Map<THREE.Texture, THREE.Texture>()
+  for (const key of keys) {
+    const slots = sets[key]
+    if (!slots) continue
+    const changed = { ...slots }
+    for (const slot of Object.keys(slots) as TextureSlot[]) {
+      const value = slots[slot]
+      if (!value || ('subdivision' in edit && slot !== 'displacementMap')) continue
+      let texture = clones.get(value.texture)
+      if (!texture) {
+        texture = value.texture.clone()
+        if ('repeat' in edit) texture.repeat.setScalar(edit.repeat)
+        else if ('rotation' in edit) texture.rotation = edit.rotation
+        else texture.userData.subdivisionLevel = edit.subdivision
+        clones.set(value.texture, texture)
+      }
+      changed[slot] = { ...value, texture }
+    }
+    next[key] = changed
+  }
+  return next
+}
+
 const loader = new THREE.TextureLoader()
 
 // colorSpace matters here: `map` (base colour) is a colour image and needs

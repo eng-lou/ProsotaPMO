@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import type { CustomTextureSet, TextureSlot } from './customTextures'
+import type { CustomTextureSet, TextureAdjustment, TextureSlot } from './customTextures'
 import { ResettableNumberInput } from './ResettableNumberInput'
 import { fromDisplayLength, lengthUnitSuffix, toDisplayLength, type IfcUnitDisplay } from './ifcUnitDisplay'
 
@@ -7,21 +7,7 @@ interface Props {
   textures: CustomTextureSet | undefined
   onUploadTexture: (slot: TextureSlot, file: File) => void
   onClearTexture: (slot: TextureSlot) => void
-  // Tile Size/Tile Rotation (2026-07-11, per Maro: applied a concrete
-  // texture, got a flat/simplistic look — see ifcModel.ts's own
-  // box-projected-UV fix for the underlying cause; rotation added
-  // right after) — how many raw model units one texture repeat spans, and
-  // how the tile is rotated in place, both shared across every slot below
-  // since they represent the same physical surface and should stay
-  // UV-aligned. Mutates each slot's live THREE.Texture.repeat/.rotation
-  // directly (same "read/write the live object, force a re-render
-  // separately" idiom TransformPanel.tsx already uses for object.position)
-  // rather than round-tripping through customTextures state — both
-  // properties are read by the renderer every frame regardless, no React
-  // state needs to own either number. onFieldChange is that forced
-  // re-render, purely so these fields' own controlled inputs show the
-  // value they were just set to instead of snapping back to a stale prop.
-  onFieldChange: () => void
+  onFieldChange: (edit: TextureAdjustment) => void
   lengthUnitToMetres: number | null
   unitDisplay: IfcUnitDisplay
   // Clear Materials (2026-07-11, per Maro: "add a clear materials button so
@@ -204,8 +190,7 @@ export function TextureFields({
             onChange={displaySize => {
               const rawSize = fromDisplayLength(displaySize, lengthUnitToMetres, unitDisplay)
               const repeat = rawSize > 0 ? 1 / rawSize : 1
-              for (const s of SLOTS) textures?.[s.key]?.texture.repeat.set(repeat, repeat)
-              onFieldChange()
+              onFieldChange({ repeat })
             }}
             className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
           />
@@ -222,11 +207,7 @@ export function TextureFields({
             title="Rotates the tile in place around its own centre (not the whole surface). Hover + Backspace to reset."
             onChange={degrees => {
               const radians = degrees * DEG_TO_RAD
-              for (const s of SLOTS) {
-                const t = textures?.[s.key]?.texture
-                if (t) t.rotation = radians
-              }
-              onFieldChange()
+              onFieldChange({ rotation: radians })
             }}
             className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
           />
@@ -245,8 +226,7 @@ export function TextureFields({
             title="Adds geometry detail so Displacement has vertices to actually move — most IFC elements are otherwise too low-poly to show any effect. 0 leaves the original geometry untouched. Capped per element and scene-wide so this can't overload the viewport — a level may be silently reduced on an already-dense element, or if too many elements have subdivision active at once. Hover + Backspace to reset."
             onChange={level => {
               const clamped = Math.max(0, Math.min(3, Math.round(level)))
-              if (textures?.displacementMap) textures.displacementMap.texture.userData.subdivisionLevel = clamped
-              onFieldChange()
+              onFieldChange({ subdivision: clamped })
             }}
             className="flex-1 w-0 text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5 text-right"
           />

@@ -1,5 +1,11 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-07 — Stable 0.2.47 · Material edits follow the viewport selection
+
+The Materials panel used to filter its rows to a picked element but write changes to the shared project material. Finish, colour and tiling now have overrides for selected IFC elements and 3D placements. Clearing the selection exposes project defaults. Editing a shared uploaded texture’s scale or rotation now copies its settings for the selected objects. Existing project mappings are preserved because they do not record which earlier edits were intended for individual objects.
+
+On Fort Tower, changing one door frame to timber kept another frame with the same IFC finish unchanged after reloading the mapping.
+
 ## 2026-11-06 — Stable 0.2.43 promotion
 
 The owner requested updating and publishing both Stable channels. Promoting the

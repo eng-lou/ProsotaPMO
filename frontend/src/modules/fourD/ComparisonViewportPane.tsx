@@ -1,3 +1,4 @@
+import { materialScope } from './materialScope'
 import { EquipmentPoseMirror } from './EquipmentPlayback'
 import type { EquipmentRig } from './equipmentRig'
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
@@ -455,7 +456,10 @@ export function ComparisonViewportPane({
   // built one for this exact render mode, this reuses that same cached
   // instance rather than building a second one.
   useEffect(() => {
-    for (const [original, clone] of clonesByOriginal) {
+    for (const {object: original, id, materialOwner} of importedObjects) {
+      const clone = clonesByOriginal.get(original)
+      if (!clone) continue
+      const objectMapping = materialScope(realisticMapping, materialOwner ?? id)
       // The clone carries no material table of its own; its source model's
       // (realisticMaterials.ts) applies unchanged — clones keep expressID and
       // ifcGeometryId (sceneClone.ts).
@@ -470,7 +474,7 @@ export function ComparisonViewportPane({
         const batchMat = batch.mesh.userData.standardMaterial as THREE.MeshStandardMaterial
         if (renderMode === 'realistic') {
           batch.mesh.material = applyRealisticToBatch(
-            batch, batchMat, realisticInfo, realisticMapping, false, realisticGlassTransmission, shadows,
+            batch, batchMat, realisticInfo, objectMapping, false, realisticGlassTransmission, shadows,
           )
         } else {
           clearRealisticFromBatch(batch)
@@ -501,13 +505,13 @@ export function ComparisonViewportPane({
             // Same explicit-material precedence as the primary viewport: a
             // material with its own base-colour texture (an override, or an
             // authored model texture) is shown as-is.
-            const realisticClass = mat.map ? 0 : classIndexForMesh(child, mat, realisticInfo, realisticMapping)
-            const colourOverride = mat.map ? null : colourOverrideForMesh(child, mat, realisticInfo, realisticMapping)
+            const realisticClass = mat.map ? 0 : classIndexForMesh(child, mat, realisticInfo, objectMapping)
+            const colourOverride = mat.map ? null : colourOverrideForMesh(child, mat, realisticInfo, objectMapping)
             if (realisticClass > 0 || colourOverride) {
               return getRealisticVariant(
                 mat, realisticClass, undefined, realisticGlassTransmission, (child.userData.ifcColorAlpha as number | undefined) ?? 1,
                 colourOverride,
-                textureSettingsForMesh(child, mat, realisticInfo, realisticMapping),
+                textureSettingsForMesh(child, mat, realisticInfo, objectMapping),
               )
             }
           }
@@ -534,7 +538,7 @@ export function ComparisonViewportPane({
         }
       })
     }
-  }, [clonesByOriginal, renderMode, showEdges, realisticMapping, realisticInfoVersion, realisticGlassTransmission, shadows])
+  }, [clonesByOriginal, importedObjects, renderMode, showEdges, realisticMapping, realisticInfoVersion, realisticGlassTransmission, shadows])
 
   // Frees each clone set's own GPU-side batch state when it's replaced or
   // the pane closes — the cloned batch's textures/materials, its Realistic

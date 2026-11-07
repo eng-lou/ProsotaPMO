@@ -1,3 +1,4 @@
+import { materialScope } from './materialScope'
 import { waterTime, waterOptions, waterColour } from './WaterSurface'
 import * as THREE from 'three'
 import type { BatchInstanceInfo, BatchState } from './elementBatching'
@@ -447,14 +448,17 @@ function meshKey(mesh: THREE.Mesh, material: THREE.Material, info: RealisticMode
   }
   return meshMaterialKey(material)
 }
+function elementMaterialScope(mapping: RealisticMaterialMap, expressID?: number) {
+  return expressID === undefined ? mapping : materialScope(mapping, 'element:' + expressID)
+}
 export function colourOverrideForMesh(
   mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap,
 ): THREE.Color | null {
-  return colourOverrideForKey(meshKey(mesh, material, info), mapping)
+  return colourOverrideForKey(meshKey(mesh, material, info), elementMaterialScope(mapping, mesh.userData.expressID))
 }
 
 export function textureSettingsForMesh(mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap) {
-  return textureSettingsForKey(meshKey(mesh, material, info), mapping)
+  return textureSettingsForKey(meshKey(mesh, material, info), elementMaterialScope(mapping, mesh.userData.expressID))
 }
 
 // Class for one individual (non-batched) mesh's material.
@@ -466,7 +470,7 @@ export function classIndexForMesh(
     const geometryId = mesh.userData.ifcGeometryId as number | undefined
     const key = (geometryId !== undefined ? info?.keyByPiece.get(`${expressID}:${geometryId}`) : undefined)
       ?? info?.keyByExpressId.get(expressID)
-    return classIndexForKey(key, info, mapping)
+    return classIndexForKey(key, info, elementMaterialScope(mapping, expressID))
   }
   const key = meshMaterialKey(material)
   if (info) return classIndexForKey(key, info, mapping)
@@ -1259,9 +1263,10 @@ function computeBatchClasses(batch: BatchState, info: RealisticModelInfo | undef
   const classes = new Uint8Array((batch.mesh as BatchedMeshInternals)._maxInstanceCount)
   if (suppressed || !info) return classes
   for (const [expressID, infos] of batch.byExpressId) {
+    const local = elementMaterialScope(mapping, expressID)
     for (const inst of infos) {
       const key = info.keyByPiece.get(`${expressID}:${inst.ifcGeometryId}`) ?? info.keyByExpressId.get(expressID)
-      classes[inst.instanceId] = classIndexForKey(key, info, mapping)
+      classes[inst.instanceId] = classIndexForKey(key, info, local)
     }
   }
   return classes
@@ -1390,13 +1395,16 @@ export function applyRealisticToBatch(
       texData[i * 4 + 1] = 2 // default scale = 2^(2-2) = 1
     }
     if (info && !suppressed) {
-      const settingsByKey = new Map<string, RealisticTextureSettings>()
+      const settingsByValue = new Map<string, RealisticTextureSettings>()
       for (const [expressID, instances] of batch.byExpressId) {
+        const local = elementMaterialScope(mapping, expressID)
         for (const inst of instances) {
           const key = info.keyByPiece.get(`${expressID}:${inst.ifcGeometryId}`) ?? info.keyByExpressId.get(expressID)
           if (key === undefined) continue
-          let settings = settingsByKey.get(key)
-          if (!settings) { settings = textureSettingsForKey(key, mapping); settingsByKey.set(key, settings) }
+          const raw = local[TEXTURE_KEY_PREFIX + key]
+          if (!raw) continue
+          let settings = settingsByValue.get(raw)
+          if (!settings) { settings = textureSettingsForKey(key, local); settingsByValue.set(raw, settings) }
           texData[inst.instanceId * 4 + 1] = Math.log2(settings.scale) + 2
           texData[inst.instanceId * 4 + 2] = settings.rotation / 90
         }
@@ -1423,13 +1431,13 @@ export function applyRealisticToBatch(
   batch.mesh.userData.realisticActiveClasses = state.classes
   // Per-instance colour overrides (see colourOverrideForKey) — rebuilt
   // whenever the mapping object changes, same staleness rule as classes.
-  if (batch.mesh.userData.realisticInstanceColoursMapping !== mapping || batch.mesh.userData.realisticInstanceColoursInfo !== info) {
+  if (batch.mesh.userData.realisticInstanceColoursMapping !== mapping || classesStale) {
     const colours: (THREE.Color | null)[] = []
     if (info && !suppressed) {
       for (const [expressID, infos] of batch.byExpressId) {
         for (const inst of infos) {
           const key = info.keyByPiece.get(`${expressID}:${inst.ifcGeometryId}`) ?? info.keyByExpressId.get(expressID)
-          const colour = colourOverrideForKey(key, mapping)
+          const colour = colourOverrideForKey(key, elementMaterialScope(mapping, expressID))
           if (colour) colours[inst.instanceId] = colour
         }
       }

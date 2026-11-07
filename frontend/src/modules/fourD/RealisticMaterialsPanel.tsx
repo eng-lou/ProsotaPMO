@@ -1,11 +1,12 @@
+import { editMaterialFields, mappingAtTarget, type MaterialTarget } from './materialScope'
 import { ToolVisualGuide } from './ToolVisualGuide'
 import { WaterSurfaceControls } from './WaterSurface'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
 import {
-  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse, withColourOverride,
-  REALISTIC_TEXTURE_SCALES, textureSettingsForKey, withTextureSettings, resetRealisticEntry, realisticTileSize,
-  type RealisticEntryModel, type RealisticMapping, type RealisticMaterialEntry, type RealisticMaterialMap,
+  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse,
+  REALISTIC_TEXTURE_SCALES, textureSettingsForKey, realisticTileSize,
+  type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
 } from './realisticMaterials'
 
 // Per-material colour override (2026-10-02, per Maro: "allow me to change
@@ -19,7 +20,7 @@ function OverrideSwatch({ value, onChange, recentColors }: { value: string | nul
     <div className="flex items-center gap-0.5 shrink-0">
       <button
         ref={ref}
-        onClick={() => { if (!value) onChange(recentColors[0] ?? '#8b6b4a'); setOpen(v => !v) }}
+        onClick={() => setOpen(v => !v)}
         title={value ? `Colour override ${value} — click to change` : 'Set a colour for this material'}
         className={`w-5 h-5 rounded border ${value ? 'border-gray-300 dark:border-prosota-line' : 'border-dashed border-gray-300 dark:border-prosota-line bg-[linear-gradient(135deg,transparent_45%,#d1d5db_45%,#d1d5db_55%,transparent_55%)]'}`}
         style={value ? { backgroundColor: value } : undefined}
@@ -27,8 +28,8 @@ function OverrideSwatch({ value, onChange, recentColors }: { value: string | nul
       {value && (
         <button onClick={() => { onChange(null); setOpen(false) }} title="Remove colour override" className="text-[10px] text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">✕</button>
       )}
-      {open && value && (
-        <ColorPickerPopover value={value} onChange={onChange} onClose={() => setOpen(false)} anchor={ref.current} recentColors={recentColors} />
+      {open && (
+        <ColorPickerPopover value={value ?? recentColors[0] ?? '#8b6b4a'} onChange={onChange} onClose={() => setOpen(false)} anchor={ref.current} recentColors={recentColors} />
       )}
     </div>
   )
@@ -52,12 +53,12 @@ function shortModelName(name: string): string {
 // only a person can settle them.
 export function RealisticMaterialsPanel({
   entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry, glassTransmission, onGlassTransmissionChange,
-  selectionKeys = null, customEditor, loadErrors = [], onRetry,
+  targetsByKey = null, customEditor, loadErrors = [], onRetry,
 }: {
   // Materials used by the current viewport selection (null = nothing
   // selected). When set, the list narrows to just those (2026-10-02).
   customEditor?: React.ReactNode
-  selectionKeys?: Set<string> | null
+  targetsByKey?: Map<string, MaterialTarget[]> | null
   entries: RealisticMaterialEntry[]
   mapping: RealisticMaterialMap
   onMappingChange: (mapping: RealisticMaterialMap) => void
@@ -73,29 +74,20 @@ export function RealisticMaterialsPanel({
   onGlassTransmissionChange: (value: boolean) => void
 }) {
   const [onlyUnmatched, setOnlyUnmatched] = useState(false)
-  // "Show all" escape hatch while something is selected — reset whenever
-  // the selection itself changes, so a new pick filters again.
-  const [showAllDespiteSelection, setShowAllDespiteSelection] = useState(false)
-  useEffect(() => { setShowAllDespiteSelection(false) }, [selectionKeys])
-  const filteringToSelection = selectionKeys !== null && !showAllDespiteSelection
+  const globalTargets: MaterialTarget[] = [[]]
+  const targetsFor = (key: string) => targetsByKey === null ? globalTargets : targetsByKey.get(key) ?? []
+  const rowMapping = (key: string) => mappingAtTarget(mapping, targetsFor(key)[0] ?? [])
   const [search, setSearch] = useState('')
-  const needsMapping = (e: RealisticMaterialEntry) => !mapping[e.key] && !e.autoClass
-  const unmatchedCount = entries.filter(needsMapping).length
+  const needsMapping = (e: RealisticMaterialEntry) => !rowMapping(e.key)[e.key] && !e.autoClass
+  const unmatchedCount = entries.filter(e => targetsFor(e.key).length && needsMapping(e)).length
   const query = search.trim().toLowerCase()
   const visible = entries.filter(e =>
-    (!filteringToSelection || selectionKeys!.has(e.key))
+    targetsFor(e.key).length > 0
     && (!onlyUnmatched || needsMapping(e))
     && (!query || e.label.toLowerCase().includes(query) || e.detail.toLowerCase().includes(query)),
   )
 
   const recentColours = colourOverridesInUse(mapping)
-  const setEntry = (key: string, value: RealisticMapping | 'auto') => {
-    const next = { ...mapping }
-    if (value === 'auto') delete next[key]
-    else next[key] = value
-    onMappingChange(next)
-  }
-
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto">
       <div className="px-3 py-2"><ToolVisualGuide topic="materials"/></div>
@@ -127,18 +119,9 @@ export function RealisticMaterialsPanel({
               <input type="checkbox" checked={onlyUnmatched} onChange={e => setOnlyUnmatched(e.target.checked)} />
               Only unmatched ({unmatchedCount})
             </label>
-            {selectionKeys !== null && (
-              <div className="flex items-center gap-1.5 text-[11px] rounded bg-blue-50 dark:bg-prosota-panel2 text-blue-700 dark:text-prosota-azure px-2 py-1">
-                <span className="flex-1">
-                  {filteringToSelection
-                    ? `Showing the ${selectionKeys.size} material${selectionKeys.size === 1 ? '' : 's'} of your selection`
-                    : 'Showing all materials'}
-                </span>
-                <button onClick={() => setShowAllDespiteSelection(v => !v)} className="underline shrink-0">
-                  {filteringToSelection ? 'Show all' : 'Only selection'}
-                </button>
-              </div>
-            )}
+            <p className="text-[11px] text-blue-700 dark:text-prosota-azure">
+              {targetsByKey !== null ? 'Edits apply to your selection only.' : 'Editing project defaults for all uses of each material. Select an object to edit it individually.'}
+            </p>
           </>
         )}
       </div>
@@ -153,11 +136,20 @@ export function RealisticMaterialsPanel({
       )}
       <div className="shrink-0 divide-y divide-gray-100 dark:divide-prosota-line">
         {visible.map(entry => {
-          const manual = mapping[entry.key]
+          const targets = targetsFor(entry.key)
+          const current = rowMapping(entry.key)
+          const manual = current[entry.key] || undefined
+          const mixedFinish = targets.some(target => (mappingAtTarget(mapping, target)[entry.key] || undefined) !== manual)
+          const edit = (fields: Parameters<typeof editMaterialFields>[2], reset = false) =>
+            onMappingChange(editMaterialFields(mapping, targets, fields, reset))
+          const updateTexture = (patch: {scale?: number; rotation?: number}) => edit(local => {
+            const value = { ...textureSettingsForKey(entry.key, local), ...patch }
+            return { ['texture:' + entry.key]: value.scale === 1 && value.rotation === 0 ? null : JSON.stringify(value) }
+          })
           const cls = manual === 'original' ? null : manual ?? entry.autoClass
-          const texture = textureSettingsForKey(entry.key, mapping)
+          const texture = textureSettingsForKey(entry.key, current)
           const tile = cls ? realisticTileSize(cls, texture.scale) : null
-          const customised = !!manual || !!colourOverrideHex(entry.key, mapping) || texture.scale !== 1 || texture.rotation !== 0
+          const customised = targets.some(target => target.length > 0 && [entry.key, 'colour:' + entry.key, 'texture:' + entry.key].some(k => Object.prototype.hasOwnProperty.call(mappingAtTarget(mapping, target), k))) || mixedFinish || !!manual || !!colourOverrideHex(entry.key, current) || texture.scale !== 1 || texture.rotation !== 0
           const flagged = needsMapping(entry)
           const models = entryModels[entry.key] ?? []
           const autoLabel = entry.autoClass
@@ -170,7 +162,7 @@ export function RealisticMaterialsPanel({
               <div className="flex items-baseline gap-1.5 min-w-0" title={[entry.label, entry.detail].filter(Boolean).join('\n')}>
                 {flagged && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 self-center" title="Needs mapping" />}
                 <span className="text-xs text-gray-800 dark:text-prosota-paper truncate">{entry.label}</span>
-                <span className="text-[10px] text-gray-400 dark:text-prosota-muted shrink-0 ml-auto">×{entry.count}</span>
+                <span className="text-[10px] text-gray-400 dark:text-prosota-muted shrink-0 ml-auto">{targetsByKey === null ? '×' + entry.count : targets.length + ' selected'}</span>
               </div>
               {entry.detail && <span className="text-[10px] text-gray-400 dark:text-prosota-muted truncate">{entry.detail}</span>}
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -181,22 +173,23 @@ export function RealisticMaterialsPanel({
                     title={`Select the ${m.count} element piece${m.count === 1 ? '' : 's'} using this material in ${m.name}`}
                     className="text-[10px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line text-gray-600 dark:text-prosota-muted hover:bg-gray-100 dark:hover:bg-prosota-panel2 shrink-0"
                   >
-                    {models.length > 1 ? `Select in ${shortModelName(m.name)}` : 'Select'}
+                    {models.length > 1 ? `Select in ${shortModelName(m.name)}` : 'Select linked'}
                   </button>
                 ))}
                 <select
                   aria-label={`Finish for ${entry.label}`}
-                  value={manual ?? 'auto'}
-                  onChange={e => setEntry(entry.key, e.target.value as RealisticMapping | 'auto')}
+                  value={mixedFinish ? 'mixed' : manual ?? 'auto'}
+                  onChange={e => edit({ [entry.key]: e.target.value === 'auto' ? null : e.target.value })}
                   className="flex-1 min-w-[9rem] text-[11px] border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1 py-0.5"
                 >
+                  {mixedFinish && <option value="mixed" disabled>Mixed finishes</option>}
                   <option value="auto">{autoLabel}</option>
                   <option value="original">Keep imported look</option>
                   {REALISTIC_CLASSES.map(cls => <option key={cls} value={cls}>{REALISTIC_CLASS_LABELS[cls]}</option>)}
                 </select>
                 <OverrideSwatch
-                  value={colourOverrideHex(entry.key, mapping)}
-                  onChange={hex => onMappingChange(withColourOverride(mapping, entry.key, hex))}
+                  value={colourOverrideHex(entry.key, current)}
+                  onChange={hex => edit({ ['colour:' + entry.key]: hex })}
                   recentColors={recentColours}
                 />
               </div>
@@ -206,14 +199,14 @@ export function RealisticMaterialsPanel({
                   <div className="flex gap-2 py-1">
                     <label className="flex-1">Scale
                       <select aria-label={`Texture scale for ${entry.label}`} value={texture.scale}
-                        onChange={e => onMappingChange(withTextureSettings(mapping, entry.key, { ...texture, scale: Number(e.target.value) }))}
+                        onChange={e => updateTexture({scale: Number(e.target.value)})}
                         className="block w-full border rounded px-1 py-0.5 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper">
                         {REALISTIC_TEXTURE_SCALES.map(scale => <option key={scale} value={scale}>{scale}×{scale === 1 ? ' (default)' : ''}</option>)}
                       </select>
                     </label>
                     <label className="flex-1">Direction
                       <select aria-label={`Texture direction for ${entry.label}`} value={texture.rotation}
-                        onChange={e => onMappingChange(withTextureSettings(mapping, entry.key, { ...texture, rotation: Number(e.target.value) }))}
+                        onChange={e => updateTexture({rotation: Number(e.target.value)})}
                         className="block w-full border rounded px-1 py-0.5 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper">
                         {[0, 90, 180, 270].map(rotation => <option key={rotation} value={rotation}>{rotation}°</option>)}
                       </select>
@@ -223,14 +216,14 @@ export function RealisticMaterialsPanel({
                 </details>
               )}
               {(cls === 'grass' || cls === 'moquette' || cls === 'moquette-checkered') && <p className="text-[11px] text-gray-500 dark:text-prosota-muted">{cls === 'moquette-checkered' ? 'Fine felt turf with alternating mowing tones. Checks are 0.75 m at default scale; scale adjusts both checks and fibres.' : cls === 'moquette' ? 'Soft matte sage turf with fine felt texture and smooth edges.' : 'Natural grass with patch variation and short fibre shading.'} Surface texture only: no individual blades. Use the colour swatch, scale and direction to adjust the finish.</p>}
-              {customised && <button onClick={() => onMappingChange(resetRealisticEntry(mapping, entry.key))}
+              {customised && <button onClick={() => edit({ [entry.key]: null, ['colour:' + entry.key]: null, ['texture:' + entry.key]: null }, true)}
                 title="Restore automatic mapping, original colour and default texture settings for this material"
                 className="text-[10px] text-left underline text-gray-500 dark:text-prosota-muted">Reset material</button>}
             </div>
           )
         })}
         {entries.length > 0 && visible.length === 0 && (
-          <p className="px-3 py-2 text-[11px] text-gray-400 dark:text-prosota-muted">No materials match.</p>
+          <p className="px-3 py-2 text-[11px] text-gray-400 dark:text-prosota-muted">{targetsByKey?.size === 0 ? 'No editable materials in this selection.' : 'No materials match.'}</p>
         )}
       </div>
       {customEditor}
