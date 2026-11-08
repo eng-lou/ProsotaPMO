@@ -1,8 +1,10 @@
+import type { SiteSectionBox } from './sectionBoxes'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { undoHistory } from '@/lib/undoHistory'
 import type { PathPoint } from './paths'
 import type { GeographicContext } from './geographicContext'
+import type { GroundFinish } from './realisticMaterials'
 
 export interface SiteObjectState {
   content_position: PathPoint; content_rotation: PathPoint; content_scale: PathPoint
@@ -12,6 +14,8 @@ export interface SiteObjectState {
 export interface SitePathKey { date: string; progress: number; interpolation: 'linear' | 'smooth' | 'hold' }
 export interface PathMotion { bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
 export interface SiteItem {
+  section_boxes?: SiteSectionBox[]
+  illumination?: SiteIllumination | null
   motion_actions?: import('./workerActions').WorkerAction[]
   attachment?: import('./workerActions').SiteAttachment | null
   asset_part?: import('./assetParts').AssetPart | null
@@ -24,7 +28,7 @@ export interface SiteItem {
   path_motion?: PathMotion | null
   object_state?: SiteObjectState|null
   animation_playing?: boolean; animation_clip?: number; animation_speed?: number
-  id: string; name: string; kind: 'fence' | 'context' | 'cabin' | 'tree' | 'person' | 'arrow' | 'asset' | 'shape' | 'array' | 'scatter' | 'geographic'
+  id: string; name: string; kind: 'fence' | 'context' | 'cabin' | 'tree' | 'person' | 'arrow' | 'asset' | 'shape' | 'array' | 'scatter' | 'geographic' | 'light'
   asset_id?: string | null
   generator_version: 1; up_axis: 'y' | 'z'; units: 'm'; position: PathPoint
   yaw: number; width: number; depth: number; height: number; color: string; locked: boolean
@@ -32,11 +36,22 @@ export interface SiteItem {
   activity_id: string | null; path_id: string | null; points: PathPoint[]; closed: boolean
   module_length: number; gate_start: number; gate_width: number
   zone_id?: string | null; curve_mode?: 'straight'|'curved'; panel_fit?: 'fit'|'trim'|'strict'
-  tag?: string; finish?: 'default'|'water'; spacing?: number; count?: number; seed?: number
+  tag?: string; finish?: 'default'|'water'|GroundFinish; spacing?: number; count?: number; seed?: number
   placement_kind?: 'tree'|'person'|'context'|'cabin'|'arrow'|'asset'; align_to_path?: boolean; random_rotation?: boolean
   layout?: { footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
 }
 export interface SiteScene { revision: number; items: SiteItem[] }
+export interface SiteIllumination {
+  type: 'point' | 'sun' | 'spot' | 'area'
+  intensity: number
+  range: number
+  beam_angle: number
+  tilt: number
+}
+
+export function sitePlacementPoint(item: SiteItem | null, hit: PathPoint): PathPoint {
+  return item?.kind === 'light' ? { ...hit, [item.up_axis]: hit[item.up_axis] + 3 } : hit
+}
 export type SiteTransformPatch = Partial<Pick<SiteItem, 'position' | 'rotation' | 'scale' | 'object_state' | 'attachment'>>
 export const recipe = ({ layout: _layout, ...item }: SiteItem): SiteItem => ({ ...item, operation_inputs: item.operation_inputs ?? [], asset_id: item.asset_id ?? null,
   rotation: item.rotation ?? { x: 0, y: 0, z: 0 }, scale: item.scale ?? { x: 1, y: 1, z: 1 } })

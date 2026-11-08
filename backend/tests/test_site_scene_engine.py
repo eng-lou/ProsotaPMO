@@ -16,6 +16,21 @@ def fixture():
 
 
 class SiteGeometryTests(unittest.TestCase):
+    def test_light_and_ground_recipes_round_trip(self):
+        common = dict(id=fixture()["id"], name="Site", up_axis="z", position=dict(x=1, y=2, z=3))
+        for kind in ("point", "sun", "spot", "area"):
+            item = SiteItem(**common, kind="light", illumination=dict(type=kind, intensity=125, tilt=35))
+            self.assertEqual(SiteItem.model_validate_json(item.model_dump_json()), item)
+            self.assertEqual(evaluate(item.model_dump(mode="json"))["illumination"]["tilt"], 35)
+        with self.assertRaises(ValueError):
+            SiteItem(**common, kind="light", illumination=dict(type="spot", intensity=-1))
+        points = [dict(x=x,y=y,z=0) for x,y in [(0,0),(4,0),(4,2),(0,2)]]
+        pad = SiteItem(**common, kind="shape", closed=True, path_id=fixture()["path_id"], points=points)
+        footprint = evaluate(pad.model_dump(mode="json"))["layout"]
+        for finish in ("haul-road","settled-earth","compacted-gravel","crushed-stone","dusty-hardstand","ground-mats"):
+            edited = SiteItem.model_validate({**pad.model_dump(), "finish":finish})
+            self.assertEqual(evaluate(edited.model_dump(mode="json"))["layout"], footprint)
+
     def test_mixed_path_recipe_keeps_bezier_span_and_straight_corner(self):
         item = fixture()
         item['curve_mode'] = 'straight'

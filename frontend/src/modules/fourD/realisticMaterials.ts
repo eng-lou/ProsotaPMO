@@ -1,4 +1,9 @@
 import { materialScope } from './materialScope'
+import { NO_FOOTPRINT_EDGES, type FootprintEdges } from './footprintEdges'
+import { DEFAULT_ROAD_WEAR, type RoadWear } from './roadWear'
+import { WEAR_GUIDES, type WearGuide } from './surfaceWearGuides'
+import { ensureMaterialized } from './elementBatching'
+import { makeVolumeOutline, disposeVolumeOutline, isVolumeStyle } from './ifcVolumeGuides'
 import { waterTime, waterOptions, waterColour } from './WaterSurface'
 import * as THREE from 'three'
 import type { BatchInstanceInfo, BatchState } from './elementBatching'
@@ -21,24 +26,32 @@ import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
 // without splitting the batch, so the class rides in a per-instance data
 // texture instead (same idea as BatchedMesh's own per-instance colour
 // texture) and one patched shader picks the class look per instance — no
-// extra draw calls. The one exception is glass: it has to render in the
-// transparent pass to be seen through, so glass instances are discarded from
-// the opaque batch and redrawn by a second, glass-only BatchedMesh (one extra
-// draw call per model, however many panes there are).
+// extra draw calls for opaque surfaces. Glass and translucent finishes each
+// use a sorted companion batch. Named IFC viewing and clearance volumes
+// can instead display their actual boundary edges as dashed guides.
 
 // asphalt/stone/gravel/soil/tile added 2026-09-29, per Maro ("add more
 // material types e.g asphalt"). Appended, never reordered: the shader's
 // class index and texture layer both follow this order.
+export const GROUND_FINISHES = ['haul-road', 'settled-earth', 'compacted-gravel', 'crushed-stone', 'dusty-hardstand', 'ground-mats'] as const
+export type GroundFinish = typeof GROUND_FINISHES[number]
+
 export const REALISTIC_CLASSES = [
-  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water', 'moquette', 'grass-mown', 'grass-dry', 'green-roof', 'moquette-checkered',
+  'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water', 'moquette', 'grass-mown', 'grass-dry', 'green-roof', 'moquette-checkered', ...GROUND_FINISHES,
 ] as const
 export type RealisticClass = typeof REALISTIC_CLASSES[number]
 // 'original' — explicitly keep the imported look for this material, even
 // if its name would otherwise auto-match a class.
 export type RealisticMapping = RealisticClass | 'original'
-export type RealisticMaterialMap = Record<string, RealisticMapping>
+export type RealisticMaterialMap = Record<string, RealisticMapping> & { [WEAR_GUIDES]?: Map<string,WearGuide> }
 
 export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
+  'haul-road': 'Haul road · wheel-worn earth',
+  'settled-earth': 'Settled site soil',
+  'compacted-gravel': 'Compacted gravel · cabin base',
+  'crushed-stone': 'Crushed stone · temporary access',
+  'dusty-hardstand': 'Dusty hardstanding · laydown',
+  'ground-mats': 'Modular ground protection mats',
   water: 'Water — animated surface',
   concrete: 'Cast concrete',
   glass: 'Glass',
@@ -65,8 +78,10 @@ export const REALISTIC_CLASS_LABELS: Record<RealisticClass, string> = {
 const CLASS_INDEX: Record<RealisticClass, number> = {
   concrete: 1, glass: 2, metal: 3, grass: 4, brick: 5, timber: 6, asphalt: 7, stone: 8, gravel: 9, soil: 10, tile: 11,
   render: 12, 'painted-metal': 13, water: 14, moquette: 15, 'grass-mown': 16, 'grass-dry': 17, 'green-roof': 18, 'moquette-checkered': 19,
+  'haul-road': 20, 'settled-earth': 21, 'compacted-gravel': 22, 'crushed-stone': 23, 'dusty-hardstand': 24, 'ground-mats': 25,
 }
 export const GLASS_CLASS = CLASS_INDEX.glass
+export const HAUL_ROAD_CLASS = CLASS_INDEX['haul-road']
 // Classes whose texture carries its own colour (a brick is brick-coloured
 // whatever flat colour the IFC author picked), as opposed to concrete/metal,
 // which keep the imported colour and only add surface detail on top. For
@@ -77,7 +92,7 @@ export const GLASS_CLASS = CLASS_INDEX.glass
 // white and a grey tile, are the modeller's real choice) with texture
 // detail on top; asphalt, gravel and soil read the same whatever flat
 // colour the model gave them.
-const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false, false, false, true, true, true, true, true, true]
+const REPLACES_COLOUR = [false, false, true, false, true, true, true, true, false, true, true, false, false, false, true, true, true, true, true, true, ...GROUND_FINISHES.map(() => true)]
 export function classReplacesColour(classIndex: number): boolean {
   return REPLACES_COLOUR[classIndex] ?? false
 }
@@ -125,9 +140,12 @@ export function matchClassesInText(text: string): RealisticClass[] {
 // --- Per-model material table ----------------------------------------------
 
 export interface RealisticMaterialEntry {
+  footprint?: boolean
   key: string
   label: string
   detail: string
+  volumeGuide?: boolean
+  sourceOpacity?: number | null
   autoClass: RealisticClass | null
   // Set when more than one class matched — the "needs manual mapping" case.
   candidates: RealisticClass[]
@@ -152,6 +170,7 @@ export interface RealisticPieceDescription {
   layered: boolean
   ifcType: string
   transparent: boolean
+  sourceOpacity?: number
 }
 
 // IFC entity types whose *transparent* pieces are glazing. Transparency is a
@@ -231,7 +250,7 @@ export function addRealisticPiece(info: RealisticModelInfo, expressID: number, i
       detailParts.push(`${p.layered ? 'Layers' : 'Material'}: ${p.materialNames.join(' / ')}`)
     }
     if (p.transparent) detailParts.push('transparent in IFC')
-    entry = { key, label, detail: detailParts.join(' · '), autoClass: cls, candidates, count: 0 }
+    entry = { key, label, volumeGuide: isVolumeStyle(p.styleName), sourceOpacity: p.sourceOpacity, detail: detailParts.join(' · '), autoClass: cls, candidates, count: 0 }
     info.entries.set(key, entry)
     entryTypes.set(entry, { types: [], rest: entry.detail })
   }
@@ -243,6 +262,7 @@ export function addRealisticPiece(info: RealisticModelInfo, expressID: number, i
     typeInfo.types.push(typeName)
     entry.detail = [typeInfo.types.join(', '), typeInfo.rest].filter(Boolean).join(' · ')
   }
+  if (entry.sourceOpacity !== p.sourceOpacity) entry.sourceOpacity = null
   entry.count++
   if (ifcGeometryId !== undefined) info.keyByPiece.set(`${expressID}:${ifcGeometryId}`, key)
   if (!info.keyByExpressId.has(expressID)) info.keyByExpressId.set(expressID, key)
@@ -268,7 +288,7 @@ export function extractMeshRealisticInfo(object: THREE.Object3D): RealisticModel
       if (!entry) {
         const found = matchClassesInText(mat.name)
         entry = {
-          key, label: mat.name || '(unnamed material)', detail: '3D model material',
+          key, label: mat.name || '(unnamed material)', detail: '3D model material', sourceOpacity:mat.opacity,
           autoClass: found.length === 1 ? found[0] : null, candidates: found.length > 1 ? found : [], count: 0,
         }
         info.entries.set(key, entry)
@@ -287,7 +307,10 @@ export function mergeRealisticEntries(infos: (RealisticModelInfo | undefined)[])
     if (!info) continue
     for (const entry of info.entries.values()) {
       const existing = merged.get(entry.key)
-      if (existing) existing.count += entry.count
+      if (existing) {
+        existing.count += entry.count
+        if (existing.sourceOpacity !== entry.sourceOpacity) existing.sourceOpacity = null
+      }
       else merged.set(entry.key, { ...entry })
     }
   }
@@ -399,6 +422,12 @@ export function resetRealisticEntry(mapping: RealisticMaterialMap, key: string):
   delete next[key]
   delete next[COLOUR_KEY_PREFIX + key]
   delete next[TEXTURE_KEY_PREFIX + key]
+  delete next['guide:' + key]
+  delete next['opacity:' + key]
+  delete next['edgeFade:' + key]
+  delete next['cornerRadius:' + key]
+  delete next['edgeMode:' + key]
+  delete next['roadWear:' + key]
   return next
 }
 const overrideColourCache = new Map<string, THREE.Color>()
@@ -451,6 +480,91 @@ function meshKey(mesh: THREE.Mesh, material: THREE.Material, info: RealisticMode
 function elementMaterialScope(mapping: RealisticMaterialMap, expressID?: number) {
   return expressID === undefined ? mapping : materialScope(mapping, 'element:' + expressID)
 }
+export function roadWearForKey(key:string, mapping: RealisticMaterialMap): RoadWear {
+  const raw = mapping['roadWear:'+key]
+  if (!raw) return DEFAULT_ROAD_WEAR
+  try {
+    const value = JSON.parse(raw)
+    const limit = (k: 'pairs'|'wander'|'depthCm'|'potholes'|'roughness', high:number) => Number.isFinite(value?.[k])
+      ? Math.max(0,Math.min(high,value[k])) : DEFAULT_ROAD_WEAR[k]
+    return { mode:value.mode==='off'||value.mode==='rough'?value.mode:'tracks', area:typeof value.area==='string'?value.area:'',
+      guides:Array.isArray(value.guides)?[...new Set<string>(value.guides.filter((s:unknown)=>typeof s==='string'))]:[],
+      roughness:limit('roughness',1), pairs:Math.round(limit('pairs',3)), wander:limit('wander',1), depthCm:limit('depthCm',12),
+      potholes:limit('potholes',1), colour:/^#[0-9a-f]{6}$/i.test(value?.colour) ? value.colour : DEFAULT_ROAD_WEAR.colour }
+  } catch { return DEFAULT_ROAD_WEAR }
+}
+export function footprintEdgesForKey(key:string|undefined, mapping:RealisticMaterialMap, haulRoad=!!key && mapping[key]==='haul-road'):FootprintEdges {
+  if (!key) return NO_FOOTPRINT_EDGES
+  const read=(field:string)=>Math.max(0,Math.min(5,Number(mapping[field+key])||0))
+  const fade=read('edgeFade:'), radius=read('cornerRadius:')
+  const endsOnly=String(mapping['edgeMode:'+key])==='ends'
+  if (haulRoad || mapping['roadWear:'+key]) {
+    const road=roadWearForKey(key,mapping)
+    if(road.mode!=='off')return {fade,radius,endsOnly,road,guideMap:mapping[WEAR_GUIDES]}
+  }
+  return fade||radius||endsOnly ? {fade,radius,endsOnly} : NO_FOOTPRINT_EDGES
+}
+export function footprintEdgesForMesh(mesh:THREE.Mesh, material:THREE.Material, info:RealisticModelInfo|undefined, mapping:RealisticMaterialMap, haulRoad?:boolean) {
+  return footprintEdgesForKey(meshKey(mesh,material,info),elementMaterialScope(mapping,mesh.userData.expressID),haulRoad)
+}
+const footprintElements=new WeakMap<RealisticMaterialMap,Set<number>>()
+const modelWearElements=new WeakMap<RealisticMaterialMap,WeakMap<RealisticModelInfo,number[]>>()
+export function restoreFootprintElements(object:THREE.Object3D,mapping:RealisticMaterialMap, info:RealisticModelInfo|undefined=object.userData.realisticMaterialInfo) {
+  const batch=object.userData.batch as BatchState|undefined
+  if (!batch?.byExpressId.size) return
+  let ids=footprintElements.get(mapping)
+  if (!ids) {
+    ids=new Set()
+    for(const [key,value] of Object.entries(mapping)){
+      const match=/^@element%3A(\d+)\/(?:edgeFade|cornerRadius):/.exec(key)
+      if(match && Number(value)>0) ids.add(Number(match[1]))
+      const road=value==='haul-road' && /^@element%3A(\d+)\//.exec(key)
+      if(road) ids.add(Number(road[1]))
+      const overlay=/^@element%3A(\d+)\/roadWear:(.+)$/.exec(key)
+      if(overlay && value && roadWearForKey(overlay[2],elementMaterialScope(mapping,Number(overlay[1]))).mode!=='off') ids.add(Number(overlay[1]))
+    }
+    footprintElements.set(mapping,ids)
+  }
+  for(const id of ids) if(batch.byExpressId.has(id)) ensureMaterialized(object,id)
+  // Global or model-level finishes also need a footprint. Look up only the
+  // mapped material's elements, keeping the rest of the IFC batched.
+  if (info) {
+    let cache=modelWearElements.get(mapping)
+    if(!cache){cache=new WeakMap();modelWearElements.set(mapping,cache)}
+    let matches=cache.get(info)
+    if(!matches){
+      matches=[]
+      for(const field in mapping){
+        const key=field.startsWith('roadWear:') ? field.slice('roadWear:'.length) : field
+        if(!info.entries.has(key) || (key===field && mapping[field]!=='haul-road'))continue
+        for(const id of expressIdsForKey(info,key)){
+          if(footprintEdgesForKey(key,elementMaterialScope(mapping,id)).road)matches.push(id)
+        }
+      }
+      cache.set(info,matches)
+    }
+    for(const id of matches)if(batch.byExpressId.has(id))ensureMaterialized(object,id)
+  }
+}
+export function opacityForKey(key: string | undefined, mapping: RealisticMaterialMap): number | undefined {
+  const raw = key === undefined ? undefined : (mapping as Record<string, string>)['opacity:' + key]
+  if (!raw?.trim()) return undefined
+  const value = Number(raw)
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined
+}
+
+export function outlineForKey(key: string | undefined, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap) {
+  return !!key && info?.entries.get(key)?.volumeGuide === true && String(mapping['guide:' + key]) !== 'surface'
+}
+
+export function outlineForMesh(mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap) {
+  return outlineForKey(meshKey(mesh, material, info), info, elementMaterialScope(mapping, mesh.userData.expressID))
+}
+
+export function opacityForMesh(mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap) {
+  return opacityForKey(meshKey(mesh, material, info), elementMaterialScope(mapping, mesh.userData.expressID))
+}
+
 export function colourOverrideForMesh(
   mesh: THREE.Mesh, material: THREE.Material, info: RealisticModelInfo | undefined, mapping: RealisticMaterialMap,
 ): THREE.Color | null {
@@ -755,10 +869,55 @@ const tileLayer: LayerFn = (u, v) => {
   return [d, d, d, 0.6]
 }
 
+// A compacted surface with occasional, shallow tread impressions. Keep each
+// imprint finite: a continuous rut baked into a tile stripes the whole slab.
+const haulRoadLayer: LayerFn = (u, v) => {
+  const dust = fbm(u, v, 6, 7, 4, 202)
+  const grit = valueNoise(u, v, 200, 200, 203)
+  const exposedStone = clamp01((valueNoise(u, v, 90, 90, 204) - .69) * 4)
+  const along = v - .48
+  const across = u - .47 - along * .24 - along * along * .29
+  const footprint = clamp01((.091 - Math.abs(across)) / .031) * clamp01((.35 - Math.abs(along)) / .16)
+  const broken = clamp01((valueNoise(u, v, 17, 20, 205) - .19) * 2.5)
+  const chevron = Math.cos(2 * Math.PI * (v * 21 - Math.abs(across) * 12))
+  const imprint = footprint * broken * clamp01((chevron - .03) * 1.7)
+  const tone = .49 + (dust - .5) * .19 + (grit - .5) * .16 + exposedStone * .095 - imprint * .047
+  return [tone * 1.09, tone * .92, tone * .74, .48 + grit * .065 + exposedStone * .12 - imprint * .063]
+}
+const settledSoilLayer: LayerFn = (u,v) => {
+  const patch = fbm(u,v,3,3,4,211), grain = valueNoise(u,v,175,175,212)
+  const shade = .75 + patch * .43 + grain * .09
+  return [.61*shade, .50*shade, .35*shade, .4+patch*.13+grain*.09]
+}
+const compactedGravelLayer: LayerFn = (u,v) => {
+  const fines = valueNoise(u,v,156,156,221), mottling = fbm(u,v,4,4,3,222)
+  const shade = .72 + mottling * .31 + fines * .23
+  return [.68*shade, .63*shade, .54*shade, .4+fines*.2]
+}
+const crushedStoneLayer: LayerFn = (u,v) => {
+  const [r,g,b,relief] = gravelLayer(u,v)
+  const face = valueNoise(u,v,85,85,231)
+  const shade = .18 + (r*.25+g*.55+b*.2)*.78 + Math.floor(face*4)*.032
+  return [shade*.97,shade,shade*1.04,relief*.66+face*.2]
+}
+const dustyHardstandLayer: LayerFn = (u,v) => {
+  const dust = fbm(u,v,4,3,4,241), grit = valueNoise(u,v,160,160,242)
+  const shade = .20 + dust*dust*.36 + grit*.10
+  return [shade*1.08,shade,shade*.87,.38+grit*.16]
+}
+const groundMatLayer: LayerFn = (u,v) => {
+  const joint = Math.min(u,1-u,v*.5,(1-v)*.5)
+  const tread = Math.cos(2*Math.PI*(u*60+v*30)) * Math.cos(2*Math.PI*(u*60-v*30))
+  const dust = fbm(u,v,3,3,3,251)
+  const shade = joint < .007 ? .13 : .24 + dust*.17 + tread*.035
+  return [shade*1.05,shade,shade*.94,joint < .007 ? .16 : .55+tread*.14]
+}
+
 // Original class layers. Additional finish presets reuse these textures.
 const LAYERS: LayerFn[] = [
   concreteLayer, glassLayer, metalLayer, grassLayer, brickLayer, timberLayer,
   asphaltLayer, stoneLayer, gravelLayer, soilLayer, tileLayer, moquetteLayer, mownLayer, dryGrassLayer, greenRoofLayer,
+  haulRoadLayer, settledSoilLayer, compactedGravelLayer, crushedStoneLayer, dustyHardstandLayer, groundMatLayer,
 ]
 const LAYER_COUNT = LAYERS.length
 
@@ -830,6 +989,12 @@ const CLASS_PARAMS: { tile: [number, number]; roughness: number; metalness: numb
   { tile: [2.2, 2.2], roughness: 0.98, metalness: 0, bump: 0.45, detail: 0, textured: true }, // dry grass
   { tile: [1.4, 1.4], roughness: 0.96, metalness: 0, bump: 0.5, detail: 0, textured: true }, // green roof
   { tile: [0.6, 0.6], roughness: 0.96, metalness: 0, bump: 0.18, detail: 0, textured: true }, // checkered moquette
+  { tile: [2.4, 2.4], roughness: .94, metalness: 0, bump: .32, detail: 0, textured: true }, // compacted haul road
+  { tile: [2, 2], roughness: 1, metalness: 0, bump: .32, detail: 0, textured: true },
+  { tile: [1, 1], roughness: .96, metalness: 0, bump: .55, detail: 0, textured: true },
+  { tile: [.9, .9], roughness: .95, metalness: 0, bump: 1.2, detail: 0, textured: true },
+  { tile: [2, 2], roughness: .91, metalness: 0, bump: .4, detail: 0, textured: true },
+  { tile: [2.4, 1.2], roughness: .82, metalness: 0, bump: .75, detail: 0, textured: true },
 ]
 
 export function realisticTileSize(cls: RealisticClass, scale: number): [number, number] {
@@ -850,7 +1015,7 @@ function getClassParamsTexture(): THREE.DataTexture {
   CLASS_PARAMS.forEach((c, i) => {
     // New finishes reuse the original detail layers rather than allocate
     // duplicate texture-array layers. Existing class indices stay stable.
-    const layer = i === CLASS_INDEX['moquette-checkered'] ? 11 : i >= CLASS_INDEX.moquette ? i - 4 : i === CLASS_INDEX.water ? 0 : i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
+    const layer = i >= CLASS_INDEX['haul-road'] ? 15 + i - CLASS_INDEX['haul-road'] : i === CLASS_INDEX['moquette-checkered'] ? 11 : i >= CLASS_INDEX.moquette ? i - 4 : i === CLASS_INDEX.water ? 0 : i === CLASS_INDEX.render ? 0 : i === CLASS_INDEX['painted-metal'] ? 2 : Math.max(i - 1, 0)
     data.set([1 / c.tile[0], 1 / c.tile[1], layer, c.textured ? 1 : 0], i * 4)
     data.set([c.roughness, c.metalness, c.bump, c.detail], (n + i) * 4)
   })
@@ -898,6 +1063,7 @@ float waterHeight(vec2 p) {
 function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUniforms, forBatch: boolean) {
   const classSource = forBatch
     ? /* glsl */`
+      bool separateSurface = false;
       int vRealClass = 0;
       vec2 realTransformValue = vec2( 1.0, 0.0 );
       #ifdef USE_BATCHING
@@ -905,26 +1071,33 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
         int realSize = textureSize( realClassTex, 0 ).x;
         int realJ = int( getIndirectIndex( gl_DrawID ) );
         vec4 realEntry = texelFetch( realClassTex, ivec2( realJ % realSize, realJ / realSize ), 0 );
+        separateSurface = realEntry.a > 0.5;
         vRealClass = int( realEntry.r * 255.0 + 0.5 );
         realTransformValue = vec2( exp2( floor( realEntry.g * 255.0 + 0.5 ) - 2.0 ), floor( realEntry.b * 255.0 + 0.5 ) );
       }
       #endif`
-    : 'int vRealClass = realClass; vec2 realTransformValue = realTransform;'
+    : 'bool separateSurface = false; int vRealClass = realClass; vec2 realTransformValue = realTransform;'
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', `#include <common>
       ${VERTEX_PARS}
       ${forBatch ? 'uniform sampler2D realClassTex;' : 'uniform int realClass; uniform vec2 realTransform;'}`)
-    .replace('#include <uv_vertex>', `#include <uv_vertex>
-      // Box projection of the local position onto the face's dominant axis —
-      // the same metres-based mapping ifcModel.ts bakes into the 'uv'
-      // attribute, recomputed here from attributes the shader reads anyway:
-      // measured live, fetching 'uv' as well was the single largest cost of
-      // this mode on a 6M-triangle model (vertex fetch bandwidth).
+    .replace('#include <batching_vertex>', `#include <batching_vertex>
       ${classSource}
       {
+        // Fort Tower stores lengths in millimetres and converts them to
+        // metres in the placement matrix. Keep the pattern on local axes
+        // as equipment moves, but measure repeats in physical metres.
+        mat3 realBasis = mat3(modelMatrix);
+        #ifdef USE_BATCHING
+          realBasis = realBasis * mat3(batchingMatrix);
+        #endif
+        #ifdef USE_INSTANCING
+          realBasis = realBasis * mat3(instanceMatrix);
+        #endif
+        vec3 metres = position * vec3(length(realBasis[0]), length(realBasis[1]), length(realBasis[2]));
         vec3 realN = abs( normal );
-        vec2 realUvLocal = ( realN.x >= realN.y && realN.x >= realN.z ) ? position.yz
-          : ( realN.y >= realN.z ) ? position.xz : position.xy;
+        vec2 realUvLocal = ( realN.x >= realN.y && realN.x >= realN.z ) ? metres.yz
+          : ( realN.y >= realN.z ) ? metres.xz : metres.xy;
         if ( realTransformValue.y > 2.5 ) realUvLocal = vec2( realUvLocal.y, -realUvLocal.x );
         else if ( realTransformValue.y > 1.5 ) realUvLocal = -realUvLocal;
         else if ( realTransformValue.y > 0.5 ) realUvLocal = vec2( -realUvLocal.y, realUvLocal.x );
@@ -934,7 +1107,7 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
     // rather than discarded per fragment (keeps the opaque batch's shader
     // free of discard). Raycasting is CPU-side, so picking still hits it.
     .replace('#include <project_vertex>', `#include <project_vertex>
-      if ( abs( vRealUvClass.z - ${GLASS_CLASS}.0 ) < 0.5 && realGlassHidden > 0.5 ) gl_Position = vec4( 0.0, 0.0, -2.0, 1.0 );`)
+      if ( separateSurface || (abs( vRealUvClass.z - ${GLASS_CLASS}.0 ) < 0.5 && realGlassHidden > 0.5) ) gl_Position = vec4( 0.0, 0.0, -2.0, 1.0 );`)
   if (forBatch) {
     shader.vertexAlphas = true
     shader.vertexShader = shader.vertexShader.replace('#include <color_vertex>', BATCH_ALPHA_VERTEX_PATCH)
@@ -967,6 +1140,17 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
       vec4 realSample = vec4( 0.5 );
       if ( realOn && vRealClass != 14 ) {
         realSample = textureGrad( realTex, vec3( realUv, vRealTex.z ), realUvDx, realUvDy );
+        if (vRealClass == ${CLASS_INDEX['haul-road']}) {
+          // Mix two staggered passes of the baked grit and worn tread. The
+          // broad dust pattern spans many tiles and stays fixed while orbiting.
+          mat2 crossing = mat2(.8, .6, -.6, .8);
+          vec2 otherUv = crossing * realUv * .87 + vec2(3.27, 1.61);
+          vec4 other = textureGrad(realTex, vec3(otherUv, vRealTex.z), crossing * realUvDx * .87, crossing * realUvDy * .87);
+          float dust = waterNoise(realUv * .31 + vec2(3.7, 8.1));
+          float moisture = waterNoise(realUv * .13 + vec2(21.2, 7.4));
+          realSample = mix(realSample, other, smoothstep(.24, .76, dust));
+          realSample.rgb *= 1.0 + (dust - .5) * .10 + (moisture - .5) * .16;
+        }
         if ( vRealTex.w > 0.5 ) diffuseColor.rgb *= pow( realSample.rgb, vec3( 2.2 ) );
         else diffuseColor.rgb *= 1.0 + ( realSample.r - 0.5 ) * 2.0 * vRealMat.w;
       }
@@ -1068,7 +1252,7 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
   }
   // Every realistic surface material shares one compiled program per
   // variant kind; uniforms stay per material.
-  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v20' : 'realistic-surface-v20')
+  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v22' : 'realistic-surface-v22')
   return material
 }
 
@@ -1213,11 +1397,13 @@ export function syncRealisticVariant(source: THREE.MeshStandardMaterial) {
     else variant.color.copy(source.color)
     variant.opacity = source.opacity
     variant.transparent = source.transparent
+    variant.depthWrite = source.depthWrite
     variant.side = source.side
     ;(variant.userData.realisticUniforms as SurfaceUniforms).realClass.value = classIndex
     variant.aoMap = source.aoMap
     variant.aoMapIntensity = source.aoMapIntensity
   }
+  variant.visible = source.visible && source.opacity > 0
   variant.emissive.copy(source.emissive)
   variant.emissiveIntensity = source.emissiveIntensity
   variant.clippingPlanes = source.clippingPlanes
@@ -1233,14 +1419,14 @@ export function disposeRealisticVariant(source: THREE.Material) {
 
 // --- Batched IFC content -------------------------------------------------------
 
-interface GlassBatchState {
+interface SurfaceBatchState {
   mesh: THREE.BatchedMesh
   mainIds: Int32Array
-  glassIds: Int32Array
-  // Each pane's own IFC transparency, multiplied into its per-instance alpha.
-  ifcAlphas: Float32Array
+  localIds: Int32Array
+  // Imported or overridden surface opacity, multiplied by timeline and selection alpha.
+  surfaceAlphas: Float32Array
+  surfaceTexture?: THREE.DataTexture
   transmission: boolean
-  classes: Uint8Array
 }
 
 interface BatchRealisticState {
@@ -1249,7 +1435,11 @@ interface BatchRealisticState {
   classesInfo: RealisticModelInfo | undefined
   classesMapping: RealisticMaterialMap
   classesSuppressed: boolean
-  glass: GlassBatchState | null
+  glass: SurfaceBatchState | null
+  translucent: SurfaceBatchState | null
+  outlines: Map<number, ReturnType<typeof makeVolumeOutline>>
+  shadowPass?: { texture: {value: THREE.Texture}; depth: THREE.MeshDepthMaterial; distance: THREE.MeshDistanceMaterial;
+    previousDepth?: THREE.Material; previousDistance?: THREE.Material }
 }
 
 type BatchedMeshInternals = THREE.BatchedMesh & {
@@ -1272,13 +1462,8 @@ function computeBatchClasses(batch: BatchState, info: RealisticModelInfo | undef
   return classes
 }
 
-function buildGlassBatch(batch: BatchState, classes: Uint8Array, transmission: boolean): GlassBatchState | null {
-  const glassInfos: BatchInstanceInfo[] = []
-  for (const infos of batch.byExpressId.values()) {
-    for (const inst of infos) if (classes[inst.instanceId] === GLASS_CLASS) glassInfos.push(inst)
-  }
-  if (glassInfos.length === 0) return null
-  const geometryIds = [...new Set(glassInfos.map(g => g.geometryId))]
+function buildSurfaceBatch(batch: BatchState, pieces: BatchInstanceInfo[], transmission: boolean, material: THREE.Material): SurfaceBatchState {
+  const geometryIds = [...new Set(pieces.map(g => g.geometryId))]
   let vertexCount = 0
   let indexCount = 0
   for (const id of geometryIds) {
@@ -1286,12 +1471,12 @@ function buildGlassBatch(batch: BatchState, classes: Uint8Array, transmission: b
     vertexCount += geometry.attributes.position.count
     indexCount += geometry.index ? geometry.index.count : 0
   }
-  const mesh = new THREE.BatchedMesh(glassInfos.length, vertexCount, indexCount, createGlassMaterial(true, transmission))
-  mesh.name = 'realistic-glass'
+  const mesh = new THREE.BatchedMesh(pieces.length, vertexCount, indexCount, material)
+  mesh.name = material instanceof THREE.MeshPhysicalMaterial ? 'realistic-glass' : 'transparent-surfaces'
   mesh.userData.isRealisticGlassBatch = true
-  // Transparent panes need back-to-front order; with no per-instance frustum
+  // Transparent surfaces need back-to-front order; with no per-instance frustum
   // culling (see ifcModel.ts on why the main batch disables it) this is one
-  // sort over the glass instances only.
+  // sort over this pass's instances only.
   mesh.sortObjects = true
   mesh.perObjectFrustumCulled = false
   mesh.castShadow = false
@@ -1300,27 +1485,61 @@ function buildGlassBatch(batch: BatchState, classes: Uint8Array, transmission: b
   mesh.raycast = () => {}
   const localGeometryId = new Map<number, number>()
   for (const id of geometryIds) localGeometryId.set(id, mesh.addGeometry(batch.geometryById.get(id)!))
-  const mainIds = new Int32Array(glassInfos.length)
-  const glassIds = new Int32Array(glassInfos.length)
-  const ifcAlphas = new Float32Array(glassInfos.length)
-  glassInfos.forEach((g, i) => {
-    ifcAlphas[i] = g.colorAlpha
-    const glassId = mesh.addInstance(localGeometryId.get(g.geometryId)!)
-    mesh.setMatrixAt(glassId, g.matrix)
-    mesh.setColorAt(glassId, WHITE)
+  const mainIds = new Int32Array(pieces.length)
+  const localIds = new Int32Array(pieces.length)
+  const surfaceAlphas = new Float32Array(pieces.length)
+  pieces.forEach((g, i) => {
+    surfaceAlphas[i] = g.colorAlpha
+    const localId = mesh.addInstance(localGeometryId.get(g.geometryId)!)
+    mesh.setMatrixAt(localId, g.matrix)
+    mesh.setColorAt(localId, WHITE)
     mainIds[i] = g.instanceId
-    glassIds[i] = glassId
+    localIds[i] = localId
   })
   mesh.position.copy(batch.mesh.position)
   mesh.quaternion.copy(batch.mesh.quaternion)
   mesh.scale.copy(batch.mesh.scale)
   batch.mesh.parent?.add(mesh)
-  return { mesh, mainIds, glassIds, ifcAlphas, transmission, classes }
+  return { mesh, mainIds, localIds, surfaceAlphas, transmission }
 }
 
-function disposeGlassBatch(glass: GlassBatchState) {
+// Reuse geometry while a slider is moving. Only a change to pass
+// membership requires rebuilding the compact back-to-front batch.
+function updateSurfaceBatch(batch: BatchState, existing: SurfaceBatchState | null, pieces: BatchInstanceInfo[],
+  alphas: Float32Array, settings: Uint8Array, transmission: boolean, glass: boolean) {
+  if (existing && (existing.transmission !== transmission || existing.mainIds.length !== pieces.length ||
+    pieces.some((piece, i) => existing!.mainIds[i] !== piece.instanceId))) {
+    disposeSurfaceBatch(existing)
+    existing = null
+  }
+  if (!pieces.length) return null
+  if (!existing) {
+    const material = glass ? createGlassMaterial(true, transmission) : createSurfaceMaterial(true)
+    material.transparent = true
+    material.depthWrite = false
+    material.side = THREE.DoubleSide
+    existing = buildSurfaceBatch(batch, pieces, transmission, material)
+    if (!glass) {
+      const size = Math.ceil(Math.sqrt(pieces.length))
+      const texture = new THREE.DataTexture(new Uint8Array(size * size * 4), size, size)
+      existing.surfaceTexture = texture
+      ;(material.userData.realisticUniforms as SurfaceUniforms).realClassTex.value = texture
+    }
+  }
+  const data = existing.surfaceTexture?.image.data
+  for (let i = 0; i < pieces.length; i++) {
+    const id = pieces[i].instanceId
+    existing.surfaceAlphas[i] = alphas[id]
+    if (data) data.set(settings.subarray(id * 4, id * 4 + 3), existing.localIds[i] * 4)
+  }
+  if (existing.surfaceTexture) existing.surfaceTexture.needsUpdate = true
+  return existing
+}
+
+function disposeSurfaceBatch(glass: SurfaceBatchState) {
+  glass.surfaceTexture?.dispose()
   glass.mesh.parent?.remove(glass.mesh)
-  ;(glass.mesh.material as THREE.Material).dispose()
+  ;((glass.mesh.userData.stillGlassMaterial ?? glass.mesh.material) as THREE.Material).dispose()
   glass.mesh.dispose()
 }
 
@@ -1330,8 +1549,28 @@ function disposeGlassBatch(glass: GlassBatchState) {
 // move batched instances in place, 2026-10-03) and clipping, so none of
 // those code paths need to know it exists.
 export function syncRealisticGlassBatch(batch: BatchState) {
-  const glass = (batch.mesh.userData.realistic as BatchRealisticState | undefined)?.glass
-  if (!glass) return
+  const state = batch.mesh.userData.realistic as BatchRealisticState | undefined
+  if (state) {
+    const main = batch.mesh as BatchedMeshInternals
+    const colors = main._colorsTexture?.image.data
+    const base = Array.isArray(main.material) ? main.material[0] : main.material
+    for (const [id, line] of state.outlines) {
+      line.visible = main.getVisibleAt(id)
+      if (!line.visible) continue
+      main.getMatrixAt(id, line.matrix)
+      line.matrixWorldNeedsUpdate = true
+      line.material.clippingPlanes = base.clippingPlanes
+      if (colors) {
+        line.material.color.fromArray(colors, id * 4)
+        line.material.opacity = colors[id * 4 + 3]
+      }
+    }
+  }
+  if (state?.glass) syncSurfaceBatch(batch, state.glass)
+  if (state?.translucent) syncSurfaceBatch(batch, state.translucent)
+}
+
+function syncSurfaceBatch(batch: BatchState, glass: SurfaceBatchState) {
   const main = batch.mesh as BatchedMeshInternals
   const glassMesh = glass.mesh as BatchedMeshInternals
   const mainColors = main._colorsTexture?.image.data as Float32Array | undefined
@@ -1344,22 +1583,22 @@ export function syncRealisticGlassBatch(batch: BatchState) {
   let matricesChanged = false
   for (let k = 0; k < glass.mainIds.length; k++) {
     const mainId = glass.mainIds[k]
-    const glassId = glass.glassIds[k]
+    const localId = glass.localIds[k]
     const info = main._drawInfo[mainId]
-    const visible = !!info && info.active && info.visible
-    if (glassMesh._drawInfo[glassId].visible !== visible) glassMesh.setVisibleAt(glassId, visible)
+    const visible = !!info && info.active && info.visible && glass.surfaceAlphas[k] > 0
+    if (glassMesh._drawInfo[localId].visible !== visible) glassMesh.setVisibleAt(localId, visible)
     if (visible) {
       const a = mainId * 16
-      const b = glassId * 16
+      const b = localId * 16
       for (let c = 0; c < 16; c++) {
         if (glassMatrices[b + c] !== mainMatrices[a + c]) { glassMatrices[b + c] = mainMatrices[a + c]; matricesChanged = true }
       }
     }
     if (mainColors && glassColors) {
       const a = mainId * 4
-      const b = glassId * 4
+      const b = localId * 4
       for (let c = 0; c < 4; c++) {
-        const value = c === 3 ? mainColors[a + 3] * glass.ifcAlphas[k] : mainColors[a + c]
+        const value = c === 3 ? mainColors[a + 3] * glass.surfaceAlphas[k] : mainColors[a + c]
         if (glassColors[b + c] !== value) { glassColors[b + c] = value; colorsChanged = true }
       }
     }
@@ -1410,6 +1649,46 @@ export function applyRealisticToBatch(
         }
       }
     }
+    const outlines = state?.outlines ?? new Map<number, ReturnType<typeof makeVolumeOutline>>()
+    const removedOutlines = new Set(outlines.keys())
+    const glassPieces: BatchInstanceInfo[] = []
+    const translucentPieces: BatchInstanceInfo[] = []
+    const alphas = new Float32Array(classes.length)
+    let hasSeparateSurfaces = false
+    for (const [id, pieces] of batch.byExpressId) {
+      const local = elementMaterialScope(mapping, id)
+      for (const piece of pieces) {
+        const index = piece.instanceId
+        const key = info?.keyByPiece.get(id + ':' + piece.ifcGeometryId) ?? info?.keyByExpressId.get(id)
+        const alpha = opacityForKey(key, local) ?? piece.colorAlpha
+        alphas[index] = alpha
+        if (!suppressed && outlineForKey(key, info, local)) {
+          hasSeparateSurfaces = true
+          texData[index * 4 + 3] = 255
+          removedOutlines.delete(index)
+          if (!outlines.has(index)) {
+            const lines = makeVolumeOutline(batch.geometryById.get(piece.geometryId)!, piece.color)
+            lines.matrixAutoUpdate = false
+            batch.mesh.getMatrixAt(index, lines.matrix)
+            batch.mesh.add(lines)
+            outlines.set(index, lines)
+          }
+        } else if (classes[index] === GLASS_CLASS) {
+          hasSeparateSurfaces = true
+          texData[index * 4 + 3] = 255
+          glassPieces.push(piece)
+        } else if (alpha < 1) {
+          hasSeparateSurfaces = true
+          texData[index * 4 + 3] = 255
+          // Keep zero-opacity pieces pickable on the main batch.
+          if (alpha > 0) translucentPieces.push(piece)
+        }
+      }
+    }
+    for (const index of removedOutlines) {
+      disposeVolumeOutline(outlines.get(index)!)
+      outlines.delete(index)
+    }
     if (state && state.classTexture.image.width === size && state.classTexture.format === THREE.RGBAFormat) {
       ;(state.classTexture.image.data as Uint8Array).set(texData)
       state.classTexture.needsUpdate = true
@@ -1418,12 +1697,37 @@ export function applyRealisticToBatch(
       const classTexture = new THREE.DataTexture(texData, size, size, THREE.RGBAFormat, THREE.UnsignedByteType)
       classTexture.unpackAlignment = 1
       classTexture.needsUpdate = true
-      state = { classes, classTexture, classesInfo: info, classesMapping: mapping, classesSuppressed: suppressed, glass: state?.glass ?? null }
+      state = { outlines, shadowPass: state?.shadowPass, classes, classTexture, classesInfo: info, classesMapping: mapping, classesSuppressed: suppressed, glass: state?.glass ?? null, translucent: state?.translucent ?? null }
     }
     state.classes = classes
     state.classesInfo = info
     state.classesMapping = mapping
     state.classesSuppressed = suppressed
+    state.glass = updateSurfaceBatch(batch, state.glass, glassPieces, alphas, texData, glassTransmission, true)
+    state.translucent = updateSurfaceBatch(batch, state.translucent, translucentPieces, alphas, texData, false, false)
+    // The colour pass omits guides and translucent solids. Shadow maps render
+    // with separate materials and must omit those same instance IDs.
+    if (!state.shadowPass && hasSeparateSurfaces) {
+      const texture = {value: state.classTexture as THREE.Texture}
+      const depth = new THREE.MeshDepthMaterial({depthPacking: THREE.RGBADepthPacking})
+      const distance = new THREE.MeshDistanceMaterial()
+      for (const mat of [depth, distance]) {
+        mat.onBeforeCompile = shader => {
+          shader.uniforms.surfacePass = texture
+          shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform sampler2D surfacePass;')
+            .replace('#include <project_vertex>', `#include <project_vertex>
+              #ifdef USE_BATCHING
+              int id = int(getIndirectIndex(gl_DrawID));
+              int size = textureSize(surfacePass, 0).x;
+              if (texelFetch(surfacePass, ivec2(id % size, id / size), 0).a > 0.5) gl_Position = vec4(0.,0.,-2.,1.);
+              #endif`)
+        }
+      }
+      state.shadowPass = {texture, depth, distance, previousDepth: batch.mesh.customDepthMaterial, previousDistance: batch.mesh.customDistanceMaterial}
+      batch.mesh.customDepthMaterial = depth
+      batch.mesh.customDistanceMaterial = distance
+    }
+    if (state.shadowPass) state.shadowPass.texture.value = state.classTexture
     batch.mesh.userData.realistic = state
   }
   // Read by Viewport3D's per-instance colour write: colour-replacing classes
@@ -1447,12 +1751,16 @@ export function applyRealisticToBatch(
     batch.mesh.userData.realisticInstanceColoursInfo = info
   }
 
-  if (state.glass && (state.glass.classes !== state.classes || state.glass.transmission !== glassTransmission)) {
-    disposeGlassBatch(state.glass)
-    state.glass = null
+  if (!classesStale && state.glass && state.glass.transmission !== glassTransmission) {
+    const glass = state.glass
+    const old = glass.mesh.userData.stillGlassMaterial ?? glass.mesh.material
+    old.dispose()
+    delete glass.mesh.userData.stillGlassMaterial
+    glass.mesh.material = createGlassMaterial(true, glassTransmission)
+    glass.transmission = glassTransmission
   }
-  if (!state.glass) state.glass = buildGlassBatch(batch, state.classes, glassTransmission)
   if (state.glass) state.glass.mesh.receiveShadow = receiveShadow
+  if (state.translucent) state.translucent.mesh.receiveShadow = receiveShadow
 
   let variant = batchMaterial.userData.realisticBatchVariant as THREE.MeshStandardMaterial | undefined
   if (!variant) {
@@ -1503,7 +1811,15 @@ export function setRealisticGlassMoving(root: THREE.Object3D, moving: boolean) {
 export function clearRealisticFromBatch(batch: BatchState) {
   const state = batch.mesh.userData.realistic as BatchRealisticState | undefined
   if (state) {
-    if (state.glass) disposeGlassBatch(state.glass)
+    if (state.glass) disposeSurfaceBatch(state.glass)
+    if (state.translucent) disposeSurfaceBatch(state.translucent)
+    for (const line of state.outlines.values()) disposeVolumeOutline(line)
+    if (state.shadowPass) {
+      batch.mesh.customDepthMaterial = state.shadowPass.previousDepth
+      batch.mesh.customDistanceMaterial = state.shadowPass.previousDistance
+      state.shadowPass.depth.dispose()
+      state.shadowPass.distance.dispose()
+    }
     state.classTexture.dispose()
     delete batch.mesh.userData.realistic
   }

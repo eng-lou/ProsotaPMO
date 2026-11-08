@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { createRealisticModelInfo, classIndexForKey, colourOverrideForKey, getRealisticVariant, textureSettingsForKey, type RealisticMaterialMap } from './realisticMaterials'
+import type { SiteItem } from './siteScene'
+import { createRealisticModelInfo, classIndexForKey, opacityForKey, colourOverrideForKey, getRealisticVariant, textureSettingsForKey, type RealisticMaterialMap } from './realisticMaterials'
 
 // Keys are scoped to an immutable import, so unrelated Material.001 slots do not collide.
 export function siteMaterialSlots(object: THREE.Object3D, assetId: string) {
@@ -16,10 +17,18 @@ export function siteMaterialInfo(object: THREE.Object3D, assetId: string) {
   const info = createRealisticModelInfo()
   for (const [mat,key] of siteMaterialSlots(object,assetId)) {
     if (!(mat instanceof THREE.MeshStandardMaterial)) continue
-    info.entries.set(key,{key,label:mat.name || 'Unnamed material',detail:'Library asset material',autoClass:null,candidates:[],count:1})
+    info.entries.set(key,{key,label:mat.name || 'Unnamed material',detail:'Library asset material',sourceOpacity:mat.opacity,autoClass:null,candidates:[],count:1})
   }
   return info
 }
+export function applySiteSurfaceOpacity(source: THREE.MeshStandardMaterial, key: string, mapping: RealisticMaterialMap, overall = 1) {
+  const original = source.userData.siteOpacitySource ??= { opacity:source.opacity, blend:source.transparent, depthWrite:source.depthWrite }
+  source.opacity = (opacityForKey(key, mapping) ?? original.opacity) * overall
+  source.transparent = source.opacity < 1 || (original.blend && original.opacity === 1)
+  source.depthWrite = source.opacity >= 1 && original.depthWrite
+  source.visible = source.opacity > 0
+}
+
 export function siteMaterialLook(source: THREE.MeshStandardMaterial, key: string, mapping: RealisticMaterialMap, transmission: boolean) {
   const cls = classIndexForKey(key,undefined,mapping), tint = colourOverrideForKey(key,mapping)
   if (!cls) { if(tint)source.color.copy(tint); return source }
@@ -35,13 +44,13 @@ export function siteMaterialLook(source: THREE.MeshStandardMaterial, key: string
 // Built-in shapes have no GLB material table. Give each object's authored
 // surfaces stable keys so mappings survive edits/reloads without affecting peers.
 export function primitiveMaterialKey(id: string, slot = 'surface') { return `site-shape|${id}|${slot}` }
-export function primitiveMaterialInfo(item: { id: string; name: string; kind: string; finish?: string; placement_kind?: string }) {
+export function primitiveMaterialInfo(item: { id: string; name: string; kind: string; finish?: SiteItem['finish']; placement_kind?: string }) {
   const info = createRealisticModelInfo()
-  const kind=item.placement_kind || item.kind
+  const kind=item.kind === 'array' || item.kind === 'scatter' ? item.placement_kind : item.kind
   const slots = ['surface', ...(kind === 'tree' ? ['trunk'] : kind === 'cabin' ? ['windows'] : [])]
   for (const slot of slots) {
     const key = primitiveMaterialKey(item.id, slot)
-    info.entries.set(key, { key, label: `${item.name} — ${slot}`, detail: 'Built-in site shape', autoClass: item.finish==='water'?'water':null, candidates: [], count: 1 })
+    info.entries.set(key, { key, label: `${item.name} — ${slot}`, detail: 'Built-in site shape', footprint: item.kind==='shape', autoClass: item.finish && item.finish !== 'default' ? item.finish : null, candidates: [], count: 1 })
   }
   return info
 }

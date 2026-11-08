@@ -1,3 +1,5 @@
+import type { SiteItem } from './siteScene'
+import { SiteSceneLayer } from './SiteSceneLayer'
 import { materialScope } from './materialScope'
 import { EquipmentPoseMirror } from './EquipmentPlayback'
 import type { EquipmentRig } from './equipmentRig'
@@ -23,13 +25,19 @@ import type { Path } from './paths'
 import type { PathFollower } from './pathFollowers'
 import { getGouraudVariant, getHiddenLineMaterial, HIDDEN_LINE_BASE_COLOR } from './renderModeMaterials'
 import {
-  applyRealisticToBatch, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
+  applyRealisticToBatch, outlineForMesh, opacityForMesh, classIndexForMesh, clearRealisticFromBatch, colourOverrideForMesh, disposeRealisticVariant,
   getRealisticVariant, realisticInstanceBase, setRealisticGlassMoving, syncRealisticGlassBatch, textureSettingsForMesh, type RealisticMaterialMap, type RealisticModelInfo,
 } from './realisticMaterials'
 import { hideSmallWhileMoving, restoreAfterMoving } from './movingDetail'
 import { ScopeFilterFields } from './ScopeFilterFields'
+import { applyFootprintEdges, NO_FOOTPRINT_EDGES } from './footprintEdges'
+import { footprintEdgesForMesh, restoreFootprintElements } from './realisticMaterials'
+import { removeMeshOutline, setMeshOutline } from './ifcVolumeGuides'
+import { disposeMeshMaterials, getOriginalMaterialSlots } from './elementBaseline'
+import { setImportedLightsEnabled } from './importedLights'
 import { cloneSceneHierarchy, disposeClonedBatch } from './sceneClone'
 import { axisCorrectionRotation, type UpAxis } from './upAxis'
+import { ViewportErrorBoundary } from './ViewportErrorBoundary'
 import { IdleRenderDriver } from './IdleRenderDriver'
 import type { RenderMode } from './viewerSettings'
 import {
@@ -38,6 +46,9 @@ import {
 } from './Viewport3D'
 
 interface Props {
+  lightItems?: SiteItem[]
+  lightDaysPerSecond?: number
+  hiddenObjectIds?: Set<string>
   equipmentRigs: EquipmentRig[]
   importedObjects: ImportedObject[]
   // Same fix as Viewport3D.tsx's own transformTick prop (2026-09-02) — see
@@ -59,7 +70,8 @@ interface Props {
   cameraSyncRef: React.MutableRefObject<CameraSyncState | null>
   canvasRef: React.MutableRefObject<HTMLCanvasElement | null>
   dprMultiplier?: number | null
-  environmentUrl: string | null
+  onEnvironmentError: (message: string) => void
+  environmentTexture: THREE.DataTexture | null
   environmentBackground: boolean
   whiteBackground: boolean
   // The main view's Projection setting (2026-10-03, per Maro: comparison
@@ -86,6 +98,7 @@ interface Props {
   // Realistic Materials mode inputs — same values the primary viewport gets.
   realisticMapping: RealisticMaterialMap
   realisticInfoVersion: number
+  importedLights: boolean
   realisticGlassTransmission: boolean
   // "Simplify while orbiting" — applied here too while the main view's
   // synced orbit drag is in progress (PaneMovingDriver).
@@ -312,10 +325,10 @@ function CaptureCanvas({ canvasRef }: { canvasRef: React.MutableRefObject<HTMLCa
 // feature this module has beyond the header controls below stays owned by
 // the one real Viewport3D.
 export function ComparisonViewportPane({
-  equipmentRigs, importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
+  lightItems, lightDaysPerSecond, hiddenObjectIds, equipmentRigs, importedObjects, transformTick, timelineSceneObjects, ifcHandles, upAxis, fieldOfView, clipStart, clipEnd, timelineDateRef,
   activities, links, profiles, elementKeyframes, paths, pathFollowers, cameraSyncRef, canvasRef, dprMultiplier,
-  environmentUrl, environmentBackground, whiteBackground, orthographic, backgroundColor, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
-  renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, simplifyWhileOrbiting, showEdges, ambientOcclusion, dynamicSky, showGrid,
+  onEnvironmentError, environmentTexture, environmentBackground, whiteBackground, orthographic, backgroundColor, shadows, sunAzimuth, sunElevation, captureBackgroundOverride,
+  renderMode, realisticMapping, realisticInfoVersion, realisticGlassTransmission, importedLights, simplifyWhileOrbiting, showEdges, ambientOcclusion, dynamicSky, showGrid,
   active, isolation, hiddenElementKeys, dateField, config, onConfigChange, onClose, collections, udfDefinitions, getUdfValue,
   radialCharts, radialChartMatchingIds, onCommitRadialChartPosition, timelineStrips, timelineStripMatchingIds, onCommitTimelineStripPosition,
 }: Props) {
@@ -335,7 +348,7 @@ export function ComparisonViewportPane({
   // No custom HDR and no Real-Time Sky: nothing to show but white (see
   // DefaultEnvironment's header in Viewport3D.tsx).
   const showWhiteBackground = (captureBackgroundOverride === null && whiteBackground)
-    || (!dynamicSky && !environmentUrl)
+    || (!dynamicSky && !environmentTexture)
     || !(captureBackgroundOverride ?? environmentBackground)
   const solidBackgroundColor = whiteBackground ? backgroundColor : '#ffffff'
   const showEnvironmentBackground = showWhiteBackground ? false : (captureBackgroundOverride ?? environmentBackground)
@@ -399,7 +412,7 @@ export function ComparisonViewportPane({
   // built from the same live `importedObjects` each render via closure,
   // just not itself a dependency), so it's sufficient on its own.
   const cloneKey = importedObjects
-    .map(o => `${o.id}:${o.object.position.x},${o.object.position.y},${o.object.position.z},${o.object.rotation.x},${o.object.rotation.y},${o.object.rotation.z},${o.object.scale.x},${o.object.scale.y},${o.object.scale.z}`)
+    .map(o => `${o.id}:${o.object.userData.ifcGeometryRevision ?? 0}:${o.object.position.x},${o.object.position.y},${o.object.position.z},${o.object.rotation.x},${o.object.rotation.y},${o.object.rotation.z},${o.object.scale.x},${o.object.scale.y},${o.object.scale.z}`)
     .join('|')
   const clonesByOriginal = useMemo(() => {
     const map = new Map<THREE.Object3D, THREE.Object3D>()
@@ -412,6 +425,11 @@ export function ComparisonViewportPane({
   // .map()" treatment FourD.tsx's own viewportObjects already gets for the
   // primary viewport; only the actual cloning above is expensive enough to
   // need real memoization.
+  useEffect(() => {
+    if (importedLights !== false) return
+    for (const clone of clonesByOriginal.values()) setImportedLightsEnabled(clone, false)
+    return () => { for (const clone of clonesByOriginal.values()) setImportedLightsEnabled(clone, true) }
+  }, [clonesByOriginal, importedLights])
   const clonedImportedObjects = importedObjects.map(o => ({ ...o, object: clonesByOriginal.get(o.object) ?? o.object }))
   const clonedSceneObjects = timelineSceneObjects.map(o => ({ ...o, object: clonesByOriginal.get(o.object) ?? o.object }))
   const clonedIfcHandles = ifcHandles.map(h => ({ ...h, object: (clonesByOriginal.get(h.object) as THREE.Group | undefined) ?? h.object }))
@@ -464,6 +482,7 @@ export function ComparisonViewportPane({
       // (realisticMaterials.ts) applies unchanged — clones keep expressID and
       // ifcGeometryId (sceneClone.ts).
       const realisticInfo = original.userData.realisticMaterialInfo as RealisticModelInfo | undefined
+      if(renderMode==='realistic') restoreFootprintElements(clone,objectMapping,realisticInfo)
       const wantsEdges = showEdges || renderMode === 'hiddenLine'
       // The cloned batch (sceneClone.ts) — one shared material for every
       // still-batched element, swapped the same way the primary viewport's
@@ -499,8 +518,21 @@ export function ComparisonViewportPane({
         if (child === batch?.mesh || child.userData.isRealisticGlassBatch || child.userData.isEdgesBatchMesh) return
         const base = (child.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? child.material
         const materials = Array.isArray(base) ? base : [base]
-        const display = materials.map(mat => {
+        const display = materials.map((mat, index) => {
           if (!(mat instanceof THREE.MeshStandardMaterial)) return mat
+          if (child.userData.expressID !== undefined) {
+            const baseline = getOriginalMaterialSlots(child)[index]
+            const realistic = renderMode === 'realistic'
+            const outline = realistic && outlineForMesh(child, mat, realisticInfo, objectMapping)
+            const opacity = realistic ? opacityForMesh(child, mat, realisticInfo, objectMapping) : undefined
+            mat.opacity = outline ? 1 : opacity ?? child.userData.ifcColorAlpha ?? baseline?.opacity ?? 1
+            mat.userData.surfaceBaseOpacity = mat.opacity
+            mat.transparent = mat.opacity < 1
+            mat.depthWrite = mat.opacity >= 1
+            mat.visible = !outline && mat.opacity > 0
+            child.castShadow = shadows && mat.visible && mat.opacity >= 1
+            setMeshOutline(child, outline, mat, colourOverrideForMesh(child, mat, realisticInfo, objectMapping) ?? baseline?.color ?? mat.color)
+          }
           if (renderMode === 'realistic') {
             // Same explicit-material precedence as the primary viewport: a
             // material with its own base-colour texture (an override, or an
@@ -508,13 +540,18 @@ export function ComparisonViewportPane({
             const realisticClass = mat.map ? 0 : classIndexForMesh(child, mat, realisticInfo, objectMapping)
             const colourOverride = mat.map ? null : colourOverrideForMesh(child, mat, realisticInfo, objectMapping)
             if (realisticClass > 0 || colourOverride) {
-              return getRealisticVariant(
-                mat, realisticClass, undefined, realisticGlassTransmission, (child.userData.ifcColorAlpha as number | undefined) ?? 1,
+              const variant=getRealisticVariant(
+                mat, realisticClass, undefined, realisticGlassTransmission, 1,
                 colourOverride,
                 textureSettingsForMesh(child, mat, realisticInfo, objectMapping),
               )
+              applyFootprintEdges(mat,NO_FOOTPRINT_EDGES)
+              const edges=footprintEdgesForMesh(child,mat,realisticInfo,objectMapping)
+              applyFootprintEdges(variant,edges)
+              return variant
             }
           }
+          applyFootprintEdges(mat,renderMode==='realistic'?footprintEdgesForMesh(child,mat,realisticInfo,objectMapping):NO_FOOTPRINT_EDGES)
           // Mode off: free the variant. One shared with the primary viewport
           // (same source material) is unused there too, since both follow
           // the same render mode setting.
@@ -547,6 +584,12 @@ export function ComparisonViewportPane({
   useEffect(() => () => {
     for (const clone of clonesByOriginal.values()) {
       const batch = clone.userData.batch as BatchState | undefined
+      clone.traverse(child => {
+        if (child instanceof THREE.Mesh && child.userData.expressID !== undefined) {
+          removeMeshOutline(child)
+          disposeMeshMaterials(child, false)
+        }
+      })
       if (!batch) continue
       clearRealisticFromBatch(batch)
       disposeClonedBatch(batch)
@@ -728,16 +771,18 @@ export function ComparisonViewportPane({
             >
               <Sky sunPosition={skySunPosition} />
             </Environment>
-          ) : !environmentUrl ? (
+          ) : !environmentTexture ? (
             renderMode === 'realistic' ? <RealisticEnvironment zUp={zUp} /> : <DefaultEnvironment />
           ) : (
-            <Environment
-              files={environmentUrl}
-              environmentIntensity={lightingForRenderMode(renderMode).environment}
-              background={showEnvironmentBackground}
-              backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
-              environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
-            />
+            <ViewportErrorBoundary key={environmentTexture.uuid} onError={onEnvironmentError}>
+              <Environment
+                map={environmentTexture}
+                environmentIntensity={lightingForRenderMode(renderMode).environment}
+                background={showEnvironmentBackground}
+                backgroundRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+                environmentRotation={zUp ? [Math.PI / 2, 0, 0] : [0, 0, 0]}
+              />
+            </ViewportErrorBoundary>
           )}
           {showWhiteBackground && <color attach="background" args={[solidBackgroundColor]} />}
           {shadows && (
@@ -751,6 +796,9 @@ export function ComparisonViewportPane({
               <primitive object={object} visible={visible} />
             </group>
           ))}
+          {!!lightItems?.length && <SiteSceneLayer rendering state={{ items: lightItems, preview: null, selected: null,
+            onSelect: () => {}, importedLights, paths, daysPerSecond: lightDaysPerSecond, hiddenIds: hiddenObjectIds }}
+            activities={hudActivities} links={links} profiles={profiles} dateRef={timelineDateRef} />}
           <EquipmentPoseMirror rigs={equipmentRigs} sources={timelineSceneObjects} targets={clonedSceneObjects} />
           <TimelinePlayback
             dateRef={timelineDateRef}

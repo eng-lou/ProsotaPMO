@@ -172,9 +172,20 @@ try:
     assert preview['layout']['panel_count'] == 5
     assert request(scene_url)['items'] == []  # preview has no side effects
     recipe = {k:v for k,v in preview.items() if k != 'layout'}
+    recipe['section_boxes'] = [dict(id=str(uuid.uuid4()), name='Site section', active=True, visible=False,
+        min_x=-1, min_y=0, min_z=0, max_x=1, max_y=2, max_z=4, rot_x=0, rot_y=0, rot_z=0)]
     command = dict(command_id=str(uuid.uuid4()), expected_revision=0, items=[recipe])
     scene = request(scene_url, 'PUT', command)
     assert scene['revision'] == 1 and scene['items'][0]['layout']['panel_count'] == 5
+    assert request(scene_url)['items'][0]['section_boxes'] == recipe['section_boxes']
+    collection = request('/api/v1/collections/', 'POST', dict(project_id=project_id, name='Site works'))
+    members = dict(collection_id=collection['id'], members=[dict(source_kind='mesh',
+        element_ref='site:'+recipe['id'], element_label=recipe['name'])])
+    assert len(request('/api/v1/collection-members/bulk', 'POST', members)['created']) == 1
+    assert request('/api/v1/collection-members/bulk', 'POST', members)['skipped_duplicates'] == 1
+    saved_collection = next(c for c in request('/api/v1/collections/?project_id='+project_id) if c['id'] == collection['id'])
+    assert saved_collection['members'][0]['element_ref'] == 'site:'+recipe['id']
+    print('PASS: saved site section box, collection membership and duplicate prevention')
     assert request(scene_url)['items'][0]['path_motion']['progress_keys'] == site_item['path_motion']['progress_keys']
     assert request(scene_url, 'PUT', command)['revision'] == 1  # retry never duplicates
     def rejected(body, status=409):

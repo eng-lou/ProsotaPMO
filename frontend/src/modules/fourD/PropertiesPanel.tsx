@@ -30,6 +30,7 @@ interface Props {
   // automatically with the mode; this only offers reopening it once closed.
   realisticPanelOpen: boolean
   onOpenRealisticPanel: () => void
+  environmentStatus: string | null
   environmentName: string | null
   onUploadEnvironment: (file: File) => void
   onClearEnvironment: () => void
@@ -128,7 +129,7 @@ function SectionHeader({ label }: { label: string }) {
 // has (see viewerSettings.ts's own note on what's deliberately left out).
 export function PropertiesPanel({
   siteSelectionPanel, open, onToggle, settings, onSettingsChange, realisticPanelOpen, onOpenRealisticPanel,
-  environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
+  environmentStatus, environmentName, onUploadEnvironment, onClearEnvironment, environmentError,
   equipmentPivot, activeObject, isElementTransform, onTransformChange, lengthUnitToMetres, unitDisplay, gizmoMode, onGizmoModeChange, gizmoSpace, onGizmoSpaceChange, editPivot, onEditPivotChange, snapToSurface, onSnapToSurfaceChange,
   keyframeSupport, pathProgress, pivot, pivotRotation, onChangeSourceUpAxis,
 }: Props) {
@@ -251,6 +252,11 @@ export function PropertiesPanel({
       </Row>
 
       <SectionHeader label="Effects" />
+      <Row label="Scene lights">
+        <input type="checkbox" aria-label="Scene lights" checked={settings.importedLights !== false}
+          onChange={e => set('importedLights', e.target.checked)}
+          title="Switch imported and site-created lights on or off together. Sun and sky settings are separate." />
+      </Row>
       <Row label="Shadows">
         <input type="checkbox" checked={settings.shadows} onChange={e => set('shadows', e.target.checked)} />
       </Row>
@@ -355,14 +361,15 @@ export function PropertiesPanel({
             {environmentName ?? 'Studio light (default)'}
           </span>
           {environmentName && (
-            <button onClick={onClearEnvironment} title="Revert to default" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
+            <button disabled={!!environmentStatus} onClick={onClearEnvironment} title="Revert to default" className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
           )}
         </div>
         <button
+          disabled={!!environmentStatus}
           onClick={() => hdrInputRef.current?.click()}
           className="mt-1 w-full text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2"
         >
-          ⬆ Upload HDR/EXR
+          {environmentStatus ?? '⬆ Upload HDR/EXR'}
         </button>
         {environmentError && <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">{environmentError}</p>}
       </div>

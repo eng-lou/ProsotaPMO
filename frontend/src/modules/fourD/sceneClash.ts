@@ -1,3 +1,4 @@
+import { meshElementRef } from './linkedElements'
 import * as THREE from 'three'
 import { readIfcClashMeshes, captureMeshTriangles } from './clashMeshCapture'
 import type { IfcModelHandle } from './ifcModel'
@@ -42,7 +43,7 @@ export async function resolveMembersToElements(
     let ref = member.element_ref
     let metadata = { model: decoded.model ?? decoded.ref, type: 'Mesh', level: '' }
     if (member.source_kind === 'mesh') {
-      const matches = sceneObjects.filter(o => o.kind === 'mesh' && o.name === decoded.ref)
+      const matches = sceneObjects.filter(o => o.kind === 'mesh' && meshElementRef(o) === decoded.ref)
       if (matches.length > 1) throw new Error(`Ambiguous mesh name: ${decoded.ref}. Rename duplicate models before testing.`)
       matches[0]?.object.traverse(child => { if (child instanceof THREE.Mesh) meshes.push(child) })
     } else if (ifc) {

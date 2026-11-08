@@ -22,9 +22,11 @@ export async function selectedAssignmentKeys(
     const key = `${link.source_kind}::${link.element_ref}`
     if (visited.has(key)) continue
     visited.add(key)
-    if (link.source_kind === 'mesh') {
+    if (link.source_kind === 'site') {
+      if (objectIds.has('site:' + link.element_ref)) keys.add(key)
+    } else if (link.source_kind === 'mesh') {
       if (meshNames.has(link.element_ref)) keys.add(key)
-    } else if (handle && expressIds.size) {
+    } else if (link.source_kind !== 'annotation' && handle && expressIds.size) {
       const id = link.source_kind === 'ifc_split'
         ? getSplitExpressId(handle, link.element_ref)
         : handle.api.GetExpressIdFromGuid(handle.ifcModelID, link.element_ref)

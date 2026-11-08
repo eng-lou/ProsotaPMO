@@ -1,3 +1,5 @@
+import { GROUND_FINISHES, REALISTIC_CLASS_LABELS } from './realisticMaterials'
+import { LightSettings, defaultSiteIllumination } from './LightSettings'
 import { AssetPartsPanel } from './AssetPartsPanel'
 import { splitSiteAsset } from './assetParts'
 import { loadSiteAsset } from './siteAssets'
@@ -29,6 +31,7 @@ import type { AnimationProfile } from './animationProfiles'
 const input = 'w-full rounded border p-1.5 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line'
 const button = 'rounded border px-2 py-1.5 disabled:opacity-40 dark:border-prosota-line'
 const presets: Record<Exclude<SiteItem['kind'], 'asset'|'geographic'>, { name: string; width: number; depth: number; height: number; color: string }> = {
+  light: { name: 'Illumination', width: 1.2, depth: .6, height: 1, color: '#fff4dd' },
   shape: { name:'Closed shape / water',width:1,depth:1,height:.2,color:'#236b73' },
   array: { name:'Objects along path',width:3,depth:3,height:5,color:'#4d7c0f' },
   scatter: { name:'Scatter in zone',width:3,depth:3,height:5,color:'#4d7c0f' },
@@ -39,7 +42,8 @@ const presets: Record<Exclude<SiteItem['kind'], 'asset'|'geographic'>, { name: s
   person: { name: 'Static person', width: .5, depth: .3, height: 1.75, color: '#f59e0b' },
   arrow: { name: 'Road arrow', width: 1, depth: 2.5, height: .02, color: '#ffffff' },
 }
-export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEditAttachment, selectedShapeSources, hideShapeSources, importRequest, projectId, paths, zones, sceneSources, activities, riggedIds, extractionBlocks, onGenerateSchedule, upAxis, state, openPaths, focusSite, links, profiles, onLink, onUnlink, onAssignProfile, linkError }: {
+export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timelineFormat, timelineDateRef, onSeek, onEditAttachment, selectedShapeSources, hideShapeSources, importRequest, projectId, paths, zones, sceneSources, activities, riggedIds, extractionBlocks, onGenerateSchedule, upAxis, state, openPaths, focusSite, onPickItem, links, profiles, onLink, onUnlink, onAssignProfile, linkError }: {
+  sceneLightsEnabled: boolean; enableSceneLights(): void
   timelineFormat?: TimelineFormat
   timelineDateRef?: React.MutableRefObject<Date|null>
   onSeek?(date:Date):void
@@ -52,7 +56,7 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
   importRequest?: number
   sceneSources: {id:string;name:string;object:Object3D}[]
   projectId: string; paths: Path[]; zones: Zone[]; activities: Activity[]; upAxis: 'y' | 'z'
-  state: ReturnType<typeof useSiteScene>; openPaths(): void; focusSite(): void
+  state: ReturnType<typeof useSiteScene>; openPaths(): void; focusSite(): void; onPickItem(id: string): void
   links: ModelElementLink[]; profiles: AnimationProfile[]; linkError: string | null
   onLink(item: SiteItem, activityId: string, profileId: string | null): void
   onUnlink(id: string): void; onAssignProfile(id: string, profileId: string | null): void
@@ -75,25 +79,39 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
   useEffect(() => {
     if (!state.placement || !edit) return
     const next = { ...edit, position: state.placement.point }
-    setEdit(next); void preview(next)
+    setEdit(next)
+    if (next.kind === 'light') setDraft(next)
+    else void preview(next)
   }, [state.placement])
   useEffect(() => {
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') cancel() }
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key)
   })
   function change(patch: Partial<SiteItem>) {
+    if (edit?.kind === 'light') {
+      const next = { ...edit, ...patch }
+      setEdit(next); setDraft(next); setError('')
+      if (patch.position) state.setPlacing(false)
+      return
+    }
     generation.current++; sequence.current?.abort(); setPreviewing(false); setDraft(null); state.setPlacing(false)
     setEdit(old => old ? { ...old, ...patch } : null); setError('')
   }
   function startShape(kind: Exclude<SiteItem['kind'], 'asset'|'geographic'>) {
     cancel(); focusSite(); setSelected(null)
-    setEdit({ id: crypto.randomUUID(), kind, ...presets[kind], generator_version: 1, up_axis: upAxis, units: 'm',
+    const item: SiteItem = { id: crypto.randomUUID(), kind, ...presets[kind], generator_version: 1, up_axis: upAxis, units: 'm',
       position: { x: 0, y: 0, z: 0 }, yaw: 0, locked: false, activity_id: null, path_id: null,
-      points: [], closed: false, module_length: 2, gate_start: 4, gate_width: 0, spacing:3, count:20, seed:1, placement_kind:'tree', panel_fit:'fit' })
+      points: [], closed: false, module_length: 2, gate_start: 4, gate_width: 0, spacing:3, count:20, seed:1, placement_kind:'tree', panel_fit:'fit' }
+    if (kind === 'light') {
+      item.name = 'Spot light'
+      item.illumination = defaultSiteIllumination('spot')
+      setConfirmed(true); setDraft(item); state.setPlacing(true)
+    }
+    setEdit(item)
   }
   function start(kind: Exclude<SiteItem['kind'], 'asset'|'geographic'>) {
-    if (['shape','array','scatter','fence'].includes(kind)) {startShape(kind);return}
-    const type = {shape:'',array:'',scatter:'',fence:'Fences',context:'Context buildings',cabin:'Cabins',tree:'Trees',person:'People',arrow:'Road arrows'}[kind]
+    if (['shape','array','scatter','fence','light'].includes(kind)) {startShape(kind);return}
+    const type = {light:'',shape:'',array:'',scatter:'',fence:'Fences',context:'Context buildings',cabin:'Cabins',tree:'Trees',person:'People',arrow:'Road arrows'}[kind]
     const matches = inventory.assets.filter(a=>a.category===type || (kind==='tree' && a.category==='Vegetation'))
     if(matches.length===1) {placeAsset(matches[0]);return}
     if(matches.length>1) {cancel();setLibraryFilter(type);setLibrary(true);return}
@@ -156,7 +174,10 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
     const items = scene.items.filter(i => i.id !== draft.id)
     setCapturing(true)
     try { const placements=placeAsParts&&draft.kind==='asset'&&draft.asset_id ? splitSiteAsset(draft,await loadSiteAsset(draft.asset_id)) : [draft]
-      await save([...items, ...placements], `3D Site tools: ${draft.name}`); cancel() } catch(e) { setError(siteError(e)) } finally { setCapturing(false) }
+      await save([...items, ...placements], `3D Site tools: ${draft.name}`)
+      cancel()
+      if (draft.kind === 'light') setSelected(draft.id)
+    } catch(e) { setError(siteError(e)) } finally { setCapturing(false) }
   }
   async function update(item: SiteItem, patch: Partial<SiteItem> | null) {
     try { await save(patch ? scene.items.map(i => i.id === item.id ? { ...i, ...patch } : i) : scene.items.filter(i => i.id !== item.id), `${patch ? 'Update' : 'Remove'} ${item.name}`) } catch { /* state shows error */ }
@@ -189,7 +210,7 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
         <button className={button} onClick={openPaths}>Draw / edit a path</button>
         <p>Follows the source geometry. Edit its points, then Preview and Save to regenerate. Saved geometry is retained if the source is hidden or removed.</p>
         <label>Tag<input className={input} value={edit.tag || ''} onChange={e=>change({tag:e.target.value})} placeholder="Water, landscaping, access…" /></label>
-        {edit.kind==='shape' && <><p>Close a path or choose a zone to create a solid footprint.</p>{number('Height / thickness (m)','height')}<label>Surface<select className={input} value={edit.finish || 'default'} onChange={e=>change({finish:e.target.value as 'default'|'water'})}><option value="default">Standard · edit in Materials</option><option value="water">Animated water</option></select></label></>}
+        {edit.kind==='shape' && <><p>Close a path or choose a zone to create a solid footprint.</p>{number('Height / thickness (m)','height')}<label>Surface<select className={input} value={edit.finish || 'default'} onChange={e=>change({finish:e.target.value as SiteItem['finish']})}><option value="default">Standard · edit in Materials</option><option value="water">Animated water</option><optgroup label="Temporary ground">{GROUND_FINISHES.map(f=><option key={f} value={f}>{REALISTIC_CLASS_LABELS[f]}</option>)}</optgroup></select></label></>}
         {(edit.kind==='array'||edit.kind==='scatter') && <>
           <ToolVisualGuide topic="placement" mode={edit.kind}/>
           <label>Use an existing scene object<select className={input} value={sourceId} disabled={capturing} onChange={e=>setSourceId(e.target.value)}><option value="">Choose imported or created object…</option>{sceneSources.filter(s=>s.id!=='site:'+edit.id).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
@@ -208,14 +229,17 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
         {state.placing && <p className="rounded bg-blue-50 text-blue-800 p-2">Move to preview · click to position · right-drag to navigate · Esc to cancel</p>}
         <details><summary className="cursor-pointer">Exact position</summary>
         <div className="grid grid-cols-3 gap-1">{(['x','y','z'] as const).map(axis => <label key={axis}>{axis.toUpperCase()} (m)<input type="number" step="any" className={input} value={edit.position[axis]} onChange={e => change({ position: { ...edit.position, [axis]: e.target.valueAsNumber } })} /></label>)}</div>
-        <p>{edit.up_axis.toUpperCase()} is up. Position is the base anchor; set its ground elevation explicitly.</p>
+        <p>{edit.up_axis.toUpperCase()} is up. {edit.kind === 'light' ? 'Position is the light source.' : 'Position is the base anchor; set its ground elevation explicitly.'}</p>
         </details>
-        <div className="grid grid-cols-2 gap-2">{number('Width (m)', 'width')}{number('Depth (m)', 'depth')}{number('Height (m)', 'height')}{number('Rotation (°)', 'yaw')}</div>
+        {edit.kind === 'light' && edit.illumination ? <>
+          <LightSettings item={edit} onChange={change} />
+          {!sceneLightsEnabled && <button className={button} onClick={enableSceneLights}>Turn on scene lights to preview</button>}
+        </> : <div className="grid grid-cols-2 gap-2">{number('Width (m)', 'width')}{number('Depth (m)', 'depth')}{number('Height (m)', 'height')}{number('Rotation (°)', 'yaw')}</div>}
       </>}
-      {edit.kind !== 'asset' && edit.kind !== 'geographic' && <label className="flex items-center gap-2">Colour<input type="color" value={edit.color} onChange={e => change({ color: e.target.value })} /></label>}
+      {edit.kind !== 'light' && edit.kind !== 'asset' && edit.kind !== 'geographic' && <label className="flex items-center gap-2">Colour<input type="color" value={edit.color} onChange={e => change({ color: e.target.value })} /></label>}
       {edit.activity_id && <label>Previous visibility setting<select className={input} value={edit.activity_id} onChange={e => change({ activity_id: e.target.value || null })}><option value="">Clear setting</option>{activities.filter(a => a.start && a.finish).map(a => <option value={a.id} key={a.id}>{a.code} · {a.task_name}</option>)}</select><span className="block">Activity links and profiles take precedence.</span></label>}
-      <label className="flex gap-2"><input type="checkbox" checked={confirmed} onChange={e => { generation.current++; sequence.current?.abort(); setPreviewing(false); setConfirmed(e.target.checked); setDraft(null); state.setPlacing(false) }} />Model coordinates are in metres</label>
-      <div className="flex gap-2"><button className={button} disabled={!confirmed || busy || previewing || capturing || state.placing} onClick={() => void preview()}>{previewing ? 'Preparing…' : 'Preview'}</button><button className={`${button} bg-blue-600 text-white`} disabled={!draft || busy || state.placing || previewing || capturing} onClick={() => void commit()}>Save</button><button className={button} disabled={busy} onClick={cancel}>Cancel</button></div>
+      {edit.kind !== 'light' && <label className="flex gap-2"><input type="checkbox" checked={confirmed} onChange={e => { generation.current++; sequence.current?.abort(); setPreviewing(false); setConfirmed(e.target.checked); setDraft(null); state.setPlacing(false) }} />Model coordinates are in metres</label>}
+      <div className="flex gap-2">{edit.kind !== 'light' && <button className={button} disabled={!confirmed || busy || previewing || capturing || state.placing} onClick={() => void preview()}>{previewing ? 'Preparing…' : 'Preview'}</button>}<button className={`${button} bg-blue-600 text-white`} disabled={!draft || busy || state.placing || previewing || capturing} onClick={() => void commit()}>Save</button><button className={button} disabled={busy} onClick={cancel}>Cancel</button></div>
       {draft?.layout?.panels && <p>{draft.layout.panel_count} panels · {draft.layout.length?.toFixed(2)} m run · {draft.layout.gate_width?.toFixed(2)} m gate opening</p>}
     </div>}
     {draft?.layout?.placements && <p>{draft.layout.count} objects prepared</p>}
@@ -224,13 +248,13 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
     <div className="max-h-64 overflow-auto space-y-1">{scene.items.map(item => {
       const path = paths.find(p => p.id === item.path_id)
       const changed = ['fence','shape','array','scatter'].includes(item.kind) && (item.zone_id ? !zones.some(z=>z.id===item.zone_id) : !path || JSON.stringify(path.points) !== JSON.stringify(item.points) || path.closed !== item.closed || (path.curve_mode || 'curved') !== (item.curve_mode || 'straight'))
-      return <button key={item.id} className={`w-full text-left rounded border p-2 ${selected === item.id || selected?.startsWith(item.id + ':panel:') ? 'border-blue-500 bg-blue-50 dark:bg-slate-800' : 'dark:border-prosota-line'}`} onClick={() => { focusSite(); setSelected(item.id) }}>
+      return <button key={item.id} className={`w-full text-left rounded border p-2 ${selected === item.id || selected?.startsWith(item.id + ':panel:') ? 'border-blue-500 bg-blue-50 dark:bg-slate-800' : 'dark:border-prosota-line'}`} onClick={() => { focusSite(); onPickItem(item.id) }}>
         {item.name}{item.assembly_name&&<span className="block text-slate-500">{item.assembly_name} · independent part</span>}{item.tag ? ' · '+item.tag : ''}{item.locked ? ' · Locked' : ''}{changed && <span className="block text-amber-600">Source changed/missing · saved geometry retained</span>}
         {item.activity_id && !activities.some(a => a.id === item.activity_id) && <span className="block text-amber-600">Activity not in the loaded schedule · hidden in playback</span>}
       </button>
     })}</div>
     {chosen && !edit && <div className="flex flex-wrap gap-2">
-      {chosen.kind!=='geographic'&&<button className={button} disabled={chosen.locked || busy} onClick={() => { setPlaceAsParts(false); setEdit(recipe(chosen)); setConfirmed(true) }}>Edit / regenerate</button>}
+      {chosen.kind!=='geographic'&&<button className={button} disabled={chosen.locked || busy} onClick={() => { setPlaceAsParts(false); setEdit(recipe(chosen)); if (chosen.kind === 'light') setDraft(recipe(chosen)); setConfirmed(true) }}>{chosen.kind === 'light' ? 'Edit light' : 'Edit / regenerate'}</button>}
       <button className={button} disabled={busy} onClick={() => void update(chosen, { locked: !chosen.locked })}>{chosen.locked ? 'Unlock' : 'Lock'}</button>
       <button className={button} disabled={chosen.locked || busy} onClick={() => void update(chosen, null)}>Remove</button>
     </div>}
@@ -239,7 +263,7 @@ export function SiteToolsPanel({ timelineFormat, timelineDateRef, onSeek, onEdit
     {chosen?.assembly_id&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.filter(i=>i.assembly_id===chosen.assembly_id).map(i=>i.id))}>Schedule this assembly’s parts…</button>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&<AssetPartsPanel key={'parts:'+chosen.id} item={chosen} state={state} blocked={extractionBlocks?.[chosen.id] || (links.some(l=>l.source_kind==='site'&&l.element_ref===chosen.id)?'Unlink the whole assembly from its activities before extracting. Then link the new individual parts.':riggedIds?.has('site:'+chosen.id)?'Remove the equipment rig before extracting construction parts.':chosen.path_motion?'Remove the assembly movement path before extracting.':undefined)}/>}
     {chosen?.geographic&&!edit&&<GeographicWorkbench key={'geography:'+chosen.id} item={chosen} state={state} source={source} projectId={projectId} assets={inventory.assets}/>}
-    {chosen&&!chosen.geographic&&!edit&&<><ReplacementPanel key={chosen.id} state={state} assets={inventory.assets} selection={{itemId:chosen.id,instanceIndex:state.detailSelection?.itemId===chosen.id?state.detailSelection.instanceIndex:undefined}}/><button className={button} disabled={!source||busy||capturing} onClick={async()=>{if(!source)return;setCapturing(true);try{await downloadObjectGlb(source,chosen.name,upAxis)}catch(e){setError(siteError(e))}finally{setCapturing(false)}}}>Export object GLB (static pose)</button></>}
+    {chosen&&chosen.kind!=='light'&&!chosen.geographic&&!edit&&<><ReplacementPanel key={chosen.id} state={state} assets={inventory.assets} selection={{itemId:chosen.id,instanceIndex:state.detailSelection?.itemId===chosen.id?state.detailSelection.instanceIndex:undefined}}/><button className={button} disabled={!source||busy||capturing} onClick={async()=>{if(!source)return;setCapturing(true);try{await downloadObjectGlb(source,chosen.name,upAxis)}catch(e){setError(siteError(e))}finally{setCapturing(false)}}}>Export object GLB (static pose)</button></>}
     {chosen?.asset_id && !chosen.asset_part && !edit && <SiteAnimationControls item={chosen} projectId={projectId} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} onApplyMotion={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Import motion for ${chosen.name}`)}} />}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
     {chosen && !edit && <section className="border-t pt-2 space-y-2 dark:border-prosota-line">

@@ -1,3 +1,6 @@
+import { SiteLight } from './SiteLight'
+import { applyFootprintEdges } from './footprintEdges'
+import { HAUL_ROAD_CLASS, footprintEdgesForKey } from './realisticMaterials'
 import { materialScope } from './materialScope'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { type ThreeEvent, useFrame } from '@react-three/fiber'
@@ -20,27 +23,30 @@ import type { AnimationProfile } from './animationProfiles'
 import { resolveSiteLinks } from './siteAnimation'
 import { useSiteAnimation } from './useSiteAnimation'
 import { disposeRealisticVariant, type RealisticMaterialMap } from './realisticMaterials'
-import { primitiveMaterialKey, siteMaterialLook } from './siteAssetMaterials'
+import { applySiteSurfaceOpacity, primitiveMaterialKey, siteMaterialLook } from './siteAssetMaterials'
 
 function ShapeMaterial({ item, mapping, transmission, preview, colour, textures, opacity, slot = 'surface' }: {
   textures?: CustomTextureSet; opacity?: number
   item: SiteItem; mapping?: RealisticMaterialMap; transmission?: boolean; preview: boolean; colour: string; slot?: string
 }) {
-  const source = useMemo(() => { const material=new THREE.MeshStandardMaterial({ color: colour, roughness: .8, transparent: preview, opacity: preview ? .45 : 1 }); material.color.set(slot==='trunk'?'#795548':slot==='windows'?'#334155':item.color); captureMaterialChannels(material); material.color.set(colour); return applyCustomMaterial(material,textures,opacity) }, [colour, preview, textures, opacity, item.color, slot])
+  const source = useMemo(() => { const material=new THREE.MeshStandardMaterial({ color: colour, roughness: .8, transparent: preview, opacity: preview ? .45 : 1 }); material.color.set(slot==='trunk'?'#795548':slot==='windows'?'#334155':item.color); captureMaterialChannels(material); material.color.set(colour); return applyCustomMaterial(material,textures) }, [colour, preview, textures, opacity, item.color, slot])
   const material = useMemo(() => {
     // Tint overrides must not mutate the authored colour across finish changes.
     if(!textures?.map)source.color.set(colour)
     source.userData.exportColour=textures?.map?'#ffffff':item.kind==='fence'?'#ffffff':slot==='trunk'?'#795548':slot==='windows'?'#334155':item.color
-    const result = mapping && !hasCustomTextures(textures) ? siteMaterialLook(source, primitiveMaterialKey(item.id, slot), item.finish==='water'?{...mapping,[primitiveMaterialKey(item.id,slot)]:mapping[primitiveMaterialKey(item.id,slot)] || 'water'}:mapping, !!transmission) : source
+    applySiteSurfaceOpacity(source, primitiveMaterialKey(item.id, slot), mapping ?? {}, opacity ?? 1)
+    const result = mapping && !hasCustomTextures(textures) ? siteMaterialLook(source, primitiveMaterialKey(item.id, slot), item.finish && item.finish !== 'default' ? {...mapping,[primitiveMaterialKey(item.id,slot)]:mapping[primitiveMaterialKey(item.id,slot)] || item.finish} : mapping, !!transmission) : source
     result.userData.exportColour=source.userData.exportColour
     if(item.kind==='fence')result.userData.exportInstanceColour=item.color
+    applyFootprintEdges(result,footprintEdgesForKey(primitiveMaterialKey(item.id,slot),mapping??{}, result.userData.realisticClass===HAUL_ROAD_CLASS))
     return result
-  }, [source, colour, mapping, item.id, item.finish, slot, transmission, textures])
+  }, [source, colour, mapping, item.id, item.finish, slot, transmission, textures, opacity])
   useEffect(() => () => { disposeRealisticVariant(source); source.dispose() }, [source])
   return <primitive object={material} attach="material" />
 }
 
 export interface SiteLayerState {
+  hideLightHandles?: boolean
   detailSelection?: {itemId:string;featureId?:string;surface?:string;instanceIndex?:number}|null
   onDetailSelect?(selection:{itemId:string;featureId?:string;surface?:string;instanceIndex?:number}):void
   paths?: Path[]; daysPerSecond?: number
@@ -51,7 +57,7 @@ export interface SiteLayerState {
   onSourceRegister?(id: string, object: THREE.Group | null): void
   onRegister?(id: string, object: THREE.Group | null): void
   onGeometryReady?(): void
-  materialMapping?: RealisticMaterialMap; glassTransmission?: boolean
+  materialMapping?: RealisticMaterialMap; glassTransmission?: boolean; importedLights?: boolean
   items: SiteItem[]; preview: SiteItem | null; selected: string | null
   onSelect(id: string, additive?: boolean): void
   placing?: boolean; onPlace?(point: PathPoint): void; onMove?(point: PathPoint): void
@@ -75,7 +81,7 @@ function Fence({ item, selected, preview, select, state }: { state: SiteLayerSta
     mesh.current.computeBoundingSphere()
   }, [item, selected, preview])
   return <instancedMesh ref={mesh} args={[undefined, undefined, panels.length]} castShadow receiveShadow
-    onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); if (!preview && event.delta <= 4 && event.instanceId !== undefined) select(panels[event.instanceId].id) }}>
+    onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); if (!state.boxSelecting && !preview && event.delta <= 4 && event.instanceId !== undefined) select(panels[event.instanceId].id) }}>
     <boxGeometry args={[1, 1, 1]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={state.materialMapping && materialScope(state.materialMapping, 'site:' + item.id)} transmission={state.glassTransmission} preview={preview} colour="#ffffff" />
   </instancedMesh>
 }
@@ -145,12 +151,14 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     <group ref={root} userData={{ isSitePreview: preview }} visible={preview || !item.activity_id || presentAt(activity, dateRef.current)}>
     <group key={item.kind==='geographic'||item.kind==='asset'?item.id:item.color + ':' + state.selected + ':' + preview}>
     {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={mapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface)=>{if(state.boxSelecting)return;state.onSelect(item.id);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :
-    item.kind === 'shape' ? <mesh castShadow receiveShadow onClick={e=>{e.stopPropagation();if(!preview)state.onSelect(item.id,e.shiftKey||e.ctrlKey||e.metaKey)}}><FootprintGeometry item={item}/>{material}</mesh> :
+    item.kind === 'shape' ? <mesh castShadow receiveShadow onClick={e=>{e.stopPropagation();if(!state.boxSelecting && !preview && e.delta <= 4)state.onSelect(item.id,e.shiftKey||e.ctrlKey||e.metaKey)}}><FootprintGeometry item={item}/>{material}</mesh> :
     (item.kind==='array'||item.kind==='scatter') ? <group>{item.layout?.placements?.map((placement,index)=>{const override=item.instance_overrides?.[index];return <Item key={index} instance instanceIndex={index} item={{...item,...override,kind:override?'asset':item.placement_kind || 'tree',position:placement.position,yaw:placement.yaw+item.yaw,layout:null,activity_id:null,object_state:null,rotation:undefined,scale:undefined,animation_playing:override?false:item.animation_playing}} state={state} preview={preview} dateRef={dateRef} links={[]} activities={[]} profiles={[]} />})}</group> :
     item.kind === 'fence' ? <group><Fence state={state} item={item} selected={state.selected} preview={preview} select={state.onSelect} /></group> :
       <group quaternion={rotation}
         onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); if (!state.boxSelecting && !preview && e.delta <= 4) {state.onSelect(item.id, e.ctrlKey || e.metaKey || e.shiftKey);state.onDetailSelect?.({itemId:item.id,instanceIndex})} }}>
-        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={mapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
+        {item.kind === 'light' && <SiteLight item={item} enabled={state.importedLights !== false}
+          showHandle={!state.hideLightHandles} selected={selected || preview} />}
+        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel importedLights={state.importedLights} actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={mapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
         {(item.kind === 'context' || item.kind === 'cabin') && <>
           <mesh position={[0, item.height / 2, 0]} castShadow receiveShadow><boxGeometry args={[item.width, item.height, item.depth]} />{material}</mesh>
           {item.kind === 'cabin' && <mesh position={[0, item.height * .6, item.depth / 2 + .005]}><planeGeometry args={[item.width * .65, item.height * .3]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="windows" mapping={mapping} transmission={state.glassTransmission} preview={preview} colour="#334155" /></mesh>}
@@ -177,7 +185,7 @@ export function SiteSceneLayer({ state, activities, links, profiles, dateRef, re
   const register=useCallback((id:string,object:THREE.Group|null)=>{if(object)roots.current.set(id,object);else roots.current.delete(id);state.onRegister?.(id,object)},[state.onRegister])
   const items = state.items.filter(i => rendering || i.id !== state.preview?.id)
   return <group name="Prosota site objects">
-    {items.map(item => <Item key={item.id} item={item} state={{...state,onRegister:register,...(rendering?{selected:null,selectedIds:new Set<string>()}:{})}} preview={false} activity={activities.find(a => a.id === item.activity_id)} dateRef={dateRef} links={links} profiles={profiles} activities={activities} />)}
+    {items.map(item => <Item key={item.id} item={item} state={{...state,hideLightHandles:rendering,onRegister:register,...(rendering?{selected:null,selectedIds:new Set<string>()}:{})}} preview={false} activity={activities.find(a => a.id === item.activity_id)} dateRef={dateRef} links={links} profiles={profiles} activities={activities} />)}
     <SiteAttachments items={items} roots={roots} dateRef={state.pathDateRef||dateRef}/>
     {!rendering && state.preview && <Item key={'preview:' + state.preview.id} item={state.preview} state={state} preview dateRef={dateRef} links={links} profiles={profiles} activities={activities} />}
   </group>

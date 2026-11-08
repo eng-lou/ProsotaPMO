@@ -47,7 +47,7 @@ import type { Activity, ActivityRelationship, ActualsHistoryItem, Calendar, Reso
 import { disposeObject3D, loadModel3DFile, loadTexturedObj } from './import3d'
 import { isBundle, unpackBundle } from './fileBundle'
 import { createPointCloudObject, parseXyzFile } from './pointCloud'
-import { deleteSavedEnvironment, loadCustomEnvironment, loadSavedEnvironment, saveEnvironment, type SavedEnvironment } from './environmentHdr'
+import { useProjectEnvironment } from './useProjectEnvironment'
 import { adjustSelectedTextures, type TextureAdjustment, disposeCustomTextureSet, loadCustomTexture, type CustomTextureSet, type TextureSlot } from './customTextures'
 import { createSiteContextUpdates } from './siteContextUpdates'
 import { loadPresetAsTextureSet, useMaterialPresets, type MaterialPreset } from './materialPresets'
@@ -59,7 +59,7 @@ import {
   deleteModel3DFile, downloadModel3DFile, listModel3DFiles, pruneModel3DFileCache, updateUnloadedElements, uploadModel3DFile,
   type Model3DKind, type UnloadedElementInfo,
 } from './model3dFiles'
-import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds, type SectionBoxRotation } from './sectionBoxes'
+import { createSectionBox, deleteSectionBox, listSectionBoxes, updateSectionBox, type SectionBox, type SectionBoxBounds, type SectionBoxRotation, type SiteSectionBox } from './sectionBoxes'
 import { computeLocalBoundsForObject, computeLocalBoundsForObjects } from './sectionBoxGeometry'
 import { AnimationProfilePanel } from './AnimationProfilePanel'
 import { SideDock, type DockedPanel, type PanelSide } from './SideDock'
@@ -68,6 +68,7 @@ import { matchingObjectChannels } from './customMaterial'
 import { TextureFields } from './TextureFields'
 import { MaterialPresetPicker } from './MaterialPresetPicker'
 import { RealisticMaterialsPanel } from './RealisticMaterialsPanel'
+import { makeWearGuides, WEAR_GUIDES } from './surfaceWearGuides'
 import { createCameraView, deleteCameraView, isolatedKeysFromSavedView, listCameraViews, updateCameraView, type CameraView, type CameraViewPose } from './cameraViews'
 import { createCamera, deleteCamera, listCameras, updateCamera, type Camera as CinematicCamera, type CameraPose } from './cameras'
 import { uploadFourDVideo } from './fourDVideos'
@@ -81,6 +82,7 @@ import { CollectionsPanel } from './CollectionsPanel'
 import { listElementSplits, type ElementSplit } from './elementSplits'
 import { regenerateSplitTargets } from './elementSplitTargets'
 import { SplitByLevelPanel } from './SplitByLevelPanel'
+import { applyElementTransform, restoreIfcPlacements } from './savedModelPlacement'
 import { listElementTransforms, saveElementTransform, type ElementTransform } from './elementTransforms'
 import { resolveSelectionToMemberRefs } from './collectionResolvers'
 import { selectedAssignmentKeys } from './selectedAssignmentKeys'
@@ -102,7 +104,7 @@ import type { IfcModelHandle } from './ifcModel'
 // site like the rest of ifcModel.ts) because the render-body TransformPanel
 // gizmo-target resolution below runs synchronously during render, where an
 // await import() isn't an option.
-import { ensureMaterialized, hasGeometry, removeElementsFromModel } from './elementBatching'
+import { ensureMaterialized, getMaterializedMeshes, getElementTransformTarget, hasGeometry, removeElementsFromModel, restoreRemovedElements } from './elementBatching'
 import { DataPanel } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
@@ -123,7 +125,7 @@ import { SiteScheduleWizard } from './SiteScheduleWizard'
 import { SiteToolsPanel } from './SiteToolsPanel'
 import { loadSiteAsset, importSiteAsset } from './siteAssets'
 import { siteMaterialInfo, primitiveMaterialInfo } from './siteAssetMaterials'
-import { useSiteScene } from './siteScene'
+import { sitePlacementPoint, useSiteScene } from './siteScene'
 import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoint } from './zones'
 import { ZonesPanel } from './ZonesPanel'
 import { createRadialChart, deleteRadialChart, listRadialCharts, updateRadialChart, uploadRadialChartIcon, type RadialChart, type RadialChartCenterMode } from './radialCharts'
@@ -285,32 +287,6 @@ function loadPanelOpen(key: string, defaultOpen = true): boolean {
 // hidden so Viewport3D.tsx can drop its Canvas to frameloop="never" instead
 // of rendering into an invisible tab. Defaults true so this still works if
 // ever rendered directly (e.g. in isolation).
-// Hoisted out of the restore-on-mount effect below (2026-07-26, for
-// "Reload IFC" — see handleReloadIfc's own header) — a pure function with
-// no closure over component state, so sharing it between the normal
-// restore-on-mount flow and a one-off single-file reload is just a plain
-// function reference, not a refactor of either call site's own logic.
-function applyElementTransform(object: Object3D, t: ElementTransform | undefined) {
-  if (!t) return
-  // Pivot first (2026-07-12, extended 2026-07-22 for pivot rotation) —
-  // setPivot/setPivotRotation's own compensating position/quaternion
-  // writes would otherwise be immediately overwritten by the .set() calls
-  // below anyway, but running them first means those correctly land on
-  // the saved *final* authored position/rotation rather than fighting a
-  // pivot-driven change applied after the fact — geometry recentering is
-  // the part that actually matters here, since nothing else re-derives
-  // it. See elementPivot.ts's own header.
-  if (t.pivot_x !== null && t.pivot_y !== null && t.pivot_z !== null) {
-    setPivot(object, new Vector3(t.pivot_x, t.pivot_y, t.pivot_z))
-  }
-  if (t.pivot_rotation_x !== null && t.pivot_rotation_y !== null && t.pivot_rotation_z !== null) {
-    setPivotRotation(object, new Euler(t.pivot_rotation_x, t.pivot_rotation_y, t.pivot_rotation_z))
-  }
-  object.position.set(t.position_x, t.position_y, t.position_z)
-  object.rotation.set(t.rotation_x, t.rotation_y, t.rotation_z)
-  object.scale.set(t.scale_x, t.scale_y, t.scale_z)
-}
-
 export function FourD({ active = true }: { active?: boolean } = {}) {
   const [simulatorOpen,setSimulatorOpen]=useState(false)
   const [previewScenario,setSimulationScenario]=useState<SimulationScenario|null>(null)
@@ -524,8 +500,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // linked elements come back silently skipped server-side, same "benign
   // no-op" meaning the old per-element 409 catch had.
   const handleBulkLinkSelectedToActivity = async (activityId: string, profileId: string | null = null) => {
-    const handle = getIfcHandleFor(activeIfcModelId)
-    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    const drafts = await selectedActivityMembers()
     if (drafts.length === 0) return
     setLinkError(null)
     try {
@@ -543,8 +518,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setUnlinkingSelection(true)
     setLinkError(null)
     try {
-      const handle = getIfcHandleFor(activeIfcModelId)
-      const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+      const drafts = await selectedActivityMembers()
       if (drafts.length === 0) return
       const draftKeys = new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`))
       // null explicitly means all assignments, still limited to this selection.
@@ -581,6 +555,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // per-IFC-element scoping (see sectionBoxGeometry.ts/Viewport3D.tsx's
   // ResolvedSectionBox for the fuller design).
   const [sectionBoxes, setSectionBoxes] = useState<SectionBox[]>([])
+  const siteBoxes = useMemo(() => siteScene.scene.items.flatMap(item => (item.section_boxes ?? []).map(box => ({
+    ...box, id: 'site:' + item.id + '/' + box.id, siteId: item.id, element_ref: null,
+  }))), [siteScene.scene.items])
+  const allSectionBoxes = [...sectionBoxes, ...siteBoxes]
+  async function saveSiteBoxes(itemId: string, change: (boxes: SiteSectionBox[]) => SiteSectionBox[]) {
+    await siteScene.save(siteScene.scene.items.map(item => item.id === itemId
+      ? { ...item, section_boxes: change(item.section_boxes ?? []) } : item), 'Edit section box')
+  }
+
   const [sectionBoxError, setSectionBoxError] = useState<string | null>(null)
   useEffect(() => {
     if (!selectedProject || !hasEverBeenActive) return
@@ -609,7 +592,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleCreateSectionBox = async () => {
-    const target = sceneObjects.find(o => o.id === activeObjectId)
+    const siteId = [...selectedObjectIds].find(id => id.startsWith('site:'))?.slice(5)
+    if (siteId) {
+      try {
+        setSectionBoxError(null)
+        const root = siteRoots.get(siteId)
+        if (!root) throw new Error('Wait for the selected site geometry to load.')
+        const targets = [...selectedObjectIds].flatMap(id => {
+          const site = id.startsWith('site:') && siteRoots.get(id.slice(5))
+          if (site) return [site]
+          const model = sceneObjects.find(o => o.id === id)
+          if (!model) return []
+          const ids = currentIfcPick().get(id)
+          return ids?.size ? [...ids].flatMap(eid => getMaterializedMeshes(model.object, eid)) : [model.object]
+        })
+        const bounds = computeLocalBoundsForObjects(root, targets)
+        await saveSiteBoxes(siteId, boxes => [...boxes, { id: crypto.randomUUID(), name: 'Section Box', ...bounds,
+          rot_x: 0, rot_y: 0, rot_z: 0, active: true, visible: true }])
+      } catch (err) { setSectionBoxError(sectionBoxErrorMessage(err, 'Failed to create section box')) }
+      return
+    }
+    const target = sceneObjects.find(o => o.id === activeObjectId) ?? sceneObjects.find(o => selectedObjectIds.has(o.id))
     if (!target || !selectedProject) return
     if (!target.fileId) {
       setSectionBoxError('Still saving this model — try again in a moment.')
@@ -720,6 +723,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleUpdateSectionBox = async (id: string, data: Partial<SectionBoxBounds> & Partial<SectionBoxRotation> & { name?: string; active?: boolean; visible?: boolean }) => {
     try {
       setSectionBoxError(null)
+      const owner = siteBoxes.find(box => box.id === id)
+      if (owner) {
+        await saveSiteBoxes(owner.siteId, boxes => boxes.map(box => id.endsWith('/' + box.id) ? { ...box, ...data } : box))
+        return
+      }
       const updated = await updateSectionBox(id, data)
       setSectionBoxes(prev => prev.map(b => (b.id === id ? updated : b)))
     } catch (err) {
@@ -728,11 +736,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
   const handleRenameSectionBox = (id: string, name: string) => handleUpdateSectionBox(id, { name })
   const handleToggleSectionBoxActive = (id: string) => {
-    const box = sectionBoxes.find(b => b.id === id)
+    const box = allSectionBoxes.find(b => b.id === id)
     if (box) handleUpdateSectionBox(id, { active: !box.active })
   }
   const handleToggleSectionBoxVisible = (id: string) => {
-    const box = sectionBoxes.find(b => b.id === id)
+    const box = allSectionBoxes.find(b => b.id === id)
     if (box) handleUpdateSectionBox(id, { visible: !box.visible })
   }
   // SectionBoxGizmo.tsx's own live-drag/commit — see draggingSectionBox's
@@ -756,6 +764,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleDeleteSectionBox = async (id: string) => {
     try {
       setSectionBoxError(null)
+      const owner = siteBoxes.find(box => box.id === id)
+      if (owner) {
+        await saveSiteBoxes(owner.siteId, boxes => boxes.filter(box => !id.endsWith('/' + box.id)))
+        return
+      }
       await deleteSectionBox(id)
       setSectionBoxes(prev => prev.filter(b => b.id !== id))
     } catch (err) {
@@ -875,9 +888,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // round trips, each its own commit. Already-in-this-collection elements
   // come back silently skipped server-side, same "benign no-op" meaning
   // the old per-element 409 catch had.
+  async function selectedActivityMembers() {
+    return (await selectedCollectionMembers()).map(member =>
+      member.source_kind === 'mesh' && member.element_ref.startsWith('site:')
+        ? { ...member, source_kind: 'site' as const, element_ref: member.element_ref.slice(5) } : member)
+  }
+
+  async function selectedCollectionMembers() {
+    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, new Set(), collectionObjects, null)
+    for (const [model, ids] of currentIfcPick()) {
+      drafts.push(...await resolveSelectionToMemberRefs(new Set(), ids, collectionObjects, getIfcHandleFor(model)))
+    }
+    return drafts
+  }
+
   const handleAddSelectedToCollection = async (collectionId: string) => {
-    const handle = getIfcHandleFor(activeIfcModelId)
-    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    const drafts = await selectedCollectionMembers()
     if (drafts.length === 0) return
     setCollectionError(null)
     try {
@@ -904,8 +930,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const handleRemoveSelectedFromCollection = async (collectionId: string) => {
     const collection = collections.find(c => c.id === collectionId)
     if (!collection) return
-    const handle = getIfcHandleFor(activeIfcModelId)
-    const drafts = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+    const drafts = await selectedCollectionMembers()
     if (drafts.length === 0) return
     const draftKeys = new Set(drafts.map(d => `${d.source_kind}::${d.element_ref}`))
     const toRemove = collection.members.filter(m => draftKeys.has(`${m.source_kind}::${m.element_ref}`))
@@ -927,39 +952,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }
 
-  const handleSelectCollection = async (collectionId: string) => {
-    const refs = flattenCollectionMemberRefs(collectionId, collections)
-    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
-    if (objectIds.size === 0 && expressIds.size === 0) return
+  const selectCollectionRefs = async (refs: Pick<CollectionMember, 'source_kind' | 'element_ref'>[]) => {
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
+    if (!objectIds.size) return
+    const byModel = new Map<string, Set<number>>()
+    for (const key of expressKeys) {
+      const part = parseElementKey(key)
+      if (!part) continue
+      if (!byModel.has(part.objectId)) byModel.set(part.objectId, new Set())
+      byModel.get(part.objectId)!.add(part.expressId)
+    }
+    setIfcPick(byModel)
     setSelectedObjectIds(objectIds)
-    setSelectedExpressIds(expressIds)
-    setSelectedExpressId(null)  // no single "primary" element in a bulk collection select
-    const ifcObjectIds = [...objectIds].filter(id => id.startsWith('ifc-'))
-    setActiveIfcModelId(ifcObjectIds.length === 1 ? ifcObjectIds[0] : null)
-    setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
+    const only = objectIds.size === 1 ? [...objectIds][0] : null
+    setActiveObjectId(only)
+    setActiveIfcModelId(byModel.size === 1 ? [...byModel.keys()][0] : null)
+    siteScene.setSelected(only?.startsWith('site:') ? only.slice(5) : null)
   }
-
-  // Per-member select (2026-07-15, per Maro: "i want to be able select each
-  // element in the split collection") — same resolution as
-  // handleSelectCollection above, just scoped to one (source_kind,
-  // element_ref) pair instead of a whole collection's flattened
-  // membership, and *does* set a single "primary" element (there's exactly
-  // one, unlike the bulk case), so IfcDataPanel's Object Information
-  // actually shows something for it.
-  const handleSelectCollectionMember = async (member: { source_kind: 'ifc' | 'mesh' | 'ifc_split'; element_ref: string }) => {
-    const { objectIds, expressIds } = await resolveElementRefsToTargets([member], sceneObjects, ifcHandles)
-    if (objectIds.size === 0 && expressIds.size === 0) return
-    setSelectedObjectIds(objectIds)
-    setSelectedExpressIds(expressIds)
-    setSelectedExpressId(expressIds.size === 1 ? [...expressIds][0] : null)
-    const ifcObjectIds = [...objectIds].filter(id => id.startsWith('ifc-'))
-    setActiveIfcModelId(ifcObjectIds.length === 1 ? ifcObjectIds[0] : null)
-    setActiveObjectId(objectIds.size === 1 ? [...objectIds][0] : null)
-  }
+  const handleSelectCollection = (id: string) => selectCollectionRefs(flattenCollectionMemberRefs(id, collections))
+  const handleSelectCollectionMember = (member: CollectionMember) => selectCollectionRefs([member])
 
   const handleHideCollection = async (collectionId: string) => {
     const refs = flattenCollectionMemberRefs(collectionId, collections)
-    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
     // objectIds mixes genuine mesh-kind whole-object members with the
     // owning IFC model's own bookkeeping entry (added for isolate's "parent
     // hides children" three.js need — see linkedElements.ts's own comment —
@@ -979,7 +994,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // hidden if it isn't part of what got unhidden.
   const handleUnhideCollection = async (collectionId: string) => {
     const refs = flattenCollectionMemberRefs(collectionId, collections)
-    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
     const meshObjectIds = [...objectIds].filter(id => !id.startsWith('ifc-'))
     if (meshObjectIds.length > 0) {
       setHiddenIds(prev => {
@@ -1023,20 +1038,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }
 
   const handleHideSelected = () => {
-    if (selectedObjectIds.size === 0 && selectedExpressIds.size === 0) return
-    if (activeObjectId && selectedExpressIds.size > 0) {
-      const expressKeys = [...selectedExpressIds].map(expressID => `${activeObjectId}::${expressID}`)
-      setHiddenExpressIds(prev => new Set([...prev, ...expressKeys]))
-      const wholeObjectIds = [...selectedObjectIds].filter(id => id !== activeObjectId)
-      if (wholeObjectIds.length > 0) setHiddenIds(prev => new Set([...prev, ...wholeObjectIds]))
-    } else if (selectedObjectIds.size > 0) {
-      setHiddenIds(prev => new Set([...prev, ...selectedObjectIds]))
-    }
+    const byModel = currentIfcPick()
+    const keys = [...byModel].flatMap(([model, ids]) => [...ids].map(id => `${model}::${id}`))
+    const whole = [...selectedObjectIds].filter(id => !byModel.has(id))
+    if (keys.length) setHiddenExpressIds(prev => new Set([...prev, ...keys]))
+    if (whole.length) setHiddenIds(prev => new Set([...prev, ...whole]))
   }
 
   const handleIsolateCollection = async (collectionId: string) => {
     const refs = flattenCollectionMemberRefs(collectionId, collections)
-    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
     if (objectIds.size === 0) return
     setIsolatedObjectIds(objectIds)
     setIsolatedElementKeys(expressKeys)
@@ -2253,6 +2264,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // on the same side.
   const [sectionPanelOpen, setSectionPanelOpen] = useState(() => loadPanelOpen(SECTION_PANEL_OPEN_KEY, false))
   const toggleSectionPanel = () => {
+    if (!sectionPanelOpen) setSideDockFocus(old => ({ id: 'sections', token: (old?.token ?? 0) + 1 }))
     setSectionPanelOpen(prev => {
       const next = !prev
       localStorage.setItem(SECTION_PANEL_OPEN_KEY, String(next))
@@ -2333,6 +2345,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // Profiles above.
   const [collectionsPanelOpen, setCollectionsPanelOpen] = useState(() => loadPanelOpen(COLLECTIONS_PANEL_OPEN_KEY, false))
   const toggleCollectionsPanel = () => {
+    if (!collectionsPanelOpen) setSideDockFocus(old => ({ id: 'collections', token: (old?.token ?? 0) + 1 }))
     setCollectionsPanelOpen(prev => {
       const next = !prev
       localStorage.setItem(COLLECTIONS_PANEL_OPEN_KEY, String(next))
@@ -2607,6 +2620,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // treatment as every panel above.
   const [measurementsPanelOpen, setMeasurementsPanelOpen] = useState(() => loadPanelOpen(MEASUREMENTS_PANEL_OPEN_KEY, false))
   const toggleMeasurementsPanel = () => {
+    if (!measurementsPanelOpen) setSideDockFocus(old => ({ id: 'measurements', token: (old?.token ?? 0) + 1 }))
     setMeasurementsPanelOpen(prev => {
       const next = !prev
       localStorage.setItem(MEASUREMENTS_PANEL_OPEN_KEY, String(next))
@@ -2741,7 +2755,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           return
         }
         const toMetres = await resolveToMetresForHit(hit.object)
-        const patch = measureFacePatch(hit.object, hit.faceIndex, toMetres)
+        const patch = measureFacePatch(hit.object, hit.faceIndex, toMetres, hit.instanceMatrix)
         if (!patch) {
           setMeasurementError('Could not measure that surface (unsupported geometry)')
           return
@@ -2942,60 +2956,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // save-on-change shape as settings/setSettings just above.
   const [ifcUnitDisplay, setIfcUnitDisplayState] = useState<IfcUnitDisplay>(loadIfcUnitDisplay)
   const setIfcUnitDisplay = (next: IfcUnitDisplay) => { setIfcUnitDisplayState(next); saveIfcUnitDisplay(next) }
-  const [customEnvironment, setCustomEnvironment] = useState<{ name: string; url: string } | null>(null)
-  const [environmentError, setEnvironmentError] = useState<string | null>(null)
-  // The project's saved environment row (2026-09-30, per Maro — HDRs used
-  // to be session-only), so Clear knows what to delete server-side.
-  const savedEnvironmentRef = useRef<SavedEnvironment | null>(null)
-  useEffect(() => {
-    const projectId = selectedProject?.id
-    setCustomEnvironment(null)
-    savedEnvironmentRef.current = null
-    if (!projectId) return
-    let cancelled = false
-    loadSavedEnvironment(projectId).then(result => {
-      if (cancelled || !result) return
-      savedEnvironmentRef.current = result.saved
-      setCustomEnvironment(result.env)
-    }).catch(err => {
-      if (!cancelled) setEnvironmentError(`Couldn't restore the saved environment: ${sectionBoxErrorMessage(err, 'unknown error')}`)
+  const environment = useProjectEnvironment(selectedProject?.id)
+  const handleUploadEnvironment = (file: File) => environment.upload(file, () => {
+    setSettingsState(previous => {
+      if (!previous.dynamicSky) return previous
+      const next = { ...previous, dynamicSky: false }
+      saveViewerSettings(next)
+      return next
     })
-    return () => { cancelled = true }
-  }, [selectedProject?.id])
-  const handleUploadEnvironment = async (file: File) => {
-    try {
-      setEnvironmentError(null)
-      setCustomEnvironment(await loadCustomEnvironment(file))
-    } catch (err) {
-      setEnvironmentError(err instanceof Error ? err.message : 'Failed to load environment file')
-      return
-    }
-    // Shown immediately from the local file above; saved in the background.
-    if (!selectedProject) return
-    try {
-      savedEnvironmentRef.current = await saveEnvironment(selectedProject.id, file)
-    } catch (err) {
-      setEnvironmentError(`Environment is showing but wasn't saved (${sectionBoxErrorMessage(err, 'unknown error')}) — it won't survive a refresh.`)
-    }
-  }
-  const handleClearEnvironment = () => {
-    setCustomEnvironment(null)
-    setEnvironmentError(null)
-    const saved = savedEnvironmentRef.current
-    savedEnvironmentRef.current = null
-    if (saved) {
-      deleteSavedEnvironment(saved).catch(err =>
-        setEnvironmentError(`Couldn't remove the saved environment (${sectionBoxErrorMessage(err, 'unknown error')}) — it may come back on refresh.`))
-    }
-  }
-  // Fires from ViewportErrorBoundary when the *active* environment fails to
-  // render (2026-07-11 fix) — e.g. a corrupt uploaded .hdr/.exr. Reverts to
-  // Viewport3D.tsx's DefaultEnvironment (no HDR) rather than leaving
-  // the boundary stuck reporting a now-permanent error with no way back.
-  const handleEnvironmentError = (message: string) => {
-    setEnvironmentError(message)
-    setCustomEnvironment(null)
-  }
+  })
   // Every imported object (both "Import 3D" meshes and the one "Import IFC"
   // model), regardless of what's in the viewport this render — the single
   // source of truth both Viewport3D and the DataPanel tabs (IFC/3D, see
@@ -3187,10 +3156,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // ('baseline' mode, resolves to null/no-op) for an inactive slot — see
   // comparisonPane.ts's own header for exactly what each contentMode
   // resolves to.
+  const collectionObjects = useMemo(() => [...sceneObjects, ...siteScene.scene.items.map(item => ({
+    id: 'site:' + item.id, name: item.name, kind: 'mesh' as const,
+  }))], [sceneObjects, siteScene.scene.items])
   const paneIsolations = [
-    useResolvedPaneIsolation(paneConfigs[0] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, sceneObjects, ifcHandles, activityUdfValues.getValue),
-    useResolvedPaneIsolation(paneConfigs[1] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, sceneObjects, ifcHandles, activityUdfValues.getValue),
-    useResolvedPaneIsolation(paneConfigs[2] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, sceneObjects, ifcHandles, activityUdfValues.getValue),
+    useResolvedPaneIsolation(paneConfigs[0] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, collectionObjects, ifcHandles, activityUdfValues.getValue),
+    useResolvedPaneIsolation(paneConfigs[1] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, collectionObjects, ifcHandles, activityUdfValues.getValue),
+    useResolvedPaneIsolation(paneConfigs[2] ?? DEFAULT_PANE_CONFIG, activities, collections, modelElementLinks, collectionObjects, ifcHandles, activityUdfValues.getValue),
   ]
 
   // "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i refresh, i
@@ -3361,6 +3333,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const linkedMeshObjectIds: Set<string> = useMemo(() => {
     const set = new Set<string>()
     for (const link of modelElementLinks) {
+      if (link.source_kind === 'site') { set.add('site:' + link.element_ref); continue }
       if (link.source_kind !== 'mesh') continue
       const sceneObject = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
       if (sceneObject) set.add(sceneObject.id)
@@ -3494,7 +3467,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         handleSeekTimelineTo(date)
         await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
       }
-      const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
+      const clashSceneObjects: ClashSceneObject[] = [...sceneObjects, ...siteViewportObjects]
       const membersA = collectionA.members as (CollectionMember & { source_kind: 'ifc' | 'mesh' })[]
       const membersB = collectionB.members as (CollectionMember & { source_kind: 'ifc' | 'mesh' })[]
       const allA = await resolveMembersToElements(membersA, clashSceneObjects, ifcHandles, true)
@@ -3597,7 +3570,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       { source_kind: elementA.source_kind, element_ref: decodeClashRef(elementA.ref).ref },
       { source_kind: elementB.source_kind, element_ref: decodeClashRef(elementB.ref).ref },
     ]
-    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
     if (objectIds.size === 0 && expressIds.size === 0) return
     setSelectedObjectIds(objectIds)
     setSelectedExpressIds(expressIds)
@@ -3885,7 +3858,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setProgressVarianceError(null)
     setProgressVarianceRunProgress({ testId, done: 0, total: 0 })
     try {
-      const clashSceneObjects: ClashSceneObject[] = sceneObjects.map(o => ({ id: o.id, kind: o.kind, name: o.name, object: o.object }))
+      const clashSceneObjects: ClashSceneObject[] = [...sceneObjects, ...siteViewportObjects]
       // Same level-slice exclusion as Clash Detective's own handleRunClashTest
       // — see that handler's own comment.
       const nonSplitMembers = collectionA.members.filter(
@@ -3944,7 +3917,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const handleSelectVarianceElement = async (element: { source_kind: 'ifc' | 'mesh'; ref: string }) => {
     const refs = [{ source_kind: element.source_kind, element_ref: element.ref }]
-    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
+    const { objectIds, expressIds } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
     if (objectIds.size === 0 && expressIds.size === 0) return
     setSelectedObjectIds(objectIds)
     setSelectedExpressIds(expressIds)
@@ -3962,8 +3935,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // header). An element-scoped box additionally needs its own expressID
   // resolved (sectionBoxElementIds above) before it's usable — left out
   // until then, same as an unloaded target.
-  const resolvedSectionBoxes: ResolvedSectionBox[] = sectionBoxes.flatMap(box => {
-    const sceneObject = sceneObjects.find(o => o.fileId === box.model3d_file_id)
+  const resolvedSectionBoxes: ResolvedSectionBox[] = allSectionBoxes.flatMap(box => {
+    const sceneObject = 'siteId' in box
+      ? (siteRoots.has(box.siteId) ? { id: 'site:' + box.siteId } : undefined)
+      : sceneObjects.find(o => o.fileId === box.model3d_file_id)
     if (!sceneObject) return []
     if (box.element_ref !== null && sectionBoxElementIds[box.id] === undefined) return []
     const bounds = draggingSectionBox?.id === box.id ? draggingSectionBox.bounds : box
@@ -4112,7 +4087,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // activeTransformObject/isElementTransform/activeIfcHandle are derived
   // (persistActiveTransform needs all three, so it's defined there, not
   // here — this ref just needs to exist before that point).
-  const pendingTransformSaveRef = useRef<{ timeout: ReturnType<typeof setTimeout>; flush: () => void } | null>(null)
+  const activeTransformWrites = useRef(new WeakMap<Object3D, Promise<void>>())
+  const pendingTransformSaveRef = useRef<{ object: Object3D; timeout: ReturnType<typeof setTimeout>; flush: () => void } | null>(null)
   // "Fix these incessant warnings" (2026-07-28, per Maro) — once a scene
   // object's underlying file is confirmed genuinely gone server-side (self-
   // heal-by-name in persistActiveTransform/persistSiblingTransform/
@@ -4651,17 +4627,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             const elementTransforms_ = transforms.filter(t => t.model3d_file_id === file.id && t.element_ref !== null)
             if (elementTransforms_.length > 0) {
               const { getExpressIdFromGuid } = await import('./ifcModel')
-              const byExpressId = new Map<number, ElementTransform>()
-              for (const t of elementTransforms_) {
-                const expressId = getExpressIdFromGuid(handle, t.element_ref as string)
-                if (expressId !== undefined) byExpressId.set(expressId, t)
-              }
-              if (byExpressId.size > 0) {
-                handle.object.traverse(child => {
-                  const t = byExpressId.get(child.userData.expressID)
-                  if (t) applyTransform(child, t)
-                })
-              }
+              restoreIfcPlacements(handle.object, elementTransforms_, guid => getExpressIdFromGuid(handle, guid))
             }
             // "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i
             // refresh, i expect the elements i unloaded to stay unloaded")
@@ -4673,9 +4639,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             // remove).
             const persistedUnloaded = file.unloaded_elements ?? []
             if (persistedUnloaded.length > 0) {
-              const { getExpressIdFromGuid } = await import('./ifcModel')
+              const { resolveUnloadedId } = await import('./ifcModel')
               const unloadedExpressIds = persistedUnloaded
-                .map(e => getExpressIdFromGuid(handle, e.guid))
+                .map(e => resolveUnloadedId(handle, e.guid))
                 .filter((expressId): expressId is number => expressId !== undefined)
               if (unloadedExpressIds.length > 0) removeElementsFromModel(handle.object, unloadedExpressIds)
             }
@@ -5148,6 +5114,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const handle = getIfcHandleFor(objectId)
     if (!handle) return
     removeElementsFromModel(handle.object, expressIds)
+    setSceneObjects(prev => [...prev])
+    setMaterializeVersion(v => v + 1)
     const removedSet = new Set(expressIds)
     setSelectedExpressIds(prev => {
       if (![...removedSet].some(id => prev.has(id))) return prev
@@ -5270,81 +5238,40 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // once this is non-null.
   const [reloadIfcTarget, setReloadIfcTarget] = useState<{ objectId: string; fileId: string; fileName: string } | null>(null)
 
-  // Full re-download + re-parse of the same file (2026-07-26, per Maro's
-  // own answer when asked to choose over a live-patch: "simple and safe...
-  // reuses the exact same loading path as a normal import"), not a splice
-  // into the already-loaded batch — see viewport3D's/elementBatching.ts's
-  // own already-fragile BatchedMesh instancing internals for why that
-  // alternative was avoided. guidsToRestore are the ones the dialog's
-  // checkboxes marked "bring back"; anything in this file's own
-  // unloadedElementsByFileId NOT in that list stays excluded on the fresh
-  // handle, same as a normal restore-on-mount would apply it.
-  //
-  // Any selection/isolate/hide state that referenced the *old* object id
-  // is dropped rather than migrated to the new one (the old model's own
-  // WASM session — and its expressID numbering — genuinely doesn't exist
-  // anymore once a fresh loadIfcModel replaces it) — the same "you'll
-  // need to re-select afterward" trade-off a plain unload-then-reimport
-  // already has today, and this is a deliberate, occasional action, not a
-  // hot-path click that trade-off would actually sting on.
   const handleReloadIfc = async (guidsToRestore: string[]) => {
-    if (!reloadIfcTarget || !selectedProject) return
-    const { objectId, fileId, fileName } = reloadIfcTarget
-    setReloadIfcTarget(null)
-    const oldHandle = getIfcHandleFor(objectId)
-    if (!oldHandle) return
+    if (!reloadIfcTarget || !selectedProject) throw new Error('Open the model again to reload its elements.')
+    const { objectId, fileId } = reloadIfcTarget
+    const handle = getIfcHandleFor(objectId)
+    if (!handle) throw new Error('This model is no longer open.')
+    const { resolveUnloadedId } = await import('./ifcModel')
+    const current = () => ifcHandlesRef.current.includes(handle)
+    if (!current()) throw new Error('This model is no longer open.')
+    const checked = new Set(guidsToRestore)
+    const ids = guidsToRestore.map(guid => {
+      const id = resolveUnloadedId(handle, guid)
+      if (id === undefined) throw new Error(`Could not find ${guid} in the open IFC. Check the model revision.`)
+      return id
+    })
+    const restored = restoreRemovedElements(handle.object, ids)
     try {
-      const blob = await downloadModel3DFile({ id: fileId, project_id: selectedProject.id })
-      const freshFile = new File([blob], fileName)
-      const { loadIfcModel, disposeIfcModel, getExpressIdFromGuid } = await import('./ifcModel')
-      const handle = await loadIfcModel(freshFile)
-
-      const wholeFileTransform = elementTransformsRef.current.find(t => t.model3d_file_id === fileId && t.element_ref === null)
-      applyElementTransform(handle.object, wholeFileTransform)
-      const perElementTransforms = elementTransformsRef.current.filter(t => t.model3d_file_id === fileId && t.element_ref !== null)
-      if (perElementTransforms.length > 0) {
-        const byExpressId = new Map<number, ElementTransform>()
-        for (const t of perElementTransforms) {
-          const expressId = getExpressIdFromGuid(handle, t.element_ref as string)
-          if (expressId !== undefined) byExpressId.set(expressId, t)
-        }
-        if (byExpressId.size > 0) {
-          handle.object.traverse(child => {
-            const t = byExpressId.get(child.userData.expressID)
-            if (t) applyElementTransform(child, t)
-          })
-        }
+      const transforms = elementTransformsRef.current.filter(t =>
+        t.model3d_file_id === fileId && t.element_ref !== null && checked.has(t.element_ref))
+      restoreIfcPlacements(handle.object, transforms, guid => resolveUnloadedId(handle, guid))
+      const remaining = (unloadedElementsByFileId.get(fileId) ?? []).filter(e => !checked.has(e.guid))
+      const updated = await updateUnloadedElements(fileId, remaining)
+      if (!current()) return
+      setUnloadedElementsByFileId(prev => new Map(prev).set(fileId, updated.unloaded_elements ?? remaining))
+    } catch (error) {
+      if (current()) removeElementsFromModel(handle.object, restored)
+      throw error
+    } finally {
+      if (current()) {
+        delete handle.object.userData.realisticMaterialInfo
+        setSceneObjects(prev => [...prev])
+        setMaterializeVersion(v => v + 1)
       }
-
-      const stillExcluded = (unloadedElementsByFileId.get(fileId) ?? []).filter(e => !guidsToRestore.includes(e.guid))
-      const excludeExpressIds = stillExcluded
-        .map(e => getExpressIdFromGuid(handle, e.guid))
-        .filter((expressId): expressId is number => expressId !== undefined)
-      if (excludeExpressIds.length > 0) removeElementsFromModel(handle.object, excludeExpressIds)
-
-      const oldSourceUpAxis = sceneObjects.find(o => o.id === objectId)?.sourceUpAxis ?? 'z'
-      disposeIfcModel(oldHandle)
-      const newId = `ifc-${handle.modelID}`
-      handle.object.userData.sceneObjectId = newId
-      setIfcHandles(prev => [...prev.filter(h => h !== oldHandle), handle])
-      setSceneObjects(prev => [
-        ...prev.filter(o => o.id !== objectId),
-        { id: newId, name: fileName, kind: 'ifc' as const, sourceUpAxis: oldSourceUpAxis, object: handle.object, fileId },
-      ])
-      setActiveIfcModelId(prev => (prev === objectId ? newId : prev))
-      setActiveObjectId(prev => (prev === objectId ? newId : prev))
-      setSelectedObjectIds(prev => { if (!prev.has(objectId)) return prev; const next = new Set(prev); next.delete(objectId); return next })
-      setSelectedExpressIds(new Set())
-      setSelectedExpressId(null)
-      setIsolatedObjectIds(prev => { if (!prev.has(objectId)) return prev; const next = new Set(prev); next.delete(objectId); return next })
-      setHiddenIds(prev => { if (!prev.has(objectId)) return prev; const next = new Set(prev); next.delete(objectId); return next })
-
-      const updated = await updateUnloadedElements(fileId, stillExcluded)
-      setUnloadedElementsByFileId(prev => new Map(prev).set(fileId, updated.unloaded_elements ?? stillExcluded))
-    } catch (err) {
-      console.error('Failed to reload IFC model', err)
-      addImportError(`Failed to reload "${fileName}" (${err instanceof Error ? err.message : String(err)}).`)
     }
+    setReloadIfcTarget(prev => prev?.fileId === fileId ? null : prev)
   }
 
   // Fixes a wrongly-guessed import axis without re-importing (2026-07-08,
@@ -5398,7 +5325,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setIsolatingLinked(true)
     try {
       const { objectIds, expressKeys } = await resolveActivityLinksToIsolationTargets(
-        selectedActivityIds, modelElementLinks, sceneObjects, ifcHandles,
+        selectedActivityIds, modelElementLinks, collectionObjects, ifcHandles,
       )
       if (objectIds.size === 0) return
       setIsolatedObjectIds(objectIds)
@@ -5419,10 +5346,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   useEffect(() => {
     if (!isolateMode || isolatedObjectIds.size === 0) { setIsolatedLinkedActivityIds(new Set()); return }
     let cancelled = false
-    resolveIsolationTargetsToActivityIds(isolatedObjectIds, isolatedElementKeys, modelElementLinks, sceneObjects, ifcHandles)
+    resolveIsolationTargetsToActivityIds(isolatedObjectIds, isolatedElementKeys, modelElementLinks, collectionObjects, ifcHandles)
       .then(ids => { if (!cancelled) setIsolatedLinkedActivityIds(ids) })
     return () => { cancelled = true }
-  }, [isolateMode, isolatedObjectIds, isolatedElementKeys, modelElementLinks, sceneObjects, ifcHandles])
+  }, [isolateMode, isolatedObjectIds, isolatedElementKeys, modelElementLinks, collectionObjects, ifcHandles])
 
   // Manual per-model texture override (2026-07-11, per Maro: "if I cant get
   // this natively, allow me to import textures per model") — see
@@ -5963,13 +5890,15 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const activeSiteRoot = activeSiteItem ? siteRoots.get(activeSiteItem.id) : null
   useEffect(() => {
     if (activeObjectId?.startsWith('site:')) {
-      siteScene.setSelected(activeObjectId.slice(5)); setPropertiesOpen(true); setEditPivot(false)
+      if (siteScene.selected?.split(':panel:')[0] !== activeObjectId.slice(5)) siteScene.setSelected(activeObjectId.slice(5))
+      setPropertiesOpen(true); setEditPivot(false)
     }
   }, [activeObjectId])
   useEffect(() => {
-    if (siteScene.selected && siteRoots.has(siteScene.selected) && activeObjectId !== 'site:' + siteScene.selected) {
+    const owner = siteScene.selected?.split(':panel:')[0]
+    if (owner && siteRoots.has(owner) && activeObjectId !== 'site:' + owner) {
       setSelectedExpressId(null); setSelectedExpressIds(new Set());
-      setSelectedObjectIds(new Set(['site:' + siteScene.selected])); setActiveObjectId('site:' + siteScene.selected)
+      setSelectedObjectIds(new Set(['site:' + owner])); setActiveObjectId('site:' + owner)
     }
   }, [siteScene.selected, siteRoots])
 
@@ -6003,6 +5932,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // manual material -> class mapping is per project, saved in this
   // browser's localStorage like the rest of the 3D view settings.
   const [realisticMapping, setRealisticMappingState] = useState<RealisticMaterialMap>({})
+  const wearGuides=useMemo(()=>makeWearGuides(paths,zones,settings.upAxis),[paths,zones,settings.upAxis])
+  const renderMaterialMapping=useMemo(()=>Object.values(realisticMapping).some(v=>typeof v==='string' && (v.includes('"path:') || v.includes('"zone:')))
+    ? {...realisticMapping,[WEAR_GUIDES]:wearGuides} : realisticMapping,[realisticMapping,wearGuides])
   useEffect(() => { setRealisticMappingState(loadRealisticMapping(selectedProject?.id)) }, [selectedProject?.id])
   const setRealisticMapping = (next: RealisticMaterialMap) => {
     setRealisticMappingState(next)
@@ -6045,6 +5977,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         o.object.userData.realisticMaterialInfo = extractMeshRealisticInfo(o.object)
       }
       const siteSources = await Promise.all((JSON.parse(siteMaterialSignature) as any[][]).map(async ([id,assetId,name,kind,finish,placement_kind,geographic,assetPart]) => {
+        if (kind === 'light') return null
         if (geographic) return {objectId:'site:'+id,name,isIfc:false,info:geographicMaterialInfo(id,geographic)}
         if (!assetId) return {objectId:'site:'+id,name,isIfc:false,info:primitiveMaterialInfo({id,name,kind,finish,placement_kind})}
         try { return {objectId:'site:'+id,name,isIfc:false,info:siteMaterialInfo(await loadSiteAsset(assetId,assetPart),assetId)} }
@@ -6246,8 +6179,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // ifcModel.ts's shared BatchedMesh, silently leaving no gizmo target
     // at all. Safe to call unconditionally every render — idempotent, and
     // a no-op after the first materialization.
-    const found = ensureMaterialized(activeIfcHandle.object, selectedExpressId)
-    if (found) { activeTransformObject = found; isElementTransform = true }
+    activeTransformObject = getElementTransformTarget(activeIfcHandle.object, selectedExpressId)
+    isElementTransform = activeTransformObject !== null
   }
 
   // Persists whatever handleTransformChange below just bumped the tick
@@ -6288,11 +6221,27 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const handle = activeIfcHandle
     const expressId = selectedExpressId
 
+    const currentPivot = getPivot(object)
+    const currentPivotRotation = getPivotRotation(object)
+    const values = {
+      position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
+      rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
+      scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
+      pivot_x: currentPivot?.x ?? null, pivot_y: currentPivot?.y ?? null, pivot_z: currentPivot?.z ?? null,
+      pivot_rotation_x: currentPivotRotation?.x ?? null,
+      pivot_rotation_y: currentPivotRotation?.y ?? null,
+      pivot_rotation_z: currentPivotRotation?.z ?? null,
+    }
+
     const doSave = async () => {
       let elementRef: string | null = null
       if (elementScoped && handle && expressId !== null) {
         const { getGuidFromExpressId } = await import('./ifcModel')
         elementRef = getGuidFromExpressId(handle, expressId) ?? null
+        if (!elementRef) {
+          addImportError(`Couldn't save the placement of IFC element ${expressId} in "${sceneObjectName}". Its IFC GlobalId is missing.`)
+          return
+        }
       }
       // Self-heals a stale/never-persisted fileId the same way
       // handleCreateSectionBox's own 2026-07-09 fix already does (2026-07-22,
@@ -6313,8 +6262,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // that a user actively editing an object deserves to know their work
       // isn't being saved, not find out on the next reload.
       let modelFileIdToUse = modelFileId
-      const files = await listModel3DFiles(selectedProject!.id).catch(() => null)
-      const current = files?.find(f => f.name === sceneObjectName && f.kind === sceneObjectKind)
+      const files = await listModel3DFiles(selectedProject!.id)
+      const current = files.find(f => f.id === modelFileId) ?? files.find(f => f.name === sceneObjectName && f.kind === sceneObjectKind)
       if (current && current.id !== modelFileIdToUse) {
         modelFileIdToUse = current.id
         setSceneObjects(prev => prev.map(o => (o.id === sceneObjectId ? { ...o, fileId: current.id } : o)))
@@ -6339,18 +6288,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         // silently clear a previously-set pivot back to null; see
         // element_transform.py's own schema doc comment on why the backend
         // can't distinguish "not provided" from "explicitly cleared" here.
-        const currentPivot = getPivot(object)
-        const currentPivotRotation = getPivotRotation(object)
-        const saved = await saveElementTransform({
-          model3d_file_id: modelFileIdToUse, element_ref: elementRef,
-          position_x: object.position.x, position_y: object.position.y, position_z: object.position.z,
-          rotation_x: object.rotation.x, rotation_y: object.rotation.y, rotation_z: object.rotation.z,
-          scale_x: object.scale.x, scale_y: object.scale.y, scale_z: object.scale.z,
-          pivot_x: currentPivot?.x ?? null, pivot_y: currentPivot?.y ?? null, pivot_z: currentPivot?.z ?? null,
-          pivot_rotation_x: currentPivotRotation?.x ?? null,
-          pivot_rotation_y: currentPivotRotation?.y ?? null,
-          pivot_rotation_z: currentPivotRotation?.z ?? null,
-        })
+        const saved = await saveElementTransform({model3d_file_id: modelFileIdToUse, element_ref: elementRef, ...values})
         elementTransformsRef.current = [
           ...elementTransformsRef.current.filter(t => !(t.model3d_file_id === saved.model3d_file_id && t.element_ref === saved.element_ref)),
           saved,
@@ -6361,10 +6299,19 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       }
     }
 
-    if (pendingTransformSaveRef.current) clearTimeout(pendingTransformSaveRef.current.timeout)
+    const flush = () => {
+      const previous = activeTransformWrites.current.get(object) ?? Promise.resolve()
+      const next = previous.then(doSave).catch(err => addImportError(`Couldn't save the placement of "${sceneObjectName}" (${sectionBoxErrorMessage(err, 'unknown error')}).`))
+      activeTransformWrites.current.set(object, next)
+    }
+    const pending = pendingTransformSaveRef.current
+    if (pending) {
+      clearTimeout(pending.timeout)
+      if (pending.object !== object) pending.flush()
+    }
     pendingTransformSaveRef.current = {
-      flush: doSave,
-      timeout: setTimeout(() => { pendingTransformSaveRef.current = null; doSave() }, 700),
+      object, flush,
+      timeout: setTimeout(() => { pendingTransformSaveRef.current = null; flush() }, 700),
     }
   }
 
@@ -7094,10 +7041,16 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // paneConfigs' own header for the "why", and comparisonPane.ts for what
   // each contentMode actually resolves to. `active`/props mirrored from
   // the main Viewport3D's own render call just below in the JSX.
+  const comparisonLights = useMemo(() => siteScene.scene.items.filter(item => item.kind === 'light'), [siteScene.scene.items])
   function renderComparisonPane(index: number) {
     const config = paneConfigs[index]
+    const isolation = paneIsolations[index]
+    const paneSiteItems = config.contentMode === 'collection'
+      ? siteScene.scene.items.filter(item => isolation?.objectIds.has('site:' + item.id))
+      : comparisonLights
     return (
       <ComparisonViewportPane
+        lightItems={paneSiteItems} lightDaysPerSecond={speedDaysPerSecond} hiddenObjectIds={hiddenIds}
         equipmentRigs={playbackEquipment}
         key={index}
         importedObjects={paneObjects}
@@ -7108,7 +7061,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         fieldOfView={settings.fieldOfView}
         clipStart={settings.clipStart}
         clipEnd={settings.clipEnd}
-        environmentUrl={customEnvironment?.url ?? null}
+        environmentTexture={environment.texture}
+        onEnvironmentError={environment.reportRenderError}
         environmentBackground={settings.environmentBackground}
         whiteBackground={settings.whiteBackground}
         orthographic={settings.orthographic}
@@ -7118,8 +7072,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         sunElevation={settings.sunElevation}
         captureBackgroundOverride={baselineBackgroundOverride}
         renderMode={settings.renderMode}
-        realisticMapping={realisticMapping}
+        realisticMapping={renderMaterialMapping}
         realisticInfoVersion={realisticInfoVersion}
+        importedLights={settings.importedLights}
         realisticGlassTransmission={settings.realisticGlassTransmission}
         simplifyWhileOrbiting={settings.simplifyWhileOrbiting}
         showEdges={settings.showEdges}
@@ -7168,7 +7123,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   if (siteToolsOpen && selectedProject) dockablePanels.push({
     id: 'site-tools', label: '3D Site tools', keepMounted: true, dock: siteToolsDock, onToggleDock: () => setSiteToolsDock(side => side === 'right' ? 'left' : 'right'),
     onClose: () => { setSiteToolsOpen(false); siteScene.setDraft(null) },
-    content: <SiteToolsPanel onEditAttachment={mode=>{setGizmoMode(mode);setGizmoSpace('world');setEditPivot(false);setSnapToSurface(false)}} timelineFormat={{scheduleStart:timelineRange?.start||timelineDateRef.current||new Date(),timeDisplayMode,speedDaysPerSecond,fps}} timelineDateRef={timelineDateRef} onSeek={handleSeekTimelineTo} extractionBlocks={Object.fromEntries(siteScene.scene.items.flatMap(i=>elementKeyframes.keyframes.some(k=>k.source_kind==='mesh'&&k.element_ref==='site:'+i.id)?[[i.id,'Remove the whole-object transform keys before extracting; the new parts will have their own keys.']]:Object.keys(customTextures['site:'+i.id]||{}).length||customOpacity['site:'+i.id]!==undefined?[[i.id,'Clear the whole-object custom material override before extracting. Authored materials are retained; apply custom overrides to the individual parts afterwards.']]:[]))} riggedIds={new Set(instanceEquipment.map(r=>r.model_ref))} onGenerateSchedule={ids=>setSiteScheduleIds(ids)} selectedShapeSources={() => {
+    content: <SiteToolsPanel sceneLightsEnabled={settings.importedLights !== false} enableSceneLights={() => setSettings({...settings, importedLights:true})} onEditAttachment={mode=>{setGizmoMode(mode);setGizmoSpace('world');setEditPivot(false);setSnapToSurface(false)}} timelineFormat={{scheduleStart:timelineRange?.start||timelineDateRef.current||new Date(),timeDisplayMode,speedDaysPerSecond,fps}} timelineDateRef={timelineDateRef} onSeek={handleSeekTimelineTo} extractionBlocks={Object.fromEntries(siteScene.scene.items.flatMap(i=>elementKeyframes.keyframes.some(k=>k.source_kind==='mesh'&&k.element_ref==='site:'+i.id)?[[i.id,'Remove the whole-object transform keys before extracting; the new parts will have their own keys.']]:Object.keys(customTextures['site:'+i.id]||{}).length||customOpacity['site:'+i.id]!==undefined?[[i.id,'Clear the whole-object custom material override before extracting. Authored materials are retained; apply custom overrides to the individual parts afterwards.']]:[]))} riggedIds={new Set(instanceEquipment.map(r=>r.model_ref))} onGenerateSchedule={ids=>setSiteScheduleIds(ids)} selectedShapeSources={() => {
       if (selectedExpressIds.size && activeObjectId) {
         const handle = getIfcHandleFor(activeObjectId)
         if (!handle) return []
@@ -7202,7 +7157,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           setModelElementLinks(previous => [...previous.filter(l => l.id !== link.id), link])
         } catch (error) { setLinkError(error instanceof Error ? error.message : 'Unable to link site object') }
       }}
-      upAxis={settings.upAxis} state={siteScene} openPaths={() => {
+      upAxis={settings.upAxis} state={siteScene} onPickItem={id => {
+        handleSelectExpressId(null)
+        handleSelectObject('site:' + id)
+        siteScene.setSelected(id)
+      }} openPaths={() => {
         setPathsPanelOpen(true)
         localStorage.setItem(PATHS_PANEL_OPEN_KEY, 'true')
         setSideDockFocus(previous => ({ id: 'paths', token: (previous?.token ?? 0) + 1 }))
@@ -7214,6 +7173,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleRealisticPanelDock, onClose: () => setRealisticPanelDismissed(true),
       content: (
         <RealisticMaterialsPanel
+          wearGuides={wearGuides}
           customEditor={<div className="py-3 space-y-2" data-testid="custom-material-editor">
             <div className="px-3 text-xs font-semibold">Custom material & presets</div>
             <p className="px-3 text-[11px] text-gray-500 dark:text-prosota-muted">{activeObjectId ? `Editing ${selectedExpressIds.size || selectedObjectIds.size || 1} selected ${selectedExpressIds.size ? 'element(s)' : 'object(s)'}. Custom textures take priority over automatic finishes. Clear Materials restores the underlying finish.` : 'Select objects or IFC elements to assign a material. You can create and manage presets here.'}</p>
@@ -7262,8 +7222,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleSectionPanelDock, onClose: toggleSectionPanel,
       content: (
         <SectionBoxPanel
-          boxes={sectionBoxes}
-          canCreate={activeObjectId !== null}
+          boxes={allSectionBoxes}
+          canCreate={activeObjectId !== null || selectedObjectIds.size > 0}
           error={sectionBoxError}
           tool={sectionBoxTool}
           onToolChange={setSectionBoxTool}
@@ -7654,7 +7614,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // duplicating the entire prop list.
   const viewport3DElement = (
     <Viewport3D
-      siteScene={{ detailSelection:siteScene.detailSelection,onDetailSelect:siteScene.setDetailSelection, customTextures, customOpacity, onSourceRegister:registerSiteSourceRoot, onGeometryReady: siteGeometryReady, objects: siteViewportObjects, onRegister: registerSiteRoot, selectedIds: selectedObjectIds, hiddenIds, isolate: isolateMode, isolatedIds: isolatedObjectIds, materialMapping: settings.renderMode === 'realistic' ? realisticMapping : undefined, glassTransmission: settings.realisticGlassTransmission, placing: siteScene.placing, onPlace: siteScene.place, onMove: point => siteScene.setDraft(old => old ? { ...old, position: point } : null), items: siteScene.scene.items, preview: siteScene.draft, selected: siteScene.selected, onSelect: (id, additive) => { handleSelectExpressId(null); if (siteRoots.has(id)) { handleSelectObject('site:' + id, additive); setPropertiesOpen(true); setEditPivot(false) } else handleSelectObject(null); siteScene.setSelected(id); setSiteToolsOpen(true) } }}
+      siteScene={{ detailSelection:siteScene.detailSelection,onDetailSelect:siteScene.setDetailSelection, customTextures, customOpacity, onSourceRegister:registerSiteSourceRoot, onGeometryReady: siteGeometryReady, objects: siteViewportObjects, onRegister: registerSiteRoot, selectedIds: selectedObjectIds, hiddenIds, isolate: isolateMode, isolatedIds: isolatedObjectIds, materialMapping: settings.renderMode === 'realistic' ? renderMaterialMapping : undefined, glassTransmission: settings.realisticGlassTransmission, placing: siteScene.placing, onPlace: point => siteScene.place(sitePlacementPoint(siteScene.draft, point)), onMove: point => siteScene.setDraft(old => old ? { ...old, position: sitePlacementPoint(old, point) } : null), items: siteScene.scene.items, preview: siteScene.draft, selected: siteScene.selected, onSelect: (id, additive) => {
+        const owner = 'site:' + id.split(':panel:')[0]
+        if (!additive) handleSelectExpressId(null)
+        handleSelectObject(owner, additive)
+        siteScene.setSelected(additive && selectedObjectIds.has(owner) ? null : id)
+        setPropertiesOpen(true); setEditPivot(false); setSiteToolsOpen(true)
+      } }}
       equipmentObjects={equipmentObjects} equipmentVisual={equipmentVisual} equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
       key="primary"
       settings={settings}
@@ -7669,7 +7635,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onSelectObject={(id, additive) => { siteScene.setSelected(null); handleSelectObject(id, additive) }}
       onSelectAll={handleSelectAll}
       materializeVersion={materializeVersion}
-      realisticMapping={realisticMapping}
+      realisticMapping={renderMaterialMapping}
       realisticInfoVersion={realisticInfoVersion}
       onMaterializeAll={() => setMaterializeVersion(v => v + 1)}
       onBoxSelect={handleBoxSelect}
@@ -7698,8 +7664,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       snapToSurface={snapToSurface}
       onTransformChange={handleTransformChange}
       onTimelineTick={handleTransformTick}
-      environmentUrl={customEnvironment?.url ?? null}
-      onEnvironmentError={handleEnvironmentError}
+      environmentTexture={environment.texture}
+      onEnvironmentError={environment.reportRenderError}
       customTextures={customTextures}
       customOpacity={customOpacity}
       cameraSyncRef={cameraSyncRef}
@@ -7861,7 +7827,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       if (names.length === 0) return { error: 'No activity_names given.' }
       const activityIds = resolveActivityIdsByNameOrCode(names)
       if (activityIds.size === 0) return { error: `No activities matched: ${names.join(', ')}` }
-      const targets = await resolveActivityLinksToIsolationTargets(activityIds, modelElementLinks, sceneObjects, ifcHandles)
+      const targets = await resolveActivityLinksToIsolationTargets(activityIds, modelElementLinks, collectionObjects, ifcHandles)
       if (targets.objectIds.size === 0) {
         return { matched_activities: activityIds.size, warning: 'Those activities have no linked 3D elements to show.' }
       }
@@ -7904,8 +7870,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // (approved via the chat card) is what actually does, using this
     // result verbatim.
     aiFourDBridge.current.get_selected_elements = async () => {
-      const handle = getIfcHandleFor(activeIfcModelId)
-      const elements = await resolveSelectionToMemberRefs(selectedObjectIds, selectedExpressIds, sceneObjects, handle)
+      const elements = await selectedCollectionMembers()
       if (elements.length === 0) return { elements: [], warning: 'Nothing is currently selected in the 4D viewport.' }
       return { elements }
     }
@@ -8286,10 +8251,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onSettingsChange={setSettings}
           realisticPanelOpen={realisticPanelOpen}
           onOpenRealisticPanel={() => { setSettings({...settings,renderMode:'realistic'}); setRealisticPanelDismissed(false); setSideDockFocus(previous => ({ id: 'realistic-materials', token: (previous?.token ?? 0) + 1 })) }}
-          environmentName={customEnvironment?.name ?? null}
+          environmentName={environment.name}
+          environmentStatus={environment.status}
           onUploadEnvironment={handleUploadEnvironment}
-          onClearEnvironment={handleClearEnvironment}
-          environmentError={environmentError}
+          onClearEnvironment={environment.clear}
+          environmentError={environment.error}
           activeObject={simulationScenario ? null : activeSceneObject && activeTransformObject ? {
             id: activeSceneObject.id, name: activeSceneObject.name, sourceUpAxis: activeSceneObject.sourceUpAxis, object: activeTransformObject,
           } : activeSiteItem && activeSiteRoot ? {id: 'site:'+activeSiteItem.id,name:activeSiteItem.name,sourceUpAxis:activeSiteItem.up_axis,object:activeSiteRoot,isSite:true,locked:activeSiteItem.locked} : null}

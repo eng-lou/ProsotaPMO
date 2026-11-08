@@ -118,9 +118,9 @@ function applyPivot(object: THREE.Object3D) {
   object.position.copy(prePivotPosition)
   object.quaternion.copy(prePivotQuaternion)
   if (pivotPoint) {
-    object.translateX(pivotPoint.x)
-    object.translateY(pivotPoint.y)
-    object.translateZ(pivotPoint.z)
+    object.translateX(pivotPoint.x * object.scale.x)
+    object.translateY(pivotPoint.y * object.scale.y)
+    object.translateZ(pivotPoint.z * object.scale.z)
   }
   if (rotationOffset) object.quaternion.multiply(rotationOffset)
 
@@ -272,6 +272,9 @@ export function applyGizmoDragAsPivotEdit(object: THREE.Object3D, mode: 'transla
   const inversePrePivotQuaternion = prePivotQuaternion.clone().invert()
   if (mode === 'translate') {
     const pivotPoint = object.position.clone().sub(prePivotPosition).applyQuaternion(inversePrePivotQuaternion)
+    for (const axis of ['x', 'y', 'z'] as const) {
+      pivotPoint[axis] = object.scale[axis] === 0 ? 0 : pivotPoint[axis] / object.scale[axis]
+    }
     setPivot(object, pivotPoint)
   } else {
     const rotationOffset = inversePrePivotQuaternion.multiply(object.quaternion.clone())

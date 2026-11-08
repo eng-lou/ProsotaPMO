@@ -1,5 +1,65 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-08 — Planner Stable 0.2.48
+
+Promotes the eight 0.2.48 Preview builds to Stable. The web app and Windows installer include selected-surface opacity, IFC camera and clearance guides, complete-element transforms, texture scaling, HDR environments, scene lights, temporary ground finishes, surface wear and feathered edges. Existing material settings carry forward when a project reopens.
+
+Selective IFC reload now restores checked geometry from the open model. Fort Tower testing covered 67 elements including 44 skip-bin pieces, partial restore and a second restore without duplicates. Hide and Show All respect both manual visibility and timeline visibility during playback, while paused and after orbiting.
+
+Collections can include individual site placements, shape-operation results, fences, arrays and reconstructed objects alongside imported elements. Membership follows the placement through a rename or regeneration. Section boxes can be created from a site selection, saved with the object, and used to cut both site geometry and imported models. Measurements use the selected instance’s world transform and snap to non-indexed shape geometry. Activity isolation, Select Unassigned, framing mixed selections and collection-based clash inputs also recognise site objects. A desktop UI check selected a six-metre extrusion in 3D Site tools, added it to a collection, hid, restored and isolated it, created a section, measured a 36 m² face in the viewport and reopened its saved section.
+
+## 2026-11-08 — Surface edges blend into the ground (Preview 0.2.48-preview.8)
+
+The edge fade could leave a pale outline even over solid soil. The previous renderer reduced both sample coverage and pixel opacity, allowing the window background to show through. Fully covered gravel now keeps its depth, and its feathered edge blends with the surface behind it. Existing fade widths and corner settings apply when the project reopens.
+
+The desktop check compares compacted gravel at a 2.6 m fade against the expected mix of gravel and soil at each pixel, with selection on and off. It also checks the same edge against a transparent background. The Fort Tower road checks cover narrow sections, overlapping surfaces and resetting the fade.
+
+## 2026-11-08 — Wheel tracks and uneven ground on a selected surface (Preview 0.2.48-preview.7)
+
+Materials → Material mapping → Surface wear layers wheel tracks or disturbed ground over the selected object's material slot. Haul road starts with one pair of tyre tracks. Automatic tracks follow the slab footprint and connect its branches. For a particular traffic movement, draw one or more vehicle centrelines in Paths and select them under Guide paths. A closed path or a polygon or circular zone can limit either effect. The saved settings refer to the guides by ID, so editing a guide updates the wear. A missing boundary suppresses the overlay until another boundary is chosen. Groove depth and unevenness affect shading. The model geometry and takeoff use the original surface.
+
+An edge fade previously put the entire road into the transparent rendering pass. An overlapping pad could draw over its opaque middle. Solid surfaces now keep depth at covered samples, and fade width is limited separately on narrow patches. All 25 temporary road sections in the Fort Tower IFC test retained an opaque centre at 0.6 m. The desktop checks also exercised repeated resets, layered pads drawn in both orders, and a path and zone applied to a separate material.
+
+## 2026-11-08 — Fading ground edges and rounding corners (Preview 0.2.48-preview.6)
+
+In Materials → Material mapping → Surface edges, a selected surface has independent edge fade and corner radius settings in metres. Fade can follow the entire perimeter or just the two ends of the footprint's long axis. The viewport builds a mask from the mesh's projected footprint. Perimeter mode includes curved boundaries and holes, while the triangles inside a slab form one continuous surface. Zero resets either slider. These are appearance settings, so quantities and measurements use the original model.
+
+Tested the controls with a saved element-specific mapping on one of Fort Tower's 25 temporary-road slabs. Reset restored the original rendered pixels. A separate rectangular test measured the fade from opaque in the middle to nearly transparent at the rim, and confirmed that rounding alone clipped the corner while keeping the long edge solid. The preview includes the corrected wheel-worn material.
+
+## 2026-11-08 — Wheel-worn haul roads (Preview 0.2.48-preview.5)
+
+The previous finish baked two continuous dark ruts into a repeating tile. The pattern ran across a bend as readily as it ran along a straight. The revised material uses compacted earth, exposed grit and short, fading tyre impressions. Two offset texture samples and broader dust variation break up the repeat at site scale. The finish suggests traffic wear independently of any vehicle animation.
+
+Compared both versions in the desktop renderer using 25 temporary road slab placements extracted from Fort Tower at the same camera position and lighting. A regression test measures coherent bands across the texture. Existing assignments use the revised finish on reopening.
+
+## 2026-11-08 — Temporary ground and site lighting (Preview 0.2.48-preview.4)
+
+The Fort Tower compound needs different finishes for vehicle tracks, settled earth, cabin bases and working pads. Six repeatable textures can now be assigned to existing material slots or chosen while creating a closed shape. The wheel marks and mat joints use the texture direction control. The desktop renderer produced six distinct finishes on the same rectangular pad. The geometry check also confirmed that switching finishes preserved all four corners.
+
+Place a Point, Sun, Spot or Area light from **3D Site tools → Layout tools → Illumination**. Picking a surface starts the emitter three metres above it. Exact position and the viewport transform controls allow alignment to a fixture. **Scene lights** controls these emitters and lights inside imported models. The desktop check measured each light illuminating a test surface, switched them off, and reopened a saved Area light.
+
+Viewport interactions can consume a click before a floating colour picker receives it. The picker now handles outside pointer presses before the viewport, and Enter accepts a typed colour and closes it. Tested both paths after colour edits and checked cancellation with Escape.
+
+## 2026-11-08 — HDR and EXR environment uploads
+
+Preview saved the 4096 × 2048 HDR on disk, then tried to fetch the image from a base64 URL that the desktop connection policy blocks. The viewport now reads the file bytes directly. A replacement is decoded before saving, so a damaged file leaves the current environment available. Choosing a valid upload switches from Real-Time Sky to the uploaded lighting.
+
+Tested the stored panorama and a Blender studio EXR in a separate desktop rendering session. Both appeared as backgrounds and produced the same rendered pixel after saving and reopening with an empty file cache. Also checked a failed replacement and clearing the saved map.
+
+## 2026-11-07 — Moving a complete IFC element
+
+The viewport gizmo and Location fields previously edited the first piece of an IFC element. An OfficeBox container in Fort Tower has 56 pieces, the Sunbelt Twin Office cabin has 291, and the Wallace sliding gate has 45. The remaining pieces stayed behind. Each product now has a shared placement for editing, while its individual surfaces remain available for material edits and animation. The location fields use scene metres and convert to feet when requested.
+
+Reopening a project and reloading an IFC now resolve each saved placement by GlobalId, including elements still in the render batch. Existing saved positions use the same reference point as before. A local test dragged each of the three Fort Tower products up three metres with the viewport controls, checked every piece and its neighbouring instance, undid and redid the moves, and loaded the IFC again with the saved placements. Entering another two metres in the Location panel moved each complete product by that distance. Switching the display to feet showed the equivalent position.
+
+## 2026-11-07 — Fort Tower camera guides, clearance zones and texture scale
+
+In Realistic Materials, camera fields of view and gate clearance volumes with an explicit IFC surface style now appear as dashed outlines. Choose **Guide display → Filled surface** to use the IFC transparency, then change **Surface opacity** to edit that finish on the selected element. The physical camera housing, glass bubble and gate frame have their own finishes. **3D View Properties → Effects → Imported lights** switches model light sources together while the fixture meshes remain in view.
+
+Fort Tower stores its site slab geometry in millimetres and applies a scale of 0.001 when placing it. The procedural finishes used the raw vertex coordinates, shrinking the pattern a thousandfold. They now measure texture repeats in metres. On the same 16 m patch, the mown lawn repeat is 0.45 m at 0.25× and 7.2 m at 4×. A render comparison checked both the batched and individually selected slab.
+
+The local renderer check used two Vivotek cameras, the Wallace gate and the Overall Site slab extracted from the original IFC. Switching one camera to a 5% filled surface kept the other camera outlined and the housing opaque. The exported IFC values were 20% opacity for the camera field and 15% for the clearance surface. A separate check imported the project's light.fbx through the site asset converter and toggled its spotlight.
+
 ## 2026-11-07 — Stable 0.2.47 · Material edits follow the viewport selection
 
 The Materials panel used to filter its rows to a picked element but write changes to the shared project material. Finish, colour and tiling now have overrides for selected IFC elements and 3D placements. Clearing the selection exposes project defaults. Editing a shared uploaded texture’s scale or rotation now copies its settings for the selected objects. Existing project mappings are preserved because they do not record which earlier edits were intended for individual objects.

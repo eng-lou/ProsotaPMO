@@ -3,8 +3,11 @@ import { ToolVisualGuide } from './ToolVisualGuide'
 import { WaterSurfaceControls } from './WaterSurface'
 import { useRef, useState } from 'react'
 import { ColorPickerPopover } from '@/components/ColorPickerPopover'
+import { SurfaceWearControls } from './SurfaceWearControls'
+import type { WearGuide } from './surfaceWearGuides'
+import { roadWearForKey } from './realisticMaterials'
 import {
-  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse,
+  REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse, opacityForKey, footprintEdgesForKey,
   REALISTIC_TEXTURE_SCALES, textureSettingsForKey, realisticTileSize,
   type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
 } from './realisticMaterials'
@@ -53,11 +56,12 @@ function shortModelName(name: string): string {
 // only a person can settle them.
 export function RealisticMaterialsPanel({
   entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry, glassTransmission, onGlassTransmissionChange,
-  targetsByKey = null, customEditor, loadErrors = [], onRetry,
+  targetsByKey = null, customEditor, loadErrors = [], onRetry, wearGuides,
 }: {
   // Materials used by the current viewport selection (null = nothing
   // selected). When set, the list narrows to just those (2026-10-02).
   customEditor?: React.ReactNode
+  wearGuides?: Map<string,WearGuide>
   targetsByKey?: Map<string, MaterialTarget[]> | null
   entries: RealisticMaterialEntry[]
   mapping: RealisticMaterialMap
@@ -149,7 +153,28 @@ export function RealisticMaterialsPanel({
           const cls = manual === 'original' ? null : manual ?? entry.autoClass
           const texture = textureSettingsForKey(entry.key, current)
           const tile = cls ? realisticTileSize(cls, texture.scale) : null
-          const customised = targets.some(target => target.length > 0 && [entry.key, 'colour:' + entry.key, 'texture:' + entry.key].some(k => Object.prototype.hasOwnProperty.call(mappingAtTarget(mapping, target), k))) || mixedFinish || !!manual || !!colourOverrideHex(entry.key, current) || texture.scale !== 1 || texture.rotation !== 0
+          const guideKey = 'guide:' + entry.key
+          const guideMode = (target: MaterialTarget) => String(mappingAtTarget(mapping, target)[guideKey]) === 'surface' ? 'surface' : 'outline'
+          const guide = targets.length && targets.some(target => guideMode(target) !== guideMode(targets[0])) ? 'mixed'
+            : String(current[guideKey]) === 'surface' ? 'surface' : 'outline'
+          const opacityKey = 'opacity:' + entry.key
+          const opacity = opacityForKey(entry.key, current) ?? (entry.sourceOpacity === undefined ? 1 : entry.sourceOpacity)
+          const mixedOpacity = opacity === null || targets.some(target =>
+            (opacityForKey(entry.key, mappingAtTarget(mapping, target)) ?? (entry.sourceOpacity === undefined ? 1 : entry.sourceOpacity)) !== opacity)
+          const hasOpacityEdit = targets.some(target => opacityForKey(entry.key, mappingAtTarget(mapping, target)) !== undefined)
+          const edgeControls=!!targetsByKey && targets.length>0 && !entry.volumeGuide && cls!=='glass' && cls!=='water' &&
+            (entry.footprint || entry.key.startsWith('site|') || entry.key.startsWith('mat|') || targets.every(t=>t.some(s=>s.startsWith('element:'))))
+          const edges=footprintEdgesForKey(entry.key,current)
+          const wearField='roadWear:'+entry.key
+          const wearFor=(map:RealisticMaterialMap)=>{
+            const wear=roadWearForKey(entry.key,map)
+            return map[wearField] || (map[entry.key] || entry.autoClass)==='haul-road' ? wear : {...wear,mode:'off' as const}
+          }
+          const wear=wearFor(current)
+          const mixedEdgeLocation=targets.some(t=>!!footprintEdgesForKey(entry.key,mappingAtTarget(mapping,t)).endsOnly!==!!edges.endsOnly)
+          const edgeFields=[['fade','edgeFade:','Edge fade width'],['radius','cornerRadius:','Corner radius']] as const
+          const hasEdgeEdit=targets.some(t=>{const e=footprintEdgesForKey(entry.key,mappingAtTarget(mapping,t));return !!(e.fade||e.radius||e.endsOnly)})
+          const customised = targets.some(target => !!mappingAtTarget(mapping, target)[guideKey]) || hasOpacityEdit || targets.some(target => target.length > 0 && [entry.key, 'colour:' + entry.key, 'texture:' + entry.key].some(k => Object.prototype.hasOwnProperty.call(mappingAtTarget(mapping, target), k))) || mixedFinish || !!manual || !!colourOverrideHex(entry.key, current) || texture.scale !== 1 || texture.rotation !== 0
           const flagged = needsMapping(entry)
           const models = entryModels[entry.key] ?? []
           const autoLabel = entry.autoClass
@@ -193,6 +218,46 @@ export function RealisticMaterialsPanel({
                   recentColors={recentColours}
                 />
               </div>
+              {entry.volumeGuide && <label className="flex items-center gap-2 text-[11px]">
+                Guide display
+                <select aria-label={`Guide display for ${entry.label}`} value={guide}
+                  onChange={e => edit({[guideKey]: e.target.value})}
+                  className="flex-1 min-w-0 rounded border px-1 py-0.5 dark:border-prosota-line dark:bg-prosota-panel2">
+                  {guide === 'mixed' && <option value="mixed" disabled>Mixed</option>}
+                  <option value="outline">Dashed outline</option>
+                  <option value="surface">Filled surface</option>
+                </select>
+              </label>}
+              {(!entry.volumeGuide || guide === 'surface') && <div className="flex items-center gap-2 text-[11px]">
+                <label className="flex items-center gap-2 flex-1 min-w-0">
+                  Surface opacity
+                  <input type="range" min="0" max="100" step="1" className="flex-1 min-w-0"
+                    aria-label={`Surface opacity for ${entry.label}`}
+                    value={Math.round((opacity ?? 1) * 100)}
+                    onChange={e => edit({[opacityKey]: String(Number(e.target.value) / 100)})} />
+                </label>
+                <span>{mixedOpacity ? 'Mixed' : Math.round((opacity ?? 1) * 100) + '%'}</span>
+                {hasOpacityEdit && <button title="Restore inherited surface opacity" className="underline" onClick={() => edit({[opacityKey]: null}, true)}>Reset</button>}
+              </div>}
+              {!!targetsByKey && targets.length>0 && <SurfaceWearControls wear={wear} guides={wearGuides} recentColours={recentColours}
+                mixed={targets.some(t=>wearFor(mappingAtTarget(mapping,t)).mode!==wear.mode)}
+                update={patch=>edit(local=>({[wearField]:JSON.stringify({...wearFor(local),...patch})}))}/>}
+              {edgeControls && <details className="text-[11px]">
+                <summary className="cursor-pointer py-1">Surface edges</summary>
+                <label className="flex items-center gap-2 py-1">Fade location
+                  <select aria-label={'Fade location for '+entry.label} value={mixedEdgeLocation?'mixed':edges.endsOnly?'ends':'all'} className="rounded border px-1 py-0.5 dark:bg-prosota-panel2"
+                    onChange={e=>edit({['edgeMode:'+entry.key]:e.target.value==='ends'?'ends':null})}>
+                    {mixedEdgeLocation && <option disabled value="mixed">Mixed</option>}
+                    <option value="all">Entire perimeter</option><option value="ends">Two ends (long axis)</option>
+                  </select>
+                </label>
+                {edgeFields.map(([property,field,label])=><label key={field} className="flex items-center gap-2 py-1">
+                  {label}<input aria-label={label+' for '+entry.label} type="range" min="0" max="5" step=".05"
+                    className="flex-1 min-w-0" value={edges[property]} onChange={e=>edit({[field+entry.key]:e.target.value==='0'?null:e.target.value})}/>
+                  <span>{targets.some(t=>footprintEdgesForKey(entry.key,mappingAtTarget(mapping,t))[property]!==edges[property])?'Mixed':edges[property]+' m'}</span>
+                </label>)}
+                <p>Fade reveals the surface beneath. Narrow sections keep a solid centre. Radius rounds the corners.</p>
+              </details>}
               {cls && cls !== 'glass' && (
                 <details className="text-[11px] text-gray-500 dark:text-prosota-muted">
                   <summary className="cursor-pointer py-1">Texture scale and direction</summary>
@@ -216,7 +281,7 @@ export function RealisticMaterialsPanel({
                 </details>
               )}
               {(cls === 'grass' || cls === 'moquette' || cls === 'moquette-checkered') && <p className="text-[11px] text-gray-500 dark:text-prosota-muted">{cls === 'moquette-checkered' ? 'Fine felt turf with alternating mowing tones. Checks are 0.75 m at default scale; scale adjusts both checks and fibres.' : cls === 'moquette' ? 'Soft matte sage turf with fine felt texture and smooth edges.' : 'Natural grass with patch variation and short fibre shading.'} Surface texture only: no individual blades. Use the colour swatch, scale and direction to adjust the finish.</p>}
-              {customised && <button onClick={() => edit({ [entry.key]: null, ['colour:' + entry.key]: null, ['texture:' + entry.key]: null }, true)}
+              {(customised || hasEdgeEdit || targets.some(t=>mappingAtTarget(mapping,t)[wearField])) && <button onClick={() => edit({ [entry.key]: null, ['colour:' + entry.key]: null, ['texture:' + entry.key]: null, [opacityKey]: null, [guideKey]: null, [wearField]:null, ['edgeFade:'+entry.key]:null, ['cornerRadius:'+entry.key]:null, ['edgeMode:'+entry.key]:null }, true)}
                 title="Restore automatic mapping, original colour and default texture settings for this material"
                 className="text-[10px] text-left underline text-gray-500 dark:text-prosota-muted">Reset material</button>}
             </div>

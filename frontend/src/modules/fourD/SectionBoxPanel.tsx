@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import type { SectionBox } from './sectionBoxes'
+import type { SiteSectionBox } from './sectionBoxes'
 
 export type SectionBoxTool = 'resize' | 'rotate'
 
 interface Props {
-  boxes: SectionBox[]
+  boxes: SiteSectionBox[]
   canCreate: boolean
   error: string | null
   tool: SectionBoxTool
@@ -17,7 +17,7 @@ interface Props {
 }
 
 function Item({ box, onRename, onToggleActive, onToggleVisible, onDelete }: {
-  box: SectionBox
+  box: SiteSectionBox
   onRename: (name: string) => void
   onToggleActive: () => void
   onToggleVisible: () => void

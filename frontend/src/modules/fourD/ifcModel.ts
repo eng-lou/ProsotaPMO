@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import {
   IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
-  IFCPROJECT, IFCSTYLEDITEM, IFCCURTAINWALL,
+  IFCPROJECT, IFCSTYLEDITEM, IFCCURTAINWALL, IFCFACEBASEDSURFACEMODEL, IFCSHELLBASEDSURFACEMODEL,
 } from 'web-ifc'
 import { disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
@@ -174,6 +174,12 @@ export function getExpressIdFromGuid(handle: IfcModelHandle, guid: string): numb
   // guid key.
   const result = handle.api.GetExpressIdFromGuid(handle.ifcModelID, guid)
   return result === undefined ? undefined : Number(result)
+}
+
+// Older exclusions may contain the express ID when the IFC has no GlobalId.
+export function resolveUnloadedId(handle: IfcModelHandle, guid: string): number | undefined {
+  if (/^[1-9]\d{0,9}$/.test(guid)) return Number(guid)
+  return getExpressIdFromGuid(handle, guid)
 }
 
 // GlobalId for a given expressID — the exact reverse of getExpressIdFromGuid
@@ -944,6 +950,21 @@ export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticM
     }
   }
 
+  // web-ifc draws the individual connected face sets or shells. Revit
+  // commonly attaches their finish to the containing surface model.
+  for (const type of [IFCFACEBASEDSURFACEMODEL, IFCSHELLBASEDSURFACEMODEL]) {
+    const containers = api.GetLineIDsWithType(modelID, type)
+    for (let i = 0; i < containers.size(); i++) {
+      const id = containers.get(i)
+      const style = styleByItem.get(id)
+      if (!style) continue
+      const model = getLine(id)
+      for (const child of refList(model?.FbsmFaces ?? model?.SbsmBoundary)) {
+        if (!styleByItem.has(child)) styleByItem.set(child, style)
+      }
+    }
+  }
+
   // Element (or type object) -> material names, in layer order for a
   // layer set.
   const materialCache = new Map<number, { names: string[]; layered: boolean }>()
@@ -1001,6 +1022,7 @@ export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticM
       layered: material?.layered ?? false,
       ifcType: typeByExpressId.get(expressID) ?? '',
       transparent: alpha < 0.99,
+      sourceOpacity: alpha,
     })
   }
   if (handle.batch) {

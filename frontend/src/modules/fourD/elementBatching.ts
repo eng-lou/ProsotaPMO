@@ -1,5 +1,6 @@
+import { updateInstanceVisibility } from './viewportVisibility'
 import * as THREE from 'three'
-import { captureBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
+import { captureBaseline, getBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
 // Split out of ifcModel.ts (2026-07-17) specifically so Viewport3D.tsx can
 // import ensureMaterialized statically without pulling 'web-ifc' into the
@@ -144,7 +145,24 @@ export function buildElementMaterial(color: { x: number; y: number; z: number; w
   })
 }
 
+// The parser keeps one source geometry per IFC representation. Retain only the
+// source placement and colour when an individual piece leaves the scene.
+type SourcePiece = Pick<BatchInstanceInfo, 'matrix' | 'color' | 'colorAlpha' | 'ifcGeometryId'>
+const individualSources = new WeakMap<THREE.Mesh, SourcePiece>()
+interface RemovedProduct {
+  batched: BatchInstanceInfo[]
+  individual: SourcePiece[]
+}
+const removedProducts = new WeakMap<THREE.Object3D, Map<number, RemovedProduct>>()
+
 export function finalizeIndividualMesh(mesh: THREE.Mesh, expressID: number, matrix: THREE.Matrix4, group: THREE.Object3D) {
+  const material = mesh.material
+  if (mesh.userData.ifcGeometryId !== undefined && material instanceof THREE.MeshStandardMaterial) {
+    individualSources.set(mesh, {
+      matrix, color: material.color.clone(), colorAlpha: mesh.userData.ifcColorAlpha ?? material.opacity,
+      ifcGeometryId: mesh.userData.ifcGeometryId,
+    })
+  }
   mesh.applyMatrix4(matrix)
   mesh.userData.expressID = expressID
   // Registers into getMeshIndex's own map — see that function's header.
@@ -203,13 +221,12 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   // see getMeshIndex's own header for the real, measured cost this used to
   // have at schedule-generation scale.
   const existing = getMeshIndex(rootObject).get(expressID)
-  if (existing && existing.length > 0) return existing[0]
-
   const batch = rootObject.userData.batch as BatchState | null | undefined
   const infos = batch?.byExpressId.get(expressID)
-  if (!batch || !infos || infos.length === 0) return null
+  if (!batch || !infos || infos.length === 0) return existing?.[0] ?? null
 
-  let firstMesh: THREE.Mesh | null = null
+  // Mirrored pieces can already be individual while their siblings are batched.
+  let firstMesh: THREE.Mesh | null = existing?.[0] ?? null
   for (const info of infos) {
     batch.mesh.setVisibleAt(info.instanceId, false)
     // Also pulls this instance out of the batched-edges overlay, if one is
@@ -260,6 +277,53 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
   return firstMesh
 }
 
+function findPlacementGroup(root: THREE.Object3D, mesh: THREE.Mesh, expressID: number) {
+  for (let parent = mesh.parent; parent && parent !== root; parent = parent.parent) {
+    if (parent.userData.ifcPlacementId === expressID) return parent
+  }
+  return null
+}
+
+/** A placement edit belongs to the IFC product. Its render meshes remain
+ * individually indexed for picking, material mapping and schedule profiles. */
+export function getElementTransformTarget(root: THREE.Object3D, expressID: number): THREE.Object3D | null {
+  const first = ensureMaterialized(root, expressID)
+  if (!first) return null
+  const group = findPlacementGroup(root, first, expressID)
+  if (group) return group
+  const pieces = getMeshIndex(root).get(expressID)!
+  if (pieces.length === 1) return first
+
+  // Older saved transforms are absolute poses of the first render piece.
+  // Give the product that same reference frame. Cancel its imported pose
+  // below it so every piece retains its original local animation coordinates.
+  const placement = new THREE.Group()
+  placement.name = 'IFC element ' + expressID
+  placement.userData.ifcPlacementId = expressID
+  const reference = first.userData.baselineTransform ? getBaseline(first) : first
+  placement.position.copy(reference.position)
+  placement.quaternion.copy(reference.quaternion)
+  placement.scale.copy(reference.scale)
+  // A degenerate source axis has no invertible reference frame.
+  for (const axis of ['x', 'y', 'z'] as const) {
+    if (placement.scale[axis] === 0) placement.scale[axis] = 1
+  }
+  captureBaseline(placement)
+  // Inverse(T R S) = inverse(S) inverse(R) inverse(T). Separate the
+  // inverse scale to handle rotated, nonuniform and mirrored placements.
+  const inverseScale = new THREE.Group()
+  inverseScale.scale.set(1, 1, 1).divide(placement.scale)
+  const modelSpace = new THREE.Group()
+  modelSpace.quaternion.copy(placement.quaternion).invert()
+  modelSpace.position.copy(placement.position).negate().applyQuaternion(modelSpace.quaternion)
+  root.add(placement)
+  placement.add(inverseScale)
+  inverseScale.add(modelSpace)
+  for (const piece of pieces) modelSpace.add(piece)
+  placement.updateWorldMatrix(true, true)
+  return placement
+}
+
 // "Unload Selected" (2026-07-26, per Maro: "i need to be able to unload
 // selected elements" — the IFC Data panel's own per-model Unload button
 // only ever removes a *whole* loaded file; there was no way to drop just a
@@ -289,26 +353,91 @@ export function ensureMaterialized(rootObject: THREE.Object3D, expressID: number
 export function removeElementsFromModel(rootObject: THREE.Object3D, expressIDs: number[]): void {
   const batch = rootObject.userData.batch as BatchState | null | undefined
   const meshIndex = getMeshIndex(rootObject)
+  rootObject.userData.ifcGeometryRevision = (rootObject.userData.ifcGeometryRevision ?? 0) + 1
+  let removed = removedProducts.get(rootObject)
+  if (!removed) removedProducts.set(rootObject, removed = new Map())
   for (const expressID of expressIDs) {
     const infos = batch?.byExpressId.get(expressID)
+    const meshes = meshIndex.get(expressID)
+    if (infos?.length || meshes?.length) {
+      const individual = (meshes ?? []).map(mesh => individualSources.get(mesh))
+      if (individual.every((piece): piece is SourcePiece => piece !== undefined)) {
+        removed.set(expressID, { batched: infos ?? [], individual })
+      }
+    }
     if (batch && infos) {
       for (const info of infos) {
         removeFromEdgesBatch(rootObject, info)
+        batch.mesh.userData.movingHidden?.delete(info.instanceId)
+        batch.mesh.userData.batchBaseVisibleByInstanceId?.delete(info.instanceId)
         batch.mesh.deleteInstance(info.instanceId)
         batch.expressIdByInstanceId.delete(info.instanceId)
       }
       batch.byExpressId.delete(expressID)
     }
-    const meshes = meshIndex.get(expressID)
     if (meshes) {
+      const placement = meshes.length ? findPlacementGroup(rootObject, meshes[0], expressID) : null
       for (const mesh of meshes) {
         disposeMeshGeometries(mesh)
         disposeMeshMaterials(mesh, false)
         mesh.parent?.remove(mesh)
       }
       meshIndex.delete(expressID)
+      placement?.removeFromParent()
     }
   }
+}
+
+// Restore the original render representation. Existing independent edits on
+// other elements, the loaded model identity and the IFC parser all survive.
+export function restoreRemovedElements(root: THREE.Object3D, ids: readonly number[]): number[] {
+  const removed = removedProducts.get(root)
+  const batch = root.userData.batch as BatchState | undefined
+  const missing = [...new Set(ids)].filter(id => !hasGeometry(root, id))
+  if (!missing.length) return []
+  if (!batch || !removed) throw new Error('The unloaded IFC geometry is unavailable. Reopen the project and try again.')
+  for (const id of missing) {
+    const product = removed.get(id)
+    if (!product || product.individual.some(p => !batch.geometryByIfcId.has(p.ifcGeometryId))) {
+      throw new Error(`The source geometry for IFC element ${id} is unavailable. Reopen the project and try again.`)
+    }
+  }
+  const restored: number[] = []
+  // Keep the previous receipts until the entire selection is reconstructed.
+  try {
+    for (const id of missing) {
+      const product = removed.get(id)!
+      restored.push(id)
+      if (product.batched.length) {
+        const instances: BatchInstanceInfo[] = []
+        batch.byExpressId.set(id, instances)
+        for (const source of product.batched) {
+          const instanceId = batch.mesh.addInstance(source.geometryId)
+          instances.push({ ...source, instanceId })
+          batch.expressIdByInstanceId.set(instanceId, id)
+          batch.mesh.setMatrixAt(instanceId, source.matrix)
+          batch.mesh.setColorAt(instanceId, source.color)
+          updateInstanceVisibility(batch.mesh, instanceId, true)
+        }
+      }
+      for (const source of product.individual) {
+        const geometry = batch.geometryByIfcId.get(source.ifcGeometryId)!.geometry.clone()
+        const { r: x, g: y, b: z } = source.color
+        const mesh = new THREE.Mesh(geometry, buildElementMaterial({ x, y, z, w: source.colorAlpha }))
+        mesh.userData.ifcGeometryId = source.ifcGeometryId
+        mesh.userData.ifcColorAlpha = source.colorAlpha
+        finalizeIndividualMesh(mesh, id, source.matrix, root)
+      }
+    }
+  } catch (error) {
+    const originals = restored.map(id => removed.get(id)!)
+    removeElementsFromModel(root, restored)
+    restored.forEach((id, i) => removed.set(id, originals[i]))
+    throw error
+  }
+  root.userData.ifcGeometryRevision = (root.userData.ifcGeometryRevision ?? 0) + 1
+  for (const id of restored) removed.delete(id)
+  return restored
 }
 
 // Batched Edges overlay (2026-07-25, per Maro: edges only ever worked on an

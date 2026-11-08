@@ -1,3 +1,4 @@
+import { updateInstanceVisibility } from './viewportVisibility'
 import * as THREE from 'three'
 import type { BatchState } from './elementBatching'
 
@@ -56,6 +57,8 @@ export function restoreAfterMoving(root: THREE.Object3D) {
   const batch = root.userData.batch as BatchState | undefined
   const hidden = batch?.mesh.userData.movingHidden as Set<number> | undefined
   if (!batch || !hidden) return
-  for (const instanceId of hidden) batch.mesh.setVisibleAt(instanceId, true)
   delete batch.mesh.userData.movingHidden
+  for (const id of hidden) {
+    if (batch.expressIdByInstanceId.has(id)) updateInstanceVisibility(batch.mesh, id)
+  }
 }

@@ -1,3 +1,4 @@
+import { removeMeshOutline } from './ifcVolumeGuides'
 import * as THREE from 'three'
 
 // Per-object "as imported" transform snapshot (2026-07-09, per Maro: "if I
@@ -61,6 +62,9 @@ export function getBaseline(object: THREE.Object3D): BaselineTransform {
 // overrides are tracked entirely separately in FourD.tsx's customTextures —
 // this snapshot only ever reflects the file's own untouched material.
 export interface OriginalMaterialSlot {
+  opacity: number
+  transparent: boolean
+  depthWrite: boolean
   color: THREE.Color
   map: THREE.Texture | null
   metalnessMap: THREE.Texture | null
@@ -80,11 +84,13 @@ export interface OriginalMaterialSlot {
 function snapshotMaterial(mat: THREE.Material): OriginalMaterialSlot {
   if (!(mat instanceof THREE.MeshStandardMaterial)) {
     return {
+      opacity: mat.opacity, transparent: mat.transparent, depthWrite: mat.depthWrite,
       color: new THREE.Color(0xffffff), map: null, metalnessMap: null, roughnessMap: null, normalMap: null,
       aoMap: null, displacementMap: null, metalness: 1, roughness: 1,
     }
   }
   return {
+    opacity: mat.opacity, transparent: mat.transparent, depthWrite: mat.depthWrite,
     color: mat.color.clone(),
     map: mat.map, metalnessMap: mat.metalnessMap, roughnessMap: mat.roughnessMap, normalMap: mat.normalMap,
     aoMap: mat.aoMap, displacementMap: mat.displacementMap,
@@ -151,6 +157,7 @@ export function getOriginalGeometry(mesh: THREE.Mesh): THREE.BufferGeometry {
 // than one of those roles (e.g. no subdivision was ever applied, so
 // `current` and `original` are literally the same object).
 export function disposeMeshGeometries(mesh: THREE.Mesh) {
+  removeMeshOutline(mesh)
   const candidates = [mesh.geometry, mesh.userData.originalGeometry, mesh.userData.subdividedGeometry] as (THREE.BufferGeometry | undefined)[]
   const disposed = new Set<THREE.BufferGeometry>()
   for (const geometry of candidates) {

@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from app.schemas.geographic_context import GeographicContext, FeatureReplacement
+from app.schemas.geographic_context import GeographicContext, FeatureReplacement, GroundFinish
 from app.schemas.path import PathPoint
 
 
@@ -114,11 +114,39 @@ class SiteAttachment(BaseModel):
         return self
 
 
+class Illumination(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    type: Literal["point", "sun", "spot", "area"]
+    intensity: float = Field(ge=0, le=100000)
+    range: float = Field(default=30, gt=0, le=10000)
+    beam_angle: float = Field(default=60, ge=1, le=179)
+    tilt: float = Field(default=0, ge=0, le=180)
+
+
+class SiteSectionBox(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    id: UUID
+    name: str = Field(min_length=1, max_length=300)
+    min_x: float
+    min_y: float
+    min_z: float
+    max_x: float
+    max_y: float
+    max_z: float
+    rot_x: float = 0
+    rot_y: float = 0
+    rot_z: float = 0
+    active: bool = True
+    visible: bool = True
+
+
 class SiteItem(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     id: UUID
     name: str = Field(min_length=1, max_length=100)
-    kind: Literal["fence", "context", "cabin", "tree", "person", "arrow", "asset", "shape", "array", "scatter", "geographic"]
+    kind: Literal["fence", "context", "cabin", "tree", "person", "arrow", "asset", "shape", "array", "scatter", "geographic", "light"]
+    section_boxes: list[SiteSectionBox] = Field(default_factory=list)
+    illumination: Illumination | None = None
     geographic: GeographicContext | None = None
     asset_id: UUID | None = None
     asset_part: AssetPart | None = None
@@ -152,7 +180,7 @@ class SiteItem(BaseModel):
     curve_mode: Literal["straight", "curved"] = "straight"
     panel_fit: Literal["fit", "trim", "strict"] = "fit"
     tag: str = Field(default="", max_length=100)
-    finish: Literal["default", "water"] = "default"
+    finish: GroundFinish | Literal["default", "water"] = "default"
     spacing: float = Field(default=3, ge=0.1, le=1000)
     count: int = Field(default=20, ge=1, le=200)
     seed: int = Field(default=1, ge=0, le=2147483647)
@@ -168,6 +196,8 @@ class SiteItem(BaseModel):
     @model_validator(mode="after")
     def source(self):
         from datetime import datetime
+        if (self.kind == "light") != (self.illumination is not None):
+            raise ValueError("Provide illumination settings for each site light")
         if self.motion_actions:
             if self.kind != 'asset' or self.asset_part:
                 raise ValueError('Motion actions require a complete imported actor')

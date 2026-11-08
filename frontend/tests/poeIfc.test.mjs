@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {build} from 'esbuild'
 async function load(file) {
-  const {outputFiles} = await build({entryPoints:[new URL(`../src/modules/fourD/${file}.ts`,import.meta.url).pathname.replace(/^\/(\w:)/,'$1')],bundle:true,write:false,format:'esm',platform:'node',external:['./ifcModel']})
+  const {outputFiles} = await build({entryPoints:[fileURLToPath(new URL(`../src/modules/fourD/${file}.ts`,import.meta.url))],bundle:true,write:false,format:'esm',platform:'node',external:['./ifcModel']})
   return import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
 }
 const {createPoeIfcTools} = await load('poeIfcTools')

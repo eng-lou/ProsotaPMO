@@ -24,8 +24,8 @@ test('moquette uses its own matte atlas layer and retains saved mapping transfor
   assert.equal(params.data[index * 4 + 2], 11)
   assert.ok(params.data[(params.width + index) * 4] >= 0.9)
   const atlas = uniforms.realTex.value.image
-  assert.equal(atlas.depth, 15)
-  assert.equal(atlas.data.length, 256 * 256 * 4 * 15)
+  assert.equal(atlas.depth, 15 + m.GROUND_FINISHES.length)
+  assert.equal(atlas.data.length, 256 * 256 * 4 * atlas.depth)
   const checked = m.getRealisticVariant(source, m.classIndexForKey('lawn', undefined, { lawn: 'moquette-checkered' }))
   assert.equal(checked.userData.realisticUniforms.realParams.value.image.data[19 * 4 + 2], 11)
   m.disposeRealisticVariant(source); source.dispose()
@@ -37,6 +37,28 @@ test('legacy mappings retain class IDs and default texture transform', () => {
   assert.equal(m.classIndexForKey('pane', undefined, { pane: 'glass' }), m.GLASS_CLASS)
   assert.deepEqual(m.textureSettingsForKey('wall', { wall: 'concrete' }), { scale: 1, rotation: 0 })
   assert.equal(m.classIndexForKey('wall', undefined, { wall: 'unknown' }), 0)
+})
+
+test('one camera guide can be filled, hidden and reset independently of another camera and its housing', () => {
+  const info = m.createRealisticModelInfo()
+  for (const id of [11, 12]) {
+    for (const [geometry, style, alpha] of [[1, 'Field of View', 0.2], [2, 'Housing', 1]]) {
+      m.addRealisticPiece(info, id, geometry, {styleName: style, materialNames: ['Field of View', 'Housing'],
+        layered: false, ifcType: 'IFCBUILDINGELEMENTPROXY', transparent: alpha < 1, sourceOpacity: alpha})
+    }
+  }
+  const cone = info.keyByPiece.get('11:1'), housing = info.keyByPiece.get('11:2')
+  const target = ['file', 'element:11']
+  const change = {['guide:' + cone]: 'surface', ['opacity:' + cone]: '0'}
+  const saved = JSON.parse(JSON.stringify(m.editMaterialFields({}, [target], change)))
+  const local = m.mappingAtTarget(saved, target), peer = m.mappingAtTarget(saved, ['file', 'element:12'])
+  assert.equal(m.outlineForKey(cone, info, local), false)
+  assert.equal(m.opacityForKey(cone, local), 0)
+  assert.equal(m.outlineForKey(housing, info, local), false)
+  assert.equal(m.opacityForKey(housing, local), undefined)
+  assert.equal(m.outlineForKey(cone, info, peer), true)
+  const reset = m.editMaterialFields(saved, [target], change, true)
+  assert.equal(m.outlineForKey(cone, info, m.mappingAtTarget(reset, target)), true)
 })
 
 test('texture transforms survive serialization and malformed values fall back safely', () => {
@@ -141,4 +163,54 @@ test('two placed copies retain their own settings when a shared texture is edite
   const map = m.editMaterialFields({[key]:'metal'}, [['site:b']], {[key]:'brick'})
   assert.equal(m.materialScope(map,'site:a')[key], 'metal')
   assert.equal(m.materialScope(map,'site:b')[key], 'brick')
+})
+
+test('temporary ground finishes have distinct repeatable texture layers and support scoped scale and tint', () => {
+  const source = new THREE.MeshStandardMaterial()
+  const layers = new Set()
+  for (const finish of m.GROUND_FINISHES) {
+    const index = m.classIndexForKey('pad', undefined, {pad:finish})
+    assert.ok(index > 19 && m.classReplacesColour(index))
+    const uniforms = m.getRealisticVariant(source, index).userData.realisticUniforms
+    const layer = uniforms.realParams.value.image.data[index * 4 + 2]
+    const atlas = uniforms.realTex.value.image
+    assert.ok(layer >= 15 && layer < atlas.depth)
+    const offset = layer * atlas.width * atlas.height * 4
+    const sample = atlas.data.subarray(offset, offset + atlas.width * atlas.height * 4)
+    assert.ok(new Set(sample.filter((_,i) => i % 4 === 0)).size > 10)
+    layers.add(layer)
+    assert.deepEqual(m.realisticTileSize(finish, 4), m.realisticTileSize(finish, 1).map(v=>v*4))
+  }
+  assert.equal(layers.size, 6)
+  m.disposeRealisticVariant(source)
+  source.dispose()
+})
+
+test('haul-road detail does not bake continuous parallel bands across an IFC road', () => {
+  const source = new THREE.MeshStandardMaterial()
+  const cls = m.classIndexForKey('road', undefined, { road: 'haul-road' })
+  const { realTex, realParams } = m.getRealisticVariant(source, cls).userData.realisticUniforms
+  const { data, width, height } = realTex.value.image
+  const layer = realParams.value.image.data[cls * 4 + 2]
+  const columns = new Float64Array(width)
+  const rows = new Float64Array(height)
+  let sum = 0, sumSquares = 0
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const tone = data[((layer * height + y) * width + x) * 4]
+      columns[x] += tone / height
+      rows[y] += tone / width
+      sum += tone
+      sumSquares += tone * tone
+    }
+  }
+  const mean = sum / (width * height)
+  const variance = sumSquares / (width * height) - mean * mean
+  assert.ok(variance > 0)
+  for (const means of [rows, columns]) {
+    const bandVariance = means.reduce((n, value) => n + (value - mean) ** 2, 0) / means.length
+    assert.ok(bandVariance < variance * .12, 'full-width bands dominate the ground detail')
+  }
+  m.disposeRealisticVariant(source)
+  source.dispose()
 })
