@@ -1,5 +1,9 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-09 — Planner Preview 0.2.49-preview.1
+
+Preview Web and Windows pick up the Stable 0.2.48 fixes for IFC reload and visibility, collections, sectioning and measurements on site objects. Both Preview release cards now identify the matching build and the desktop card points to its versioned installer.
+
 ## 2026-11-08 — Planner Stable 0.2.48
 
 Promotes the eight 0.2.48 Preview builds to Stable. The web app and Windows installer include selected-surface opacity, IFC camera and clearance guides, complete-element transforms, texture scaling, HDR environments, scene lights, temporary ground finishes, surface wear and feathered edges. Existing material settings carry forward when a project reopens.
