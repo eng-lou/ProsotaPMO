@@ -55,7 +55,19 @@ def main() -> None:
     engine = create_engine(database_url, poolclass=pool.NullPool, connect_args={"connect_timeout": 10})
     try:
         with engine.begin() as connection:
-            prepare_database(connection, production=os.environ.get("VERCEL_ENV") == "production")
+            # One-time maintenance for the verified prosota-planner-preview compute.
+            # This build must fail before running migrations in any other environment.
+            target = engine.url
+            endpoint = (target.host or "").split(".")[0]
+            if not (
+                environment.get("vercel_env") == "preview"
+                and environment.get("vercel_git_commit_ref") == "codex/preview-db-0.2.49-1"
+                and endpoint in {"ep-little-scene-zaqfa0mb", "ep-little-scene-zaqfa0mb-pooler"}
+                and target.host.endswith(".neon.tech")
+                and set(target.query) <= {"sslmode", "channel_binding"}
+            ):
+                raise RuntimeError("This maintenance run requires the dedicated Planner Preview database.")
+            prepare_database(connection, production=True)
     finally:
         engine.dispose()
 
