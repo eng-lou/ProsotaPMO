@@ -707,7 +707,7 @@ export function ComparisonViewportPane({
         {active && (
           <IdleRenderDriver
             dateRef={timelineDateRef}
-            continuous={importedObjects.some(o => o.object.animations.length > 0)}
+            continuous={false}
           />
         )}
         <CaptureCamera cameraRef={cameraRef} />
@@ -843,7 +843,8 @@ export function ComparisonViewportPane({
                 exists to raise AO sample counts during a capture/export's
                 resolution boost (Viewport3D.tsx's own `highQuality`); this
                 pane has no capture/export of its own. */}
-            <AmbientOcclusionEffect enabled={ambientOcclusion} boostQuality={false} modelRadius={modelRadius} />
+            <AmbientOcclusionEffect enabled={ambientOcclusion} boostQuality={false} modelRadius={modelRadius}
+              movingRef={config.cameraDisconnected ? undefined : cameraSyncRef} simplify={simplifyWhileOrbiting} />
           </Suspense>
         )}
       </Canvas>

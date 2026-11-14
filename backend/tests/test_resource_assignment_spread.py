@@ -301,3 +301,21 @@ async def test_bulk_fetch_empty_resource_ids(
     })
     assert resp.status_code == 200, resp.text
     assert resp.json()["spreads"] == {}
+
+
+async def test_sparse_bulk_api_preserves_capacity_and_demand(client, db, project, live_schedule_period):
+    from decimal import Decimal
+    await _anchor(db, live_schedule_period)
+    activity = await _create_activity(client, project, live_schedule_period, duration_hours=40)
+    resource = await _create_resource(client, project)
+    await _create_assignment(client, activity, resource)
+    payload = {"resource_ids": [resource["id"]], "start": "2025-01-01", "end": "2027-01-01"}
+    dense_response = await client.post("/api/v1/resource-assignment-spreads/bulk-fetch", json=payload)
+    sparse_response = await client.post("/api/v1/resource-assignment-spreads/bulk-fetch", json={**payload, "sparse": True})
+    assert dense_response.status_code == sparse_response.status_code == 200
+    dense = dense_response.json()["spreads"][resource["id"]]
+    sparse = sparse_response.json()["spreads"][resource["id"]]
+    assert dense["days"] == sparse["days"]
+    assert sum(Decimal(c["hours"]) for c in dense["cells"]) == sum(Decimal(c["hours"]) for c in sparse["cells"])
+    assert len(sparse["cells"]) == 5
+    assert len(dense["cells"]) == 730

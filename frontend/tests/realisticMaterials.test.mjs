@@ -77,6 +77,15 @@ test('reset removes only the selected material overrides', () => {
   assert.equal(map.wall, 'render')
 })
 
+test('site alignment survives a saved per-object edit at default scale and direction', () => {
+  const settings = { scale: 1, rotation: 0, siteAligned: true }
+  const field = m.withTextureSettings({}, 'pad', settings)
+  const saved = JSON.parse(JSON.stringify(m.editMaterialFields({}, [['site:pad-1']], field)))
+  assert.deepEqual(m.textureSettingsForKey('pad', m.mappingAtTarget(saved, ['site:pad-1'])), settings)
+  assert.deepEqual(m.textureSettingsForKey('pad', m.mappingAtTarget(saved, ['site:pad-2'])), { scale: 1, rotation: 0 })
+  assert.deepEqual(m.withTextureSettings(field, 'pad', { scale: 1, rotation: 0, siteAligned: false }), {})
+})
+
 test('new finish classes keep imported colour and report scaled repeats', () => {
   for (const finish of ['render', 'painted-metal']) {
     const index = m.classIndexForKey('surface', undefined, { surface: finish })

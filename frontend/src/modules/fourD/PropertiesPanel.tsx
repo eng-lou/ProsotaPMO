@@ -501,11 +501,11 @@ export function PropertiesPanel({
       )}
 
       <div className="flex-1" />
-      <div className="px-3 py-2 border-t border-gray-100 dark:border-prosota-line text-[10px] text-gray-400 dark:text-prosota-muted">
-        {activeObject
+      {(!siteSelectionPanel || activeObject) && <div className="px-3 py-2 border-t border-gray-100 dark:border-prosota-line text-[10px] text-gray-400 dark:text-prosota-muted">
+        {activeObject?.isSite ? 'See 3D Site tools for this object’s placement and activity links.' : activeObject
           ? 'IFC sub-element properties (GlobalId, property sets): see the IFC Data tab on the right.'
           : 'Click an object in the viewport to edit its transform and material here.'}
-      </div>
+      </div>}
     </div>
   )
 }

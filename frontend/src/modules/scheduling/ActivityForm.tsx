@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import axios from 'axios'
 import { confirmWithDontAsk } from '@/lib/confirmWithDontAsk'
 import { formatDateTime, toDatetimeLocalValue } from './dateTime'
 import { buildCalendarLookup, formatFloatDays, resolveHoursPerDay, type CalendarLookup } from './durationDisplay'
@@ -104,11 +105,18 @@ export function toActivityPayload(
   }
 }
 
+export function toActivityPatch(activity: Activity, values: ActivityFormValues, calendarLookup: CalendarLookup) {
+  const isParent = activity.activity_type === 'wbs_summary'
+  const next = toActivityPayload(values, calendarLookup, isParent, activity.status)
+  const previous = toActivityPayload(toFormValues(activity, calendarLookup), calendarLookup, isParent, activity.status)
+  return Object.fromEntries(Object.entries(next).filter(([key, value]) => value !== previous[key]))
+}
+
 interface Props {
   activity: Activity | null
   calendars: Calendar[]
   onCancel: () => void
-  onSubmit: (values: ActivityFormValues, reassessmentNote: string | null) => Promise<void>
+  onSubmit: (values: ActivityFormValues, reassessmentNote: string | null) => Promise<void | false>
   // True when rendered inside the unified activity-detail panel (Scheduling.tsx),
   // which already provides its own white/border/rounded chrome — the standalone
   // "+ Add Activity" flow (activity === null) still needs its own.
@@ -133,7 +141,21 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const [initialValues] = useState<ActivityFormValues>(() => toFormValues(activity, calendarLookup))
   const [values, setValues] = useState<ActivityFormValues>(initialValues)
+  const previousServerValues = useRef(initialValues)
+  useEffect(() => {
+    const next = toFormValues(activity, calendarLookup)
+    const previous = previousServerValues.current
+    previousServerValues.current = next
+    // Refresh clean fields after inline edits/CPM; preserve unsaved typing.
+    setValues(current => Object.fromEntries(Object.entries(next).map(([key, value]) => [
+      key, current[key as keyof ActivityFormValues] === previous[key as keyof ActivityFormValues]
+        ? value : current[key as keyof ActivityFormValues],
+    ])) as unknown as ActivityFormValues)
+  }, [activity, calendarLookup])
   const [submitting, setSubmitting] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [savedValues, setSavedValues] = useState<string | null>(null)
+  const saveRevision = useRef(0)
   const [reassessmentNote, setReassessmentNote] = useState('')
   // Collapsed by default (2026-09-03, per Maro: "this should be collapsible
   // or removed, it makes the bottom panel too big. especially when the info
@@ -164,12 +186,29 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
   // Activities grid's own commitEdit convention (Scheduling.tsx): a typed
   // field saves on blur, not on every keystroke; a select/dropdown saves
   // immediately on change, since there's no "still typing" state for one.
+  const pendingValues = useRef(new Set<string>())
   const commitValues = async (nextValues: ActivityFormValues) => {
+    const signature = JSON.stringify(nextValues)
+    if (pendingValues.current.has(signature)) return
+    if (embedded && ((!pendingValues.current.size && signature === JSON.stringify(toFormValues(activity, calendarLookup))) || pendingValues.current.has(signature))) return
+    const revision = ++saveRevision.current
+    pendingValues.current.add(signature)
     setSubmitting(true)
+    setSaveError(null)
     try {
-      await onSubmit(nextValues, hasTriggerChangesFor(nextValues) && reassessmentNote.trim() ? reassessmentNote.trim() : null)
+      const result = await onSubmit(nextValues, hasTriggerChangesFor(nextValues) && reassessmentNote.trim() ? reassessmentNote.trim() : null)
+      if (revision === saveRevision.current) {
+        if (result === false) setSaveError('The change was cancelled. Adjust your entries to continue.')
+        else setSavedValues(signature)
+      }
+    } catch (error) {
+      if (revision === saveRevision.current) {
+        const detail = axios.isAxiosError(error) ? error.response?.data?.detail : undefined
+        setSaveError(typeof detail === 'string' ? detail : 'The update could not be confirmed. Your entries are still here. Check your connection and try again.')
+      }
     } finally {
-      setSubmitting(false)
+      pendingValues.current.delete(signature)
+      setSubmitting(pendingValues.current.size > 0)
     }
   }
   const setAndCommit = <K extends keyof ActivityFormValues>(key: K, value: ActivityFormValues[K]) => {
@@ -223,6 +262,12 @@ export function ActivityForm({ activity, calendars, onCancel, onSubmit, embedded
       onSubmit={handleSubmit}
       className={embedded ? 'p-4 grid grid-cols-2 gap-4' : 'bg-white dark:bg-prosota-panel border border-gray-200 dark:border-prosota-line rounded-lg p-5 mb-4 grid grid-cols-2 gap-4'}
     >
+      {(embedded || saveError) && <div className="col-span-2 text-xs" role={saveError ? 'alert' : 'status'} aria-live="polite">
+        {saveError ? <div className="text-red-700 dark:text-red-300 flex flex-wrap items-center gap-2">
+          <span>{saveError}</span>
+          <button type="button" disabled={submitting} onClick={() => void commitValues(values)} className="underline disabled:opacity-50">Try again</button>
+        </div> : <span className="text-gray-500 dark:text-prosota-muted">{submitting ? 'Saving changes and updating the schedule…' : savedValues === JSON.stringify(values) ? 'Saved' : 'Changes save when you leave a field.'}</span>}
+      </div>}
       <div className="col-span-2">
         <label className="block text-xs font-semibold text-gray-600 dark:text-prosota-muted mb-1">Activity Name</label>
         <input

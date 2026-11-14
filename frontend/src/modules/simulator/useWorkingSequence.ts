@@ -3,7 +3,7 @@ import { api } from '@/lib/api'
 import type { Scenario } from './types'
 
 export type WorkingSequence={revision:number;scenario:Scenario;status:'current'|'stale';updated_at:string}
-export function useWorkingSequence(projectId?:string,periodId?:string){
+export function useWorkingSequence(projectId?:string,periodId?:string,active=true){
  const scope=projectId&&periodId?projectId+':'+periodId:''
  const scopeRef=useRef(scope);scopeRef.current=scope
  const generation=useRef(0)
@@ -20,7 +20,7 @@ export function useWorkingSequence(projectId?:string,periodId?:string){
    if(scopeRef.current===scope&&request===generation.current){setSaved(old=>old.scope===scope&&old.value?.revision===data?.revision&&old.value?.status===data?.status&&old.value?.updated_at===data?.updated_at?old:{scope,value:data});setError('')}
   }catch{if(scopeRef.current===scope&&request===generation.current){setSaved({scope,value:null});setError('Could not check the working sequence. Retry before detailed playback.')}}
  },[projectId,periodId,scope])
- useEffect(()=>{setError('');void refresh();window.addEventListener('focus',refresh);return()=>{generation.current++;window.removeEventListener('focus',refresh)}},[refresh])
+ useEffect(()=>{if(!active)return;setError('');void refresh();window.addEventListener('focus',refresh);return()=>{generation.current++;window.removeEventListener('focus',refresh)}},[refresh,active])
  const install=(data:WorkingSequence)=>{generation.current++;setSaved({scope,value:data});setDetailed(true);setError('')}
  return {value,detailed,setDetailed,refresh,install,error,scenario:value?.status==='current'&&detailed?value.scenario:null}
 }

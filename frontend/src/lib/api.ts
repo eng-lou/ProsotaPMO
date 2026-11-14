@@ -1,3 +1,4 @@
+import { installPerformanceDiagnostics } from './performanceDiagnostics'
 import { installApiUndo } from './apiUndo'
 import axios from 'axios'
 
@@ -40,6 +41,7 @@ export const api = axios.create({
 })
 
 installApiUndo(api)
+installPerformanceDiagnostics(api)
 
 // Large file downloads (2026-09-30, per Maro: "reloading models is still a
 // very big issue... a few always gets left out" — two ~100MB+ IFC files

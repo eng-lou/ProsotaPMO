@@ -10,7 +10,7 @@ const { outputFiles } = await build({
    build.onLoad({filter: /.*/, namespace: 'stub'}, () => ({contents: 'export const api = {}'}))
  }}],
 })
-const { computeUsageProfileSeries: compute } = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`).catch(error => { console.error(error.message); process.exit(1) })
+const { computeUsageProfileSeries: compute, indexSpread, computeUsageProfileBars } = await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`).catch(error => { console.error(error.message); process.exit(1) })
 const resource = {id: 'r', rate: '100', max_hours_per_day: '8'}
 const buckets = Array.from({length: 7}, (_,i) => ({start: new Date(2011,i,1), end: new Date(2011,i+1,1), label: String(i)}))
 const activity = {id:'a', status:'completed', start:'2011-01-01T00:00:00', finish:'2011-03-01T00:00:00', actual_start:'2011-01-01T00:00:00', actual_finish:'2011-03-01T00:00:00', ac:'5900', ev:'4720'}
@@ -97,4 +97,19 @@ test('tracking retains earned-only figures and recorded late actuals', () => {
   ])
   assert.equal(result.actualByAssignment.get('ra')[3], 3900)
   assert.deepEqual(result.actualByAssignment.get('ra'), result.actualValues)
+})
+
+
+test('sparse and dense demand give identical chart totals; refresh replaces cached index',()=>{
+ const days=Array.from({length:31},(_,i)=>({date:`2011-01-${String(i+1).padStart(2,'0')}`,capacity:'8'}))
+ const cells=days.map((d,i)=>({assignment_id:'ra',date:d.date,hours:i===4?'8':'0',is_override:i===6}))
+ const dense={days,cells},sparse={days,cells:cells.filter(c=>c.hours!=='0'||c.is_override)}
+ const rows=new Map([['r',[{activity,assignment:{id:'ra'}}]]])
+ const bars=spread=>computeUsageProfileBars([resource],rows,buckets,new Map([['r',spread]]),new Set(),'hours')
+ assert.deepEqual(bars(dense),bars(sparse))
+ assert.equal(indexSpread(sparse),indexSpread(sparse))
+ const refreshed={days,cells:[{...cells[4],hours:'16'}]}
+ assert.notEqual(indexSpread(refreshed),indexSpread(sparse))
+ assert.equal(bars(refreshed).barValues[0],16)
+ assert.equal(indexSpread(sparse).hoursByAssignmentDate.get('ra:2011-01-07').isOverride,true)
 })

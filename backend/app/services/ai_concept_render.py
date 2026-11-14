@@ -7,8 +7,6 @@ import binascii
 import httpx
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
-from google import genai
-from google.genai import types
 
 from app.core.config import settings
 from app.ai.openai_transport import post_openai
@@ -72,6 +70,7 @@ def _get_client() -> genai.Client:
         # Fails loudly at call time, not at import time — same reasoning as
         # app/ai/client.py's own _get_client for anthropic_api_key.
         raise HTTPException(status_code=503, detail="AI Concept Render is not configured (missing gemini_api_key)")
+    from google import genai
     return genai.Client(api_key=settings.gemini_api_key)
 
 
@@ -96,6 +95,7 @@ async def _generate(image_bytes: bytes, user_prompt: str, creativity: float = 0.
             return image
         except (KeyError, IndexError, TypeError, ValueError, binascii.Error) as exc:
             raise HTTPException(502, 'OpenAI Concept Render returned no valid image.') from exc
+    from google.genai import types
     client = _get_client()
     try:
         response = await client.aio.models.generate_content(

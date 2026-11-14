@@ -40,7 +40,7 @@ function buildGeometry(vertexData: Float32Array, indexData: Uint32Array): THREE.
  * StreamAllMeshes clears that cache between elements. Only owned Three buffers
  * and plain placement records survive the callback; properties stay in the API.
  */
-export function buildIfcScene(api: IfcAPI, modelID: number, name: string, sharedOffset: THREE.Vector3 | null) {
+export async function buildIfcScene(api: IfcAPI, modelID: number, name: string, sharedOffset: THREE.Vector3 | null) {
   const group = new THREE.Group()
   group.name = name
   const geometries = new Map<number, THREE.BufferGeometry>()
@@ -50,7 +50,10 @@ export function buildIfcScene(api: IfcAPI, modelID: number, name: string, shared
   let batch: BatchState | null = null
   let batchedMesh: THREE.BatchedMesh | undefined
   let batchedMaterial: THREE.MeshStandardMaterial | undefined
+  let sliceStart = performance.now()
+  const yieldToInput = async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)); sliceStart = performance.now() }
   try {
+    await yieldToInput()
     api.StreamAllMeshes(modelID, flatMesh => {
       if (NON_PRODUCT_IFC_TYPES.has(api.GetNameFromTypeCode(api.GetLineType(modelID, flatMesh.expressID)))) return
       for (let j = 0; j < flatMesh.geometries.size(); j++) {
@@ -76,6 +79,8 @@ export function buildIfcScene(api: IfcAPI, modelID: number, name: string, shared
       }
     })
 
+    await yieldToInput()
+
     // All federated files must share one offset. The caller commits this only
     // after success, so a failed first import cannot shift subsequent models.
     const recenterOffset = sharedOffset ?? (placements.length ? offsetSum.divideScalar(placements.length) : null)
@@ -88,6 +93,7 @@ export function buildIfcScene(api: IfcAPI, modelID: number, name: string, shared
       batch = { mesh: batchedMesh, byExpressId: new Map(), expressIdByInstanceId: new Map(), geometryByIfcId: new Map(), geometryById: new Map() }
       group.add(batchedMesh)
       for (const [id, geometry] of geometries) {
+        if (performance.now() - sliceStart > 8) await yieldToInput()
         const geometryId = batchedMesh.addGeometry(geometry)
         batch.geometryByIfcId.set(id, { geometry, geometryId })
         batch.geometryById.set(geometryId, geometry)
@@ -95,6 +101,7 @@ export function buildIfcScene(api: IfcAPI, modelID: number, name: string, shared
     }
     let mirroredCount = 0
     for (const placed of placements) {
+      if (performance.now() - sliceStart > 8) await yieldToInput()
       const matrix = new THREE.Matrix4().fromArray(placed.matrix)
       if (recenterOffset) {
         matrix.elements[12] -= recenterOffset.x

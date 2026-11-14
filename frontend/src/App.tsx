@@ -5,6 +5,7 @@ import { useAuth0 } from '@auth0/auth0-react'
 import { AccessPendingScreen } from './components/AccessPendingScreen'
 import { DesktopSignIn } from './components/DesktopSignIn'
 import { HomePage } from './components/HomePage'
+import { LoadingState } from './components/LoadingState'
 import { Layout } from './components/Layout'
 import { AuthTokenProvider } from './lib/AuthTokenProvider'
 import { ConfirmHost } from './lib/confirmWithDontAsk'
@@ -89,7 +90,7 @@ function PersistentFourD() {
 
   return (
     <div className={active ? 'h-full' : 'hidden'}>
-      <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading 4D…</div>}>
+      <Suspense fallback={<LoadingState label="Opening the BIM workspace…" />}>
         <FourD active={active} />
       </Suspense>
     </div>
@@ -124,7 +125,7 @@ function AuthenticatedApp() {
               a single fallback here is exactly as correct as wrapping each
               <Route> individually and doesn't repeat the same fallback
               markup five times. */}
-          <Suspense fallback={<div className="p-8 text-gray-400 dark:text-prosota-muted text-sm">Loading…</div>}>
+          <Suspense fallback={<LoadingState label="Opening your workspace…" />}>
             <Routes key={undoRevision}>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="/projects" element={<ProjectSelector />} />
@@ -152,11 +153,7 @@ function AccessGate() {
   const { loading, currentUser, error, refetch } = useCurrentUser()
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center dark:bg-prosota-ink">
-        <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading…</span>
-      </div>
-    )
+    return <LoadingState fullPage label="Checking your project access…" />
   }
 
   // A failed /users/me fetch (network hiccup, backend unreachable, a cold
@@ -223,11 +220,7 @@ function AuthGate() {
   if (isLoading && window.location.pathname === '/') return <LoginPage />
 
   if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center dark:bg-prosota-ink">
-        <span className="text-gray-400 dark:text-prosota-muted text-sm">Loading…</span>
-      </div>
-    )
+    return <LoadingState fullPage label="Checking your sign-in…" />
   }
 
   if (!isAuthenticated) return <LoginPage />

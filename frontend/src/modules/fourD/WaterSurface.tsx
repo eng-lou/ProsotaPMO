@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { markRenderActivity } from './IdleRenderDriver'
+import { hasVisibleWater } from './visibleWater'
 export const waterTime = { value: 0 }
 export const waterOptions = { value: new THREE.Vector4(1, 0.45, 0.25, 1) }
 export const waterColour = { value: new THREE.Color('#236b73') }
@@ -32,20 +33,10 @@ export function WaterSurfaceDriver() {
     // Check only rendered water variants; unrelated realistic materials can idle.
     if (performance.now() - scan.current.at > 1000) {
     scan.current.at = performance.now()
-    scan.current.found = false
-    scene.traverse(o => {
-      const m = (o as THREE.Mesh).material
-      if (!m || !o.visible) return
-      for (const material of Array.isArray(m) ? m : [m]) {
-        const u = material.userData.realisticUniforms
-        if (u?.realClass?.value === 14) scan.current.found = true
-        const data = u?.realClassTex?.value?.image?.data
-        if (data && !scan.current.found) for (let i = 0; i < data.length; i += 4) if (data[i] === 14) { scan.current.found = true; break }
-      }
-    })
+    scan.current.found = hasVisibleWater(scene)
     }
     waterTime.value = waterExportTime.current ?? performance.now() / 1000
-    if (scan.current.found && waterOptions.value.x > 0) markRenderActivity()
+    if (scan.current.found && waterOptions.value.x > 0 && waterOptions.value.y > 0) markRenderActivity()
   }, -90)
   return null
 }

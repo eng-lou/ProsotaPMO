@@ -128,12 +128,15 @@ export interface IfcModelHandle {
 // second project's own first file would silently reuse the first
 // project's completely unrelated site coordinates as its offset.
 let sharedRecenterOffset: THREE.Vector3 | null = null
+let sceneBuildQueue: Promise<void> = Promise.resolve()
+let coordinateEpoch = 0
 
 // Called by FourD.tsx right before restoring/importing models for a
 // newly-selected project (2026-07-19) — see sharedRecenterOffset's own
 // header for why a project switch specifically needs this, unlike normal
 // multi-file import within the same project.
 export function resetRecenterOffset(): void {
+  coordinateEpoch++
   sharedRecenterOffset = null
 }
 
@@ -144,8 +147,14 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     // Keep the input buffer out of the scene-building scope: a large IFC's
     // bytes can be reclaimed once OpenModel has parsed the records.
     modelID = api.OpenModel(new Uint8Array(await file.arrayBuffer()))
-    const { object, batch, recenterOffset } = buildIfcScene(api, modelID, file.name, sharedRecenterOffset)
-    sharedRecenterOffset = recenterOffset
+    const epoch = coordinateEpoch
+    const build = sceneBuildQueue.then(async () => {
+      const result = await buildIfcScene(api, modelID!, file.name, epoch === coordinateEpoch ? sharedRecenterOffset : null)
+      if (epoch === coordinateEpoch) sharedRecenterOffset = result.recenterOffset
+      return result
+    })
+    sceneBuildQueue = build.then(() => {}, () => {})
+    const { object, batch } = await build
     return { api, modelID: nextAppModelId++, ifcModelID: modelID, object, batch }
   } catch (error) {
     // Geometry extraction can fail too; never leave its native engine alive.

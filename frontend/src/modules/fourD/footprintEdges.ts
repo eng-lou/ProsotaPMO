@@ -250,22 +250,33 @@ function patchMask(shader: THREE.WebGLProgramParametersWithUniforms, b: Binding,
 // Ground slabs and native pads cast the rounded silhouette too. Keep an
 // asset's authored shadow pass and independent material groups intact.
 function bindGroundShadow(mesh: THREE.Mesh, b: Binding) {
-    if (b.shadows.has(mesh) || Array.isArray(mesh.material) || mesh.customDepthMaterial || mesh.customDistanceMaterial)
+    if (b.shadows.has(mesh) || Array.isArray(mesh.material)
+        || (mesh.customDepthMaterial && !mesh.customDepthMaterial.userData.prosotaAnimationShadow)
+        || (mesh.customDistanceMaterial && !mesh.customDistanceMaterial.userData.prosotaAnimationShadow))
         return;
-    const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }), distance = new THREE.MeshDistanceMaterial();
+    const ownDepth = !mesh.customDepthMaterial, ownDistance = !mesh.customDistanceMaterial;
+    const depth = mesh.customDepthMaterial ?? new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+    const distance = mesh.customDistanceMaterial ?? new THREE.MeshDistanceMaterial();
+    const previous = [depth, distance].map(pass => ({ compile: pass.onBeforeCompile, key: pass.customProgramCacheKey }));
     for (const pass of [depth, distance]) {
         pass.onBeforeCompile = shader => patchMask(shader, b, true);
         pass.customProgramCacheKey = () => 'ground-footprint-shadow-1';
+        pass.needsUpdate = true;
     }
     mesh.customDepthMaterial = depth;
     mesh.customDistanceMaterial = distance;
     b.shadows.set(mesh, () => {
-        if (mesh.customDepthMaterial === depth)
+        if (ownDepth && mesh.customDepthMaterial === depth)
             mesh.customDepthMaterial = undefined;
-        if (mesh.customDistanceMaterial === distance)
+        if (ownDistance && mesh.customDistanceMaterial === distance)
             mesh.customDistanceMaterial = undefined;
-        depth.dispose();
-        distance.dispose();
+        [depth, distance].forEach((pass, i) => {
+            pass.onBeforeCompile = previous[i].compile;
+            pass.customProgramCacheKey = previous[i].key;
+            pass.needsUpdate = true;
+        });
+        if (ownDepth) depth.dispose();
+        if (ownDistance) distance.dispose();
     });
 }
 function reliefMetres(wear?: RoadWear) {

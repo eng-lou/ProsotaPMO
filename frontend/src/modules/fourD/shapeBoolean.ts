@@ -72,6 +72,31 @@ function compact(g: THREE.BufferGeometry, weld=false) {
   for(const group of groups)result.addGroup(group.start,group.count,group.materialIndex)
   return result
 }
+// For a cut through a paint/finish boundary, use the largest authored base
+// surface for newly exposed faces. Existing base faces keep their individual slots.
+function cutFaceMaterial(base: Brush): THREE.Material {
+  if (!Array.isArray(base.material)) return base.material
+  if (base.material.length === 1) return base.material[0]
+  const geometry = base.geometry, pos = geometry.getAttribute('position'), index = geometry.index
+  const areas = new Map<THREE.Material, number>()
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3()
+  for (const group of geometry.groups) {
+    const material = base.material[group.materialIndex ?? 0]
+    const end = Math.min(group.start + group.count, index?.count ?? pos.count, geometry.drawRange.start + geometry.drawRange.count)
+    let area = areas.get(material) ?? 0
+    for (let i = Math.max(group.start, geometry.drawRange.start); i < end; i += 3) {
+      a.fromBufferAttribute(pos, index ? index.getX(i) : i)
+      b.fromBufferAttribute(pos, index ? index.getX(i+1) : i+1)
+      c.fromBufferAttribute(pos, index ? index.getX(i+2) : i+2)
+      area += b.sub(a).cross(c.sub(a)).length()
+    }
+    areas.set(material, area)
+  }
+  let largest = 0, chosen = base.material[0]
+  for (const [material, area] of areas) if (area > largest) { largest = area; chosen = material }
+  return chosen
+}
+
 export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, upAxis:'y'|'z', operation:ShapeOperation): BooleanResult[] {
   const inputs:THREE.Group[]=[], brushes:Brush[]=[], results:BooleanResult[]=[]
   const evaluator=new Evaluator(); evaluator.attributes=['position','normal','uv']
@@ -121,6 +146,10 @@ export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, 
       return combined
     }
     const a=collect(base),b=collect(tool)
+    // The cutter describes the boundary, while the cut exposes the base solid.
+    // Sharing the actual material lets CSG consolidate the new faces into its
+    // base slot, so future edits to that finish cover the cut edges as well.
+    if (operation !== 'union') b.material = cutFaceMaterial(a)
     const operations=operation==='excavate'?[SUBTRACTION,INTERSECTION]:[operation==='union'?ADDITION:operation==='intersect'?INTERSECTION:SUBTRACTION]
     for(let i=0;i<operations.length;i++){
       const brush=evaluator.evaluate(a,b,operations[i]);brushes.push(brush)
@@ -132,6 +161,7 @@ export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, 
       const material=operation==='excavate'&&i===1?new THREE.MeshStandardMaterial({color:'#dc2626',roughness:.8}):mats.map(m=>m.clone())
       if(!Array.isArray(material))g.clearGroups()
       const mesh=new THREE.Mesh(g,material);mesh.name=i===1?'Excavated section':'Result'
+      mesh.userData.prosotaShapeOperation = { version: 2, operation, role: i === 1 ? 'removed' : 'result' }
       results.push({name:mesh.name,mesh,position:anchor.clone().applyAxisAngle(new THREE.Vector3(1,0,0),upAxis==='z'?Math.PI/2:0)})
     }
     return results

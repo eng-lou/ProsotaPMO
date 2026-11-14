@@ -1,5 +1,251 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-11 - User export confirms excavation source geometry
+
+Read C:/Users/Maro/Downloads/Excavation _ result.glb. All 70 triangles match
+candidate 0217dfc4-80f1-400a-a797-b0444c6e4a82.glb exactly, including vertex
+coordinates and winding. Export has two opaque double-sided materials, no node
+transforms and the same 50 mm thickness. Confirms source mesh correspondence;
+does not prove runtime clipping or shader state is correct because static GLB
+export does not retain those effects. No geometry repair justified yet.
+Next actual-instance check: seek before T-0004 Clear Vegetation starts, keeping
+object isolated and camera fixed. This separates activity clipping from the
+remaining per-instance material/section state without unlinking or editing.
+No source or project mutation other than this investigation log.
+
+## 2026-11-11 - AO-off screenshot rules out required postprocessing cause
+
+Latest screenshot shows isolated Excavation - result still breaking up with
+Shadows AND Ambient Occlusion unchecked. AO is not required to produce the
+failure. Standalone candidate GLB remains clean, so it has not reproduced the
+active instance state. Need the current selected object's static-pose export
+to compare against the candidate source, including its current transform.
+Avoid further generic fixtures or treating the guessed source asset as a
+confirmed Tower Project record. Scale symptom remains unresolved. No code
+change or release in this step.
+
+## 2026-11-11 - Saved excavation renders clean outside full viewport
+
+User ran excavation-isolation-render; actual candidate asset loads as two meshes
+with 133.5617 x .05000019 x 84.6897 dimensions and no WebGL errors. Reviewed
+wide gravel unlinked/frame zero/just-started/mid-removal and unlit unlinked:
+no large triangular holes or severe horizontal breakup matching user images.
+This does not prove the active project's placement or settings are correct.
+
+User screenshot has Ambient Occlusion enabled. The standalone fixture omits
+the full EffectComposer/N8AO path, whose depth-buffer issues are already noted
+in Viewport3D.tsx. Next discriminate in the actual viewport: leave isolated
+Excavation - result, camera and date fixed; switch Ambient Occlusion off.
+Do not conclude CSG repair or shadow bias is needed from current evidence.
+Scale symptom remains open. No production edit or new installer in this step.
+
+## 2026-11-11 - Tower Project named objects and isolated excavation evidence
+
+User identified Closed shape / water (green surface) and Excavation - result.
+Reports result also breaks up in isolation with shadows off, and Z scale appears
+ineffective. Screenshots show two material slots and a Clear Vegetation link.
+Treat geometry/material/clipping and transform behaviour together; touching
+separate objects is insufficient to explain the isolated failure.
+
+Read saved site assets without modifying them. Candidate 0217dfc4-80f1-400a-
+a797-b0444c6e4a82.glb has a Result node, two double-sided opaque materials,
+133.56 x 84.69 m footprint, 50 mm thickness and 70 triangles with no exact
+duplicate triangles. Not yet confirmed as active instance by project record.
+Created excavation-isolation-render diagnostic using its actual bytes and
+production parseAsset/material/animation code: authored, compacted gravel,
+unlit; close/wide; unlinked, frame zero, just-started and mid-removal, no shadows.
+Bundle compiles. Saved project geometry untouched. Needs user-run Electron due
+to ongoing command-environment startup limitation. No production fix claimed
+and no new installer built.
+
+## 2026-11-11 - Depth-priority candidate rejected and removed from production
+
+Read saved depth-overlap result: baseline AND candidate match the reference
+exactly in every sampled region. reproduced=false means corrected=true is not
+proof of a fix. Vegetation regression also failed strict reverse equality at
+25% (four channel values differ by one level); all other checks passed.
+Removed the candidate hook and its call sites from production, retaining it
+only in desktop/tests/experimentalFadeDepth.ts for reproducibility. No change
+to thresholds to manufacture a pass. Original .7 shadow/opacity corrections
+remain. Need actual affected scene geometry, placement and camera for the next
+reproduction; generic slabs have not established the reported failure. No new
+installer, project data or Stable publishing changes.
+
+## 2026-11-11 - Candidate depth tie correction (GPU verification pending)
+
+User clarified the first wide screenshot already had Shadows OFF; the second
+has Shadows ON. The remaining wide-view bands therefore do not require shadow
+rendering. Previous shadow-bias diagnosis was not established.
+
+Added animation-only colour-pass depth priority (four 24-bit depth steps) after
+the logarithmic depth calculation. Disabling depth writes alone leaves depth
+tests competing at touching faces. Candidate keeps depth tests enabled, does
+not move saved geometry or change shadow depth, and resets at opaque endpoints
+and unlink in the site path. Existing display variants receive the same state.
+This is a candidate, not a verified fix for the actual saved scene.
+
+Ten focused CPU tests and TypeScript pass. New depth-overlap-render.cjs fixture
+compares uncorrected and corrected touching slabs against a depth-independent
+reference at close/wide distances and three fade positions; separately checks
+foreground occlusion. A pass requires reproduced baseline error as well as
+correction. Bundle compiles. Electron still exits without a GPU result through
+the command environment; user must run the fixture and original vegetation
+regression in normal PowerShell. No new installer packaged; .7 remains the last
+verified build. Project data untouched.
+
+## 2026-11-11 - Wide diagnostic result is inconclusive for reported bands
+
+User ran the wide diagnostic successfully. Current settings produce maximum
+red-channel shadow differences of 2/255 at mid-removal, close and wide; all
+pixels remain below the >8 threshold. Depth-bias variant is worse (max 8).
+Front-face-only removes the diagnostic surface at mid-removal because clipping
+has removed its top face: this is NOT a valid fix. Reviewed wide midpoint,
+shadows-off and front-faces images. No production change justified by these
+measurements. The severe bands in the actual scene remain unreproduced; require
+the same actual wide view at the same timeline position with Shadows disabled
+to distinguish remaining depth overlap from shadow-map artefacts. No new build.
+
+## 2026-11-11 - Wide-view touching-surface issue remains open
+
+User reports Preview .7 fixes touching surfaces close up, but wide views still
+show bands; screenshot supplied. Do not treat the previous synthetic GPU pass
+as full resolution. Original vegetation fixture omitted the soil shadow caster
+and used fixed shadow bias, whereas ShadowFrustumSync scales normal bias with
+camera distance. Thin double-sided touching slabs during Y-negative clipping
+also need comparison against depth overlap.
+
+Added desktop/tests/wide-surface-render.cjs and its fixture: close/wide views,
+opaque/mid-removal, shadows on/off, soil-caster disabled, front-face-only and
+normal-versus-depth-bias diagnostic variants. Saves images and pixel metrics;
+explicitly diagnosticOnly, not a release test or a claimed correction. Bundle
+compiles. Electron still produces no rendered result through this command
+environment. Awaiting user-run GPU diagnostic before changing production code
+or issuing another installer. Existing Preview .7 and project data unchanged.
+
+## 2026-11-11 - Local Preview 0.2.49-preview.7 installer verified
+
+User completed package:preview in normal PowerShell. Verified the resulting
+Prosota-Planner-Preview-0.2.49-preview.7-Setup.exe (282,818,512 bytes) against
+its final release manifest. SHA-256:
+DF7F58FDD7F3F05A174F2732BA5F1826951DE01F11FB8CD69A67A8D06DC1F0C0
+Packaged app.asar identifies Preview 0.2.49-preview.7; all 55 bundled UI files
+match the built UI and the backend source fingerprint matches. Installer is
+unsigned, as configured. The earlier packaging blocker is resolved by this
+user-run build. Installer not launched and project data not modified.
+
+Synthetic GPU regression passes all eight checks, including fading shadows and
+exact forward/reverse frame equality. Full saved-project reproduction remains
+outstanding; do not claim every original surface streak is confirmed resolved.
+Nothing published to Stable or the public release catalogue.
+
+## 2026-11-11 - Vegetation GPU regression passes; local Preview preparation
+
+Read the user's saved desktop/.test-data/vegetation-render/result.json directly:
+all eight checks passed. Shadow energy falls [69116, 38403, 7072, 0] for opacity
+[1, .5, .1, 0]. All four reverse frames match forward frames byte for byte.
+Reviewed frame-zero, midpoint and completed screenshots: vegetation is visible
+initially, fades with its shadow, and is absent at completion. This verifies the
+synthetic scene, not the user's complete saved project or every reported streak.
+25 focused CPU tests pass; TypeScript passed after the shader fix. Desktop UI
+build, Preview identity test and saved section-box schema round trip pass.
+
+Compared the newer D: Preview source against this checkout. Frontend sources
+match; restored missing SiteSectionBox schema support to avoid a saved-project
+regression and reused the newer bundled backend only after its source fingerprint
+matched the reconciled sources. Retained the newer November 8-10 learning entries.
+Prepared local 0.2.49-preview.7 with the existing Preview application/data identity.
+Packaged app.asar identifies Preview 0.2.49-preview.7 and all 55 UI files match
+the built UI. Backend fingerprint matches. Installer creation is still BLOCKED:
+default packaging could not reach GitHub; using local Electron and cached NSIS
+reached installer creation, then failed to spawn makensis.exe (spawn UNKNOWN)
+inside the command sandbox. No completed new installer exists. Run npm.cmd
+--prefix desktop run package:preview from normal PowerShell to finish packaging.
+No project data edited and no Stable or public publishing performed.
+
+## 2026-11-11 - First vegetation GPU result and packed-shadow correction
+
+User ran the regression outside the command sandbox after fixing the runtime
+ACL. It rendered without WebGL errors, but FAILED reverseScrub and shadowsFade.
+Shadow energies were [69116, 87692, 93875, 0]. Clone restoration, selection round
+trip, frame-zero material state and transparent depth checks passed in this
+synthetic scene only.
+
+Installed Three RGBADepthPacking and distance shaders initialise alpha to 1
+and ignore material.opacity. Added a composed shader hook with a live opacity
+uniform before alpha hashing for both passes. Nine focused CPU tests pass.
+Expanded reverse-scrub output to record every frame's pixel differences and
+save reverse screenshots, without relaxing the comparison. The command sandbox
+still cannot produce a GPU result. User rerun is required; neither the shadow
+fix nor reverse scrubbing is yet visually verified. No release packaged.
+
+## 2026-11-11 - Vegetation rendering investigation (not release verified)
+
+The active C: workspace contains the recent rendering source edits, but its
+desktop package metadata is still Stable 0.2.47. The D: copy's metadata says
+Preview 0.2.49-preview.6 and its learning log contains later November 9/10
+entries. Do not package the C: metadata unchanged or describe the existing
+Preview installer as a verified build of this investigation.
+
+Found and corrected specific code paths: site animation did not enable
+clipShadows; a fully visible grow/remove endpoint still clipped exactly on the
+geometry boundary; IFC/mesh timeline fading did not update depth writes; and
+Three r169 does not copy opacity/alphaHash into shadow passes. Shadow callbacks
+now read the current draw-group material and use independent shadow materials,
+including cloned site assets. Footprint masks compose with these passes. Reverse
+scrubbing restores material depth and visibility while preserving guide-only
+surfaces. No project files or databases were edited.
+
+Validation: 25 focused tests passed (animation, reverse scrub, draw-group shadow
+state, animated bounds, realistic materials and footprint geometry). TypeScript
+and the desktop UI build passed before the final footprint-composition edit;
+TypeScript was rerun afterwards. A new offscreen regression scene is in
+desktop/tests/vegetation-render.cjs and vegetation-render.fixture.ts.
+
+Visual verification remains BLOCKED. Electron exits before app startup with
+status 2147483651. Diagnostic stderr identifies install_dir_access.cc:52: the
+runtime directory has an AppContainer SID ACL but no ALL APPLICATION PACKAGES
+read entry. A separate temporary runtime also failed to start. No ACLs were
+changed. The test has not rendered, and these changes are not evidence that
+the reported surface streaks or disappearing trees are fully resolved. Next:
+run the regression scene in a working desktop execution environment, reproduce
+the actual saved vegetation scene, review shadows-on/off and selection at frame
+zero, finish any remaining fixes, reconcile Preview build metadata, and package
+and verify a local Preview installer. Nothing was published to Stable.
+
+## 2026-11-10 - Picking visible objects and scrolling the IFC reload list
+
+An imported object could intercept a viewport click when Hide or Isolate hid one of its parent groups. The viewport now checks each hit and its parents before it chooses the object or clears the selection. A desktop mouse test places a GLB in front of a ground shape, clicks the ground and its opening, then restores the GLB with Show All.
+
+The IFC Reload dialog keeps the selection count, bulk actions and restore controls in view while the element list scrolls. A desktop test with 71 walls reached the final checkbox and restored only that wall at three window sizes, including 150% zoom.
+
+## 2026-11-10 - Remove a saved selection glow from excavation inserts
+
+An older Fort Tower intersection saved Prosota's blue selection glow and mixed selection colour on the outer faces of the cut insert. On reopening, the insert's side now inherits the base finish when the old exporter layout, side geometry and material signature match. The loader keeps any explicit rim override.
+
+A desktop render checked both original assets together, before and after selecting and deselecting them. At the same elevation with a 1 mm lateral gap, the old finish exposed a blue hairline. The corrected finish eliminated the blue pixels. The check also covered flush placement, a slightly raised insert, and an intentional emissive material.
+
+## 2026-11-09 - Align ground textures across separate objects
+
+In Materials, expand Texture scale and direction and choose Site coordinates on each adjoining finish. Match the finish, tint, scale and direction, place the top faces flush, and set edge fade and corner radius to zero along the join. Object coordinates remain the default. Site alignment controls the built-in finish and keeps both placements independently selectable and schedulable.
+
+An offscreen desktop render compared an intact soil surface with two separate pieces, one using a rotated IFC instance in millimetres. The site-aligned frames matched pixel for pixel. Object-local mapping reproduced the pattern break.
+
+## 2026-11-09 — Excavation cut-face finish
+
+Fort Tower’s 50 mm working platform had a narrow cyan face around the excavation. The saved result contained the soil-removal tool’s cyan IFC material on the inside of the cut. Excavation, subtraction and intersection now give new cut faces the base solid’s main finish. Bases with several materials use the largest surface by area for the cut. Unions retain both solids’ finishes.
+
+The asset loader also recognises the older cyan through-cut in the saved platform. Its rim follows the platform’s finish and honours explicit material edits to the rim. A close-up render of the saved Fort Tower result verified the correction with its original geometry.
+
+## 2026-11-09 — Move collections and duplicate planning objects
+
+Selecting a collection of imported parts now gives it one move handle at the centre of its geometry. The Properties panel also accepts X, Y and Z distances in metres. Moving the selection is one Undo operation.
+
+Duplicate creates separate placements in 3D Site tools at the source positions and selects the new objects. For IFC, each selected element becomes an independent static planning asset, including all its mesh pieces. The source IFC keeps its identity and schedule links. Site asset placements reuse the existing library geometry. A desktop check dragged seven collection members with the viewport arrow, moved their copies by a second offset, then verified Undo, Redo and reopened placements. A separate IFC wall round trip verified that the original file was byte-for-byte identical.
+
+## 2026-11-09 — Planner Preview 0.2.49-preview.1
+
+Preview Web and Windows pick up the Stable 0.2.48 fixes for IFC reload and visibility, collections, sectioning and measurements on site objects. Both Preview release cards now identify the matching build and the desktop card points to its versioned installer.
+
 ## 2026-11-08 — Planner Stable 0.2.48
 
 Promotes the eight 0.2.48 Preview builds to Stable. The web app and Windows installer include selected-surface opacity, IFC camera and clearance guides, complete-element transforms, texture scaling, HDR environments, scene lights, temporary ground finishes, surface wear and feathered edges. Existing material settings carry forward when a project reopens.
@@ -8660,3 +8906,210 @@ Regression check: open the real 1.99 GB IFC, render, read the spatial tree,
 expand IFC Data, select an element and read material mappings in the same
 session. The renderer completed 17,785,021 triangles; material lookup returned
 65 mappings for 11,724 elements, including brick, concrete, glass and grass.
+
+
+## 2026-11-11 — Linked activity editing and Activity Table controls
+- Request: reduce activity edit lag; add name/code search and Select Linked next to Isolate Linked.
+- Scheduling detail form previously submitted unchanged blur values; grid Enter followed by blur could submit the same pending edit twice. Skip unchanged form/grid values and identical pending submissions.
+- Genuine activity edits now refresh activities, relationships and resource assignments (including CPM cascades), retaining the unchanged model links, calendars and resource pool. This reduces the post-edit request count from six to three and avoids rebuilding link-derived data. Undo and general refresh retain full loading.
+- 4D table search matches name/code case-insensitively, preserves ancestors, searches within isolation, and shares rows with the Gantt. Clearing search restores collapse state. Select Linked reuses qualified IFC/mesh/site selection used by collections without changing isolation.
+- No changes to the surface workaround or project data. Live Tower-project latency has not been measured; no claimed speedup percentage.
+- Validation: TypeScript and production frontend build passed; nine focused search/profile/selection tests passed. Live UI timing and desktop installer packaging were not performed for this change.
+- Preview 0.2.49-preview.8: desktop UI rebuilt, settings assets restored, backend fingerprint and release-channel tests verified. Installer packaging blocked by Windows EPERM (Electron cache rename; local-runtime fallback then failed creating bundled PostgreSQL locale directory). No completed preview.8 installer and no publication. Finish from normal PowerShell with npm.cmd --prefix desktop run package:preview.
+
+## 2026-11-11 — Close-view sun shadows
+- Found shadow XY bounds shrinking around the model centre rather than the viewed target; far depth also shrank with zoom. Fit light-space XY bounds around the orbit target while retaining full model depth. Shared ShadowFrustumSync fixes main and comparison panes. Sun direction and authored clipping remain unchanged.
+- Shadow reuse key now includes focus and target so panning refreshes the map. Existing animation opacity/shadow tests plus off-centre Y/Z-up focus, zoom-depth and pan-key regressions pass (5 tests). Screenshot symptom has not been verified in the live Tower project; no separate AO fault established.
+- Included in prepared preview.8; rebuilding desktop UI before installer handoff.
+- Final close-view validation: TypeScript passed; desktop Preview UI build passed and desktop settings files restored. Installer still requires the normal PowerShell packaging step because of the previously recorded EPERM failures.
+- User completed preview.8 packaging from normal PowerShell. Verified installer exists (282,819,161 bytes), SHA-256 matches release manifest, bundled app metadata is 0.2.49-preview.8 / preview, and every bundled UI file matches the latest desktop/dist including close-view shadow changes. No publication performed.
+
+
+## 2026-11-11 — Clear stale bulk activity link target
+- T-0056 stayed in the bulk link picker after changing activity selection because DataPanel retained draft state for its entire lifetime.
+- Pass activity selection into DataPanel; clear proposed activity/profile on changed activity or element membership. Remount only the picker on that context change to clear its search/dropdown state. Saved assignments remain untouched. Stable sorted membership keys avoid clearing drafts on unrelated renders.
+- Prepare preview.9 so the already-built preview.8 remains identifiable.
+- Validation: TypeScript, desktop UI build and bundled backend fingerprint passed. Settings assets restored. Preview.9 installer requires normal PowerShell packaging due to existing sandbox EPERM limitation; live UI verification pending.
+- User completed preview.9 packaging. Verified installer (282,819,548 bytes), matching SHA-256 manifest, bundled preview.9 metadata, and zero differences between bundled UI and latest desktop/dist. Live selection behaviour still awaits user confirmation.
+
+
+## 2026-11-11 — Startup and post-edit viewport responsiveness (preview.10)
+- User reports preview.9 still severely stalls at startup and after activity edits. Previous HTTP/no-op edits did not address the main render work.
+- Timeline resolution previously rebuilt geometry/material bindings on every activities response. Date/name-only changes now retain resolved targets, rest poses, material references and stagger order; update dates in place and invalidate the playback date cache. Profile changes, valid-date transitions, geometry/link changes still fully resolve. Disabled variance/clash maps do not invalidate binding reuse.
+- Removed shader needsUpdate writes for animation colour changes (colour is a uniform). Scatter/array children now inherit parent site animation rather than independently resetting material opacity each frame.
+- IFC scene assembly yields on an 8ms cooperative budget while filling geometry and placement batches, with serialised shared-origin commits to retain federation alignment. Native OpenModel and StreamAllMeshes remain synchronous; this is NOT a complete worker-based parser solution and no total startup speedup is claimed.
+- 17 focused tests passed, including real IFC geometry identity/properties, cleanup, shared coordinates, yielding, scatter ownership, reverse opacity/grow/shadows and 20,000-link date updates with no geometry access. TypeScript passed before final date-parse deduplication; final build/check follows. Tower live timing is not yet measured.
+- Final validation: TypeScript, desktop UI build, backend fingerprint and date-update regression rerun passed (20,000-link helper ~11ms on this run). Settings assets restored. Prepared preview.10; installer remains to be packaged from normal PowerShell, as earlier sandbox EPERM restrictions persist. Full live startup/edit-to-orbit latency not measured.
+- 2026-11-12: User completed preview.10 packaging. Verified installer (282,818,980 bytes), matching SHA-256 manifest, bundled preview.10 metadata and zero differences against latest desktop/dist. Live Tower startup and edit-to-orbit responsiveness remain unverified.
+
+## 2026-11-12 — Preview .11: selection detached IFC animation
+- User reported an assigned cabin remained visible at time zero after selection/deselection.
+- Found TimelinePlayback's selection migration lookup was cleared but never populated. Newly materialized IFC meshes therefore escaped timeline ownership.
+- Publish the lookup with resolved batch targets; retain separate entries for equal expressIDs across models. Selection migration initializes the current paused-date state and retains activity bindings.
+- Validation: production migration wiring regression (including two models with the same expressID), animation opacity/shadow regressions, schedule update regressions, and TypeScript passed. Live Tower cabin verification remains pending.
+- Preview .11 UI production build passed; desktop settings files restored and backend fingerprint verified. Installer packaging awaits normal PowerShell (prior sandbox packaging EPERM). No Stable publication.
+
+## 2026-11-12 — Preview .11 additional site reverse-scrub restoration
+- User reports scattered trees on Clear Vegetation removal remain absent when returning to time zero until selection/reload.
+- Site animation restored group visibility/alpha but never material.visible. Preserve authored site surface state on display variants, avoid taking a faded replacement's zero opacity as the original, and restore material visibility on reverse scrub.
+- Added nested scatter regression covering material visibility reset and replacement while removed. Twelve focused animation/selection tests passed. Live Tower confirmation pending; retain .11 to include both reported fixes in the next package.
+- TypeScript and updated Preview .11 UI build passed; desktop settings restored. Installer must be repackaged to include this additional change.
+- User packaged Preview .11 on 2026-11-12. Verified installer SHA256 matches release manifest, bundled app metadata is 0.2.49-preview.11 / preview, and all bundled UI files match the latest dist containing both selection migration and scattered-tree material visibility changes. Live project verification remains pending; no publication.
+
+## 2026-11-12 — Preview .12 scheduling edit latency
+- Duration and predecessor edits still slow in Scheduling screen. Found CPM and hierarchy post-commit refresh loops issuing one SELECT per changed activity (hundreds after a cascading edit).
+- Added refresh_changed_activities: SELECT IN batches of 500 with populate_existing, retaining identity-map references and loading server-generated/expired fields. CPM math, rollups and spread pruning remain intact.
+- ActivityLogic now uses refreshActivityEdit (activities, relationships, assignments), avoiding calendar/resource/model-link refetch on each predecessor edit.
+- Added 600-row PostgreSQL regression asserting two queries, restored expired fields and unchanged object identity. Existing default test DB has stale schema; validation uses a newly created isolated prosota_edit_perf_test_20261112 database.
+- TypeScript and Preview .12 UI build passed. Backend rebuild and CPM regression suite in progress; live Tower latency not yet measured.
+- Validation: 37 PostgreSQL scheduling tests passed in the isolated test database. Direct 600-row refresh comparison: old per-row path 0.378s / 600 queries; batched path 0.011s / 2 queries. This measures only refresh cost, not total Tower edit latency.
+- Final: Preview .12 UI and PyInstaller backend built successfully. Runtime backend updated, fingerprint verified, and app.services.activity_refresh confirmed inside the executable PYZ archive. Installer packaging remains the normal user PowerShell step due to prior sandbox packaging restrictions. No Stable publication.
+- User packaged Preview .12. Verified manifest/installer SHA256 match, bundled .12 Preview metadata, zero UI mismatches, and bundled backend executable matches the rebuilt runtime; source fingerprint passes. Live duration/predecessor edit latency remains to be checked.
+
+
+## 2026-11-12 — Preview .13: unlinked WBS/activity lag and wider performance audit
+
+The .12 row-refresh batching did not address the main scheduling work: name edits still ran CPM plus two hierarchy passes, and six-year calendar spans were walked repeatedly per activity. Metadata-only updates now skip schedule recomputation; inspector PATCHes contain only changed normalized fields, preserving untouched datetime precision. Name responses update one row; creation/outline edits no longer reload model links and resource pools. Inspector clean fields follow inline edits while unsaved typing is retained.
+
+Shared request-local calendar cumulative totals preserve original partial-day/minute rounding. A 661-range comparison (600 six-year spans plus exceptions/reverse/partial cases) matched exactly: 1.427s original versus .012s cumulative. This is NOT an end-to-end UI speed claim. Schedule/duration changes still run CPM and hierarchy.
+
+Broader audit: defer resource spreads and derived resource work while on Activities; abort obsolete spread reads; suppress hidden 3D idle polling/listeners. Lazy feature imports cut the measured app.main import phase from 5.494s to 2.716s, not a complete installed-startup timing. Added bounded, memory-only renderer timings and server duration/slow route logging for remaining real-project stalls. No blanket stale-data cache or visual-quality reduction. See PERFORMANCE_AUDIT_2026-11-12.md for coverage, limits and tests.
+
+Tests: 38 scheduling regressions; 55 optional-feature/calendar tests plus 14 subtests; 12 animation/edit front-end tests; 27 resource/undo/read front-end tests; resource demand-loading test passed. Tests used the isolated prosota_edit_perf_test_20261112 database, not project data.
+
+Final validation: WBS/profile regression suite added 16 passes; diagnostic bounds/redaction passed. Total 109 backend tests plus 14 subtests and 41 frontend tests. Preview .13 UI and backend builds prepared; installer is not yet packaged or published.
+
+Runtime copy/fingerprint verification passed; archived services and deferred IFC/AI/Excel dependencies verified present. Final UI build and TypeScript checks passed. Packaging must be run from the user PowerShell because installer packaging is blocked in this session.
+
+
+## 2026-11-13 — BIM paused selection and unused resource work (Preview .14)
+
+User reports Tower startup and orbit lag after linking elements, including with AO, shadows and transmission disabled. Read the Preview backend log: resource-spread bulk requests took 4.315–5.517 seconds, with model content-version and simulation requests also taking roughly 4.3–4.5 seconds. These are observed request durations, not proof that the spread request accounts for all viewport lag.
+
+Confirmed source issues and changes:
+- TimelinePlayback notified FourD React state on every rendered frame with an active selection, even at an unchanged timeline date. Notify only when the date changes. Keep per-frame material, visibility, path and edge reconciliation intact so selection and reverse-scrub fixes remain active.
+- FourD enabled the multi-year resource spread request whenever the BIM workspace was active, even when both resource windows were closed. Enable only for Resource Tracking, Resource Usage, or a requested cost chart in capture settings. Capture settings notify the parent when cost-chart demand changes. Captures with a cost chart reject while that data is loading or failed rather than silently exporting missing figures.
+- Do not compute monthly export cost totals and per-resource breakdowns when the cost chart is disabled.
+
+Validation: 21 targeted frontend tests passed, including executing the production frame callback across 121 paused frames (one React notification, 121 reconciliation calls), forward/reverse date changes, resource demand/abort, selection migration, scattered-tree restoration and resource figure semantics. Final TypeScript check and production desktop UI build passed; bundled backend fingerprint verified.
+
+Limits: No user project data changed. The live Tower window was not accessible in the available process/tool session. The independent Electron rendering fixture could not launch (exit -2147483645, no output); its existing result file is dated 11 November and is NOT a current test result. No live FPS/startup improvement claimed. Preview only; installer packaging still requires the user's local package command because that action was blocked in this environment previously.
+
+2026-11-13 diagnostic access: Preview's custom View menu omitted toggleDevTools, so the suggested Ctrl+Shift+I shortcut was not registered. Added Preview-only Developer Tools menu item with explicit accelerator. node --check passed and Preview channel/data-folder verified. Local npm desktop start uses the built .14 UI and existing Preview data; installed .14 executable is unchanged until repackaged. Live Tower performance trace remains pending.
+
+
+## 2026-11-13 — Preview .15 broader responsiveness pass
+
+After .14 remained slow, audited shared request/undo, scheduling/resource and BIM interaction/frame paths. See PERFORMANCE_AUDIT_2026-11-13.md for precise scope, benchmarks and limits. Fixed hidden-geometry pointer hit-testing before triangle intersection (viewport raycasters only); unnecessary whole-model material invalidation on first/last selection when Fade Unselected is off; per-frame inspector React refreshes; unlinked site-context material traversal; repeated clipping-array allocation and site material serialization. Resource API supports opt-in sparse demand, chart computation visits actual cells, and resource invalidation tracks duration/utilisation changes even within an unchanged global range.
+
+Controlled measurements: six-year/500-assignment demand generation 777.28→10.19 ms, 1,095,500→7,143 rows with identical 57,144 hours; five chart calculations 751.42→21.51 ms with deep-equal results; twelve rays against 800 hidden meshes 232.36→0.02 ms. Not installed startup/FPS measurements.
+
+Full frontend run: 350 passed, two skipped; final inspector notifier and targeted regression tests passed (351 unique passes). Backend resource/scheduling tests: 19 passed plus one sparse API integration test. TypeScript passed; backend rebuilt. Project data untouched. No Stable publication. Live Tower responsiveness still needs verification; source/runtime tests do not establish that all perceived lag is resolved.
+Final .15 validation: production UI build passed (17.82s); copied desktop settings assets; backend runtime copy/source fingerprint passed and archived assignment_cells implementation verified. Preview .15 is ready for local start or user-side installer packaging.
+
+
+## 2026-11-13 - Orbit investigation after Preview .15 (prepared .16)
+
+User confirms orbiting remains severely slow with AO/shadows off and Simplify while orbiting enabled. The .15 tests did not establish live Tower responsiveness. No desktop/browser interaction tool is exposed in this session; no live FPS or GPU profile has been obtained.
+
+Confirmed and addressed two additional sources of work:
+- Simplification visited only still-batched IFC pieces. Grow profiles and individual edits materialize pieces, removing them from that path. Apply the existing screen-size threshold to indexed individual IFC meshes too. Keep temporary movement hiding separate from schedule/manual visibility; ending a drag restores the current schedule/hide verdict, including changes made during the drag. Nearby geometry remains visible. Restore on cleanup/settings changes and detach control listeners.
+- Glass/translucent and outline mirrors scanned unchanged batch instances every frame. Observe batch visibility mutators and texture versions, and skip unchanged copies. Section clips and root visibility still propagate independently; mapping edits explicitly invalidate surface copies. Tests cover reverse visibility, transforms, alpha changes, deletion and instance-slot reuse.
+
+Added an opt-in Performance toolbar button showing measured orbit FPS/frame interval, CPU frame updates/render submission, last-pass draw/triangle counts, multi-draw availability and GPU identity. Bounded local samples; no uploads and no per-frame React state updates. CPU submission is explicitly not GPU execution time. This readout is needed to distinguish remaining render cost from update work in the user's real scene; these changes are not presented as a complete fix for the reported second-long delays.
+
+Validation: 356 frontend tests passed, two skipped; TypeScript passed; production Preview UI build passed (18.02s). Existing backend source fingerprint verified; no backend changes or rebuild needed. Desktop settings assets restored. Controlled surface-mirroring benchmark: 20,000 instances over 120 unchanged frames, 58.63ms before versus 0.11ms after (about 0.49ms per original frame, not sufficient on its own to explain the user's reported lag). Unchanged-outline test confirms zero instance scans over 120 paused frames. Project data untouched.
+
+Prepared Preview .16 for direct local startup using npm.cmd --prefix desktop start after closing the installed Preview. Installer has not been packaged or published. Live Tower frame measurements remain outstanding.
+
+
+## 2026-11-13 - Live orbit measurements and paused batch work (Preview .17)
+
+The user's .16 Performance screenshot reports 17.4 FPS / 57.6ms per frame, with 29.6ms before render submission, on an NVIDIA RTX 5090 Laptop GPU. WEBGL_multi_draw is available and the drawing buffer is 1718 x 1025. The 3.3ms/pass and one-draw/one-triangle figures refer to individual/final render passes, so they do not establish the cost or geometry count of the whole scene. An earlier console screenshot reports 54,811 streamed IFC placements; that is not a count of currently linked animation targets.
+
+Source inspection confirmed that the paused batched-animation path still visited every linked target each orbit frame, constructing offset/colour keys and reasserting visibility even at an unchanged date. Added a batch-level gate keyed by bindings, timeline changes, React commits and observed batch visibility revisions. Manual hide/isolation and movement restoration retain their independent composed visibility. Date changes, selection/material commits and imperative visibility changes still reconcile; individual meshes and path following retain their existing per-frame reconciliation.
+
+A controlled production-frame benchmark with 55,000 linked elements and 60 unchanged frames measured 999.32ms before versus 0.05ms after (~16.7ms per original frame). A later targeted rerun measured 1078.93ms versus 0.02ms. The scan count falls from 3,300,000 target reads to zero. These are synthetic CPU-loop measurements, not measured Tower FPS or a guarantee of end-to-end savings. Fully removed site grow/scatter groups also skip redundant bounds traversal; reverse scrubbing recomputes the cut as soon as the group is visible.
+
+Corrected the Performance HUD to aggregate CPU submission and geometry across renderer passes, including shadows before Three resets its counters. Added separately accumulated 4D and Site update timings. Nested renders are not double-counted, idle gaps are excluded, the observer restores original methods on cleanup, and renderer.info semantics stay intact. No React updates per measurement frame and no remote telemetry.
+
+Validation: 362 frontend tests passed, two skipped; TypeScript and production Preview UI build passed (18.35s). Tests cover paused frames, forward/reverse scrub, externally changed batch visibility, isolation, changed bindings, scattered-tree restoration, material replacement and multi-pass measurement. The initial full run exposed a missing useThree export in a hook test stub; updated the stub and reran successfully. Existing backend fingerprint verified; settings assets copied into dist. No backend rebuild or user-project data changes.
+
+Preview .17 is prepared for direct local startup (`npm.cmd --prefix desktop start` after closing Preview). No installer packaged and no publication. The user's live Tower improvement remains unverified; use the new whole-frame HUD to assess the running build rather than treating the controlled benchmark as live FPS.
+
+
+## 2026-11-13 - Remaining orbit costs after .17; prepared Preview .18
+
+Live .17 screenshot remains poor: 16.0 FPS / 62.6ms per frame, 23.9ms before first render, 4D 23.0ms, Site 0.6ms, CPU submission 34.0ms across eight render calls, 3,350 draw calls and 47,305,672 submitted triangles across all passes. GPU remains RTX 5090 Laptop, multi-draw available, buffer 1718 x 1025. The .17 synthetic batch-loop improvement did not establish a live fix. Submitted triangles include repeated passes; these are not unique model triangle counts. The live 4D total does not yet distinguish batch scans from individual-mesh work.
+
+Confirmed additional work: individual animation targets still build grow clipping planes, compose material values and synchronize display variants on every paused frame even while fully hidden by the schedule. At an unchanged date, hidden targets now retain their lightweight mesh-visibility reconciliation and skip those material/clipping writes. Existing transform handling is unchanged. Changed dates still run the full path; selection cannot reveal hidden scheduled meshes, and reverse scrubbing restores replaced materials, clipping and opacity. Visible animated targets remain on the existing reconciliation path.
+
+Controlled test of the production frame callback, 10,000 individual grow targets over 60 paused frames: 608.35ms before, 52.78ms after (~10.14ms to 0.88ms per frame). Earlier run: 585.15ms / 50.39ms. This is a CPU fixture, not a live Tower FPS improvement. New tests cover reveal/removal, selection, replacement display variants, manual Hide and reverse scrubbing.
+
+Simplify while orbiting now bypasses N8AO sampling/blur passes during an active navigation drag. The composer, scene pass, tone mapping and AO resources stay mounted; releasing the drag restores the same AO pass. The user's saved AO setting is unchanged. High-quality capture and all offline exports (including draft) retain AO. Synchronized comparison panes follow the main drag; disconnected panes do not. Hook-callback tests cover restoration, disabling simplification mid-drag, capture/export and unchanged tone mapping. This removes extra AO fullscreen passes, not the entire reported scene triangle count. No live WebGL visual/performance validation was possible in this tool session.
+
+The Performance panel now splits 4D work into meshes, batches and paths/edges. This preserves the distinction between measured total costs and the algorithms changed here.
+
+Validation: 365 frontend tests passed, two skipped; TypeScript passed; production Preview UI build passed (18.25s). Backend fingerprint verified, desktop settings assets restored. No user project data changes, no backend rebuild, no Stable publication. Preview .18 is prepared for direct local startup; installer is not packaged. Live orbit rate remains to be checked in Tower.
+
+
+## 2026-11-13 - Mouse-release stalls and paused individual meshes (Preview .19)
+
+Live .18 HUD: 18.3 FPS / 54.8ms per frame; 26.6ms before render, including 25.8ms individual 4D meshes and 0.0ms batch/path work. CPU render submission is 26.5ms over two calls, with 2,098 draws and 46,534,143 submitted triangles. The user then clarified that navigation gets faster while dragging but stalls again on mouse release.
+
+Confirmed release-time cause in Viewport3D: OrbitControls.end set boostQuality=true. This caused a full viewport React commit, raised the sun shadow map from 2048 to as much as 8192 (16x texels, including map disposal/reallocation), and raised N8AO from 16/8 samples at half resolution to 64/32 at full resolution. High quality is now enabled only for explicit non-draft capture/export. Mouse release restores normal interactive AO and shadows; saved effect toggles are unchanged. Per-instance frustum culling still enables during navigation and restores afterward, but is managed by MovingQualityDriver without a React state toggle.
+
+Idle rendering now has a 120ms settling tail instead of 1500ms. Plain pointer hover no longer repeatedly wakes the full renderer. Camera damping, timeline changes, React commits, explicit render requests and the 1-second asynchronous-resource heartbeat remain supported. Imported animation requests continuous frames only while its clip is active and its hierarchy visible, rather than every imported file with any animation keeping the renderer busy forever. Hidden clips still advance on actual idle frames. Comparison views no longer request continuous rendering merely because an import contains clips.
+
+Individual paused 4D targets now reuse their applied material state. A lightweight guard checks actual visibility, material identity/slots, opacity/blending/depth state, clipping-array identity, transforms and simulator ownership. React commits invalidate authored colour/material/profile changes; changed dates always apply the full path. Fully hidden paused targets keep their cheap composed-visibility pass. Fresh bindings, same-date schedule updates, replacement variants, selection, manual Hide, forward/reverse scrub and simulator ownership are covered. Paths and edges retain their existing update path. An initial broader snapshot implementation failed to improve the benchmark and was replaced before delivery.
+
+The final isolated CPU fixture (10,000 visible grow targets, 60 unchanged frames) measured 844.48ms before / 771.32ms after, with 600,000 repeated source clipping assignments eliminated. This is a modest, workload-dependent saving; timings varied under concurrent build/type-check load, including a slower candidate run. It is not evidence of a particular live Tower FPS. The concrete mouse-release quality change and removal of idle rendering bursts are independent of this synthetic mesh-loop measurement. The remaining 46.5M submitted triangles have not been attributed to individual assets or reduced by geometry simplification.
+
+Validation: full frontend suite 372 passed, two skipped; after the final pose-guard adjustment, all six affected animation tests passed again. TypeScript passed, Preview UI production build passed (29.76s), backend fingerprint verified, desktop release-channel/data-isolation test passed, settings assets restored. Initial new mixer fixture failed because Windows line endings prevented extracting its function; normalized line endings and reran successfully. No backend rebuild, no user-project data changes, no Stable publication. Live Tower/WebGL performance remains unverified in this execution session.
+
+Prepared local Preview 0.2.49-preview.19. Close Preview and run `npm.cmd --prefix desktop start` from the repository to use the rebuilt UI. Installer has not been packaged; the previously recorded sandbox EPERM packaging limitation remains. Packaging, if needed from normal PowerShell: `npm.cmd --prefix desktop run package:preview`.
+
+
+## 2026-11-13 - Zoom, idle rendering and UI responsiveness (Preview .20)
+
+The user reports that .19 improved orbiting but zooming, rest, buttons and workspace switching still lag. Source inspection found additional causes; this work does not establish live Tower performance.
+
+- The installed OrbitControls emits start/end synchronously for every wheel event. MovingQualityDriver previously scanned/restored geometry per notch and left simplification off before the zoom frame. Navigation now has one session across a wheel burst and damping, with a 150ms settle window. Capture/offline export restores temporary detail immediately.
+- Fiber was raycasting all click-enabled scene roots for wheel events without any wheel handlers. The viewport bypasses that work when no real wheel tool is registered. Native camera zoom, click/miss handling and actual wheel tools remain intact. A real Three/Fiber fixture with 800 visible meshes and 12 wheel events performed 9,600 mesh raycasts before and zero afterward (isolated run: 265.42ms / 0.01ms). This measures event dispatch only, not GPU rendering or live FPS.
+- Side-panel typing, scrolling and drags no longer wake the viewport. React commits request one fresh frame rather than starting another continuous-render tail. Real camera movement, scrubbing, explicit animation requests and the async-resource heartbeat remain supported.
+- Paused 4D caches now invalidate for scene/appearance/schedule edits rather than unrelated UI commits. Selection, material edits, transforms, isolation, clipping and simulator changes still reconcile. The section-box inputs/resolution are memoized too; otherwise a fresh empty array defeated the cache on every parent render. Comparison callers retain their prior reconciliation behavior.
+- Water animation checks ancestor visibility, actual live batch instances, material visibility/opacity and the separate-surface flag. Hidden/deleted/unallocated water assignments and zero ripple strength no longer keep the whole scene rendering. Hidden site animation no longer requests continuous frames; visible animation and deterministic export time remain supported.
+- Hidden BIM views no longer refetch schedules or working sequences on each edit/focus. Reactivation refreshes them. Schedule refreshes retain equal data references and depend on period/project IDs, avoiding duplicate reloads from equivalent period objects. Changed data and stale-response rejection remain tested.
+- The local Performance display measures navigation (including zoom) and settled-camera work. Settled renders/sec is labelled separately from navigation FPS; a low idle render rate is expected.
+
+Remaining limits: individual paused-target guards still inspect render state, and this pass does not reduce the previously reported 46.5M submitted triangles. No live Tower interaction/GPU capture was possible in this execution environment. Do not describe controlled test timings as an overall app speedup. No project-data migrations, Stable publication or git push.
+
+Validation: final full frontend suite 384 passed, two skipped; TypeScript passed; Preview production UI build passed (33.88s). Existing backend fingerprint verified and desktop release-channel/data-isolation test passed. Settings assets restored in dist. Regression fixtures use production code and real Three/Fiber event routing, with simulated hook/timer lifecycles where needed; they are not a live desktop/WebGL test. No backend rebuild or user project data changes.
+
+Prepared local Preview 0.2.49-preview.20. Close the installed Preview and run `npm.cmd --prefix desktop start` from the repository. No installer produced or publication performed; the prior packaging permission limitation remains. The updated Performance button can now report settled-camera costs as well as navigation.
+
+## 2026-11-14 - Stable promotion preparation: startup recovery and editing UX
+
+User explicitly requested pausing C++/Wasm, improving general responsiveness/UX and publishing to Stable. Windows source access was restored. Existing Preview .8-.20 work remains in the working tree; user project data and unrelated documents/storage scripts were preserved.
+
+Confirmed desktop uses bundled local UI/services but verifies its saved account online before opening the main window. Added a packaged startup/recovery screen before authentication, visible account/backup/service/UI stages, a 30-second UI readiness deadline, renderer/page-load recovery, and an Open Prosota Web fallback that clearly identifies the separate web workspace. Desktop session loading also has a timeout/retry state. Authentication/approval/owner checks remain intact; this does not introduce offline login. The original different-Wi-Fi incident has not been reproduced or attributed conclusively.
+
+Activity autosave now reports progress, success and retryable errors while keeping typed values. Cancelled relationship amendments no longer claim success. Predecessor/successor creation retained a nested component definition that remounted its fields on every parent update; rendering the same form element fixes that focus loss. Relationship mutations guard duplicate submissions and distinguish successful writes from failed schedule refreshes. Schedule refreshes retain unchanged JSON references. Initial web HTML offers a loading/reload fallback if scripts fail to start.
+
+Cloud sign-in/session verification/revocation now use Electron net.fetch, so they share Chromium's network stack and system proxy support instead of using Node's separate HTTP stack. Local service health checks still use direct loopback fetch. Regression coverage confirms injected network retry, browser exchange and rejection/revocation of a different workspace owner's session. This addresses a concrete networking difference, not a confirmed diagnosis of the reported Wi-Fi incident.
+
+Validation: 387 frontend tests passed, two skipped; 16 desktop unit tests passed (including failed-network retry and startup isolation); TypeScript, initial web production build (32.42s) and desktop UI production build (27.84s) passed. Five focused save/release tests passed. The final backend scheduling/resource/calendar/IFC/profile run passed 154 tests and 10 subtests in 755.25s in an isolated disposable database, including the seven previously passed performance regressions. This is not a full backend suite pass. Test databases from this task were removed. Existing backend fingerprint verified. No live Tower FPS improvement is claimed.
+
+Prepared version 0.2.49 for Stable. Public desktop link remains the existing verified 0.2.48 release. Git staging failed because .git/index.lock cannot be created; no commit/push. Installer packaging failed first in the protected download cache; reusing installed Electron avoids that duplicate download, but packaging then failed creating a bundled backend resource directory (EPERM). No completed new installer. Isolated Electron UI launch failed; the approval policy explicitly rejected running it outside the process sandbox. See docs/RELEASE_0.2.49.md for remaining verification/release steps. No Stable publication occurred.
+
+Owner subsequently instructed: leave desktop for now and focus on web versions. Desktop edits are retained locally but excluded from the intended web promotion; no further installer work. Web now has named sign-in/access/workspace loading stages, offline/slow-connection guidance and an explicit reload option after 12 seconds. No automatic reload, account bypass or browser-storage reset. The existing desktop download catalogue remains unchanged. Git access is still required for Preview/Stable web publication; a new installer is not a dependency.
+
+Final web-only verification: TypeScript and Stable production build passed (19.47s); Preview production build passed with its channel explicitly selected and output kept separate (19.18s). Neither web build has been deployed. Desktop was not rebuilt after the web loading-state addition.
+
+## 2026-11-14 - Integrate web release with Stable 0.2.48
+
+The owner committed the prepared web changes as 72fecfa, but GitHub rejected the push because main had advanced to abad851 (Stable 0.2.48). The owner fetched and created C:/workspace/Prosota-web-release-0.2.49 on release/web-0.2.49 from origin/main, then cherry-picked 72fecfa. Reviewed and resolved all 14 conflicted files, preserving the Stable changes and the newer web work. The resolved frontend/backend trees exactly match the previously tested 72fecfa source; desktop remains identical to origin/main. The original desktop working edits were not touched.
+
+The new worktree initially had no dependencies; a junction was denied, so dependencies were copied as ordinary files from the existing installation. Initial validation attempts could not resolve dependencies and were rerun after the copy. Git still cannot write the worktree index from this session, so marking the files resolved, completing the cherry-pick and pushing must run through normal PowerShell. No force push and no successful publication occurred during resolution.
+
+Fresh release-worktree validation passed: 387 frontend tests, two optional tests skipped; TypeScript and production build passed (19.96s). No remaining conflict markers, no frontend/backend source differences from 72fecfa, and no desktop changes against origin/main. Backend regressions were not repeated because the entire backend tree is unchanged from the already-tested commit.

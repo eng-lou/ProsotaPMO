@@ -6,6 +6,7 @@ import { ensureMaterialized } from './elementBatching'
 import { makeVolumeOutline, disposeVolumeOutline, isVolumeStyle } from './ifcVolumeGuides'
 import { waterTime, waterOptions, waterColour } from './WaterSurface'
 import * as THREE from 'three'
+import { batchContentKey } from './batchRevision'
 import type { BatchInstanceInfo, BatchState } from './elementBatching'
 import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
 
@@ -391,7 +392,7 @@ export function classIndexForKey(key: string | undefined, info: RealisticModelIn
 const COLOUR_KEY_PREFIX = 'colour:'
 const TEXTURE_KEY_PREFIX = 'texture:'
 export const REALISTIC_TEXTURE_SCALES = [0.25, 0.5, 1, 2, 4] as const
-export interface RealisticTextureSettings { scale: number; rotation: number }
+export interface RealisticTextureSettings { scale: number; rotation: number; siteAligned?: boolean }
 const DEFAULT_TEXTURE_SETTINGS: RealisticTextureSettings = { scale: 1, rotation: 0 }
 
 // Metadata shares the existing per-project mapping storage, as colour does.
@@ -406,28 +407,38 @@ export function textureSettingsForKey(key: string | undefined, mapping: Realisti
     return {
       scale: REALISTIC_TEXTURE_SCALES.includes(value?.scale) ? value.scale : 1,
       rotation: [0, 90, 180, 270].includes(value?.rotation) ? value.rotation : 0,
+      ...(value?.siteAligned === true ? { siteAligned: true } : {}),
     }
   } catch { return DEFAULT_TEXTURE_SETTINGS }
 }
 
 export function withTextureSettings(mapping: RealisticMaterialMap, key: string, settings: RealisticTextureSettings): RealisticMaterialMap {
   const next = { ...mapping } as Record<string, string>
-  if (settings.scale === 1 && settings.rotation === 0) delete next[TEXTURE_KEY_PREFIX + key]
+  if (settings.scale === 1 && settings.rotation === 0 && !settings.siteAligned) delete next[TEXTURE_KEY_PREFIX + key]
   else next[TEXTURE_KEY_PREFIX + key] = JSON.stringify(settings)
   return next as RealisticMaterialMap
 }
 
+// Four quarter-turns per projection mode, shared by the mesh uniform and IFC lookup byte.
+function textureProjectionCode(settings: RealisticTextureSettings) {
+  return settings.rotation / 90 + (settings.siteAligned ? 4 : 0)
+}
+
+const materialSettingPrefixes = ['', COLOUR_KEY_PREFIX, TEXTURE_KEY_PREFIX, 'guide:', 'opacity:', 'edgeFade:', 'cornerRadius:', 'edgeMode:', 'roadWear:']
+
+/** Older cut faces had their own slot. Fill only absent fields with the
+ * adjoining base finish, including selection-scoped settings on the prototype. */
+export function inheritCutFinish(mapping: RealisticMaterialMap, key: string, baseKey: string): RealisticMaterialMap {
+  const result = Object.create(mapping) as RealisticMaterialMap
+  for (const prefix of materialSettingPrefixes) {
+    if (!(prefix + key in mapping) && prefix + baseKey in mapping) result[prefix + key] = mapping[prefix + baseKey]
+  }
+  return result
+}
+
 export function resetRealisticEntry(mapping: RealisticMaterialMap, key: string): RealisticMaterialMap {
   const next = { ...mapping }
-  delete next[key]
-  delete next[COLOUR_KEY_PREFIX + key]
-  delete next[TEXTURE_KEY_PREFIX + key]
-  delete next['guide:' + key]
-  delete next['opacity:' + key]
-  delete next['edgeFade:' + key]
-  delete next['cornerRadius:' + key]
-  delete next['edgeMode:' + key]
-  delete next['roadWear:' + key]
+  for (const prefix of materialSettingPrefixes) delete next[prefix + key]
   return next
 }
 const overrideColourCache = new Map<string, THREE.Color>()
@@ -1087,15 +1098,29 @@ function patchRealisticSurfaceShader(shader: THREE.WebGLProgramParametersWithUni
         // Fort Tower stores lengths in millimetres and converts them to
         // metres in the placement matrix. Keep the pattern on local axes
         // as equipment moves, but measure repeats in physical metres.
-        mat3 realBasis = mat3(modelMatrix);
+        mat4 surfaceToSite = modelMatrix;
         #ifdef USE_BATCHING
-          realBasis = realBasis * mat3(batchingMatrix);
+          surfaceToSite = surfaceToSite * batchingMatrix;
         #endif
         #ifdef USE_INSTANCING
-          realBasis = realBasis * mat3(instanceMatrix);
+          surfaceToSite = surfaceToSite * instanceMatrix;
         #endif
-        vec3 metres = position * vec3(length(realBasis[0]), length(realBasis[1]), length(realBasis[2]));
-        vec3 realN = abs( normal );
+        mat3 realBasis = mat3(surfaceToSite);
+        vec3 metres;
+        vec3 realN;
+        if (realTransformValue.y >= 4.0) {
+          realTransformValue.y -= 4.0;
+          metres = (surfaceToSite * vec4(position, 1.0)).xyz;
+          // Cofactors give the transformed face normal up to a common factor,
+          // including non-uniform scaling. Only its dominant axis is needed.
+          mat3 normalBasis = mat3(cross(realBasis[1], realBasis[2]),
+                                  cross(realBasis[2], realBasis[0]),
+                                  cross(realBasis[0], realBasis[1]));
+          realN = abs(normalBasis * normal);
+        } else {
+          metres = position * vec3(length(realBasis[0]), length(realBasis[1]), length(realBasis[2]));
+          realN = abs(normal);
+        }
         vec2 realUvLocal = ( realN.x >= realN.y && realN.x >= realN.z ) ? metres.yz
           : ( realN.y >= realN.z ) ? metres.xz : metres.xy;
         if ( realTransformValue.y > 2.5 ) realUvLocal = vec2( realUvLocal.y, -realUvLocal.x );
@@ -1252,7 +1277,7 @@ function createSurfaceMaterial(forBatch: boolean): THREE.MeshStandardMaterial {
   }
   // Every realistic surface material shares one compiled program per
   // variant kind; uniforms stay per material.
-  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v22' : 'realistic-surface-v22')
+  material.customProgramCacheKey = () => (forBatch ? 'realistic-surface-batch-v23' : 'realistic-surface-v23')
   return material
 }
 
@@ -1365,7 +1390,7 @@ export function getRealisticVariant(
   variant.userData.realisticIfcAlpha = ifcAlpha
   variant.userData.realisticOverride = colourOverride
   if (classIndex !== GLASS_CLASS) {
-    ;(variant.userData.realisticUniforms as SurfaceUniforms).realTransform.value.set(textureSettings.scale, textureSettings.rotation / 90)
+    ;(variant.userData.realisticUniforms as SurfaceUniforms).realTransform.value.set(textureSettings.scale, textureProjectionCode(textureSettings))
   }
   if (original) variant.userData.realisticOriginal = original
   syncRealisticVariant(source)
@@ -1533,6 +1558,7 @@ function updateSurfaceBatch(batch: BatchState, existing: SurfaceBatchState | nul
     if (data) data.set(settings.subarray(id * 4, id * 4 + 3), existing.localIds[i] * 4)
   }
   if (existing.surfaceTexture) existing.surfaceTexture.needsUpdate = true
+  surfaceSyncKeys.delete(existing)
   return existing
 }
 
@@ -1548,13 +1574,21 @@ function disposeSurfaceBatch(glass: SurfaceBatchState) {
 // tint, Fade Unselected), matrix (the timeline's translate/fall profiles
 // move batched instances in place, 2026-10-03) and clipping, so none of
 // those code paths need to know it exists.
+const outlineSyncKeys = new WeakMap<BatchRealisticState, string>()
+const surfaceSyncKeys = new WeakMap<SurfaceBatchState, string>()
 export function syncRealisticGlassBatch(batch: BatchState) {
   const state = batch.mesh.userData.realistic as BatchRealisticState | undefined
   if (state) {
     const main = batch.mesh as BatchedMeshInternals
     const colors = main._colorsTexture?.image.data
     const base = Array.isArray(main.material) ? main.material[0] : main.material
+    const key = batchContentKey(batch.mesh)
+    const changed = outlineSyncKeys.get(state) !== key
+    outlineSyncKeys.set(state, key)
     for (const [id, line] of state.outlines) {
+      // Clips can change independently of batch textures (section boxes).
+      line.material.clippingPlanes = base.clippingPlanes
+      if (!changed) continue
       line.visible = main.getVisibleAt(id)
       if (!line.visible) continue
       main.getMatrixAt(id, line.matrix)
@@ -1573,6 +1607,14 @@ export function syncRealisticGlassBatch(batch: BatchState) {
 function syncSurfaceBatch(batch: BatchState, glass: SurfaceBatchState) {
   const main = batch.mesh as BatchedMeshInternals
   const glassMesh = glass.mesh as BatchedMeshInternals
+  const mainMaterial = (Array.isArray(main.material) ? main.material[0] : main.material) as THREE.Material
+  const glassMaterial = glassMesh.material as THREE.Material
+  glassMaterial.clippingPlanes = mainMaterial.clippingPlanes
+  glassMaterial.clipShadows = mainMaterial.clipShadows
+  glassMesh.visible = main.visible
+  const key = batchContentKey(main)
+  if (surfaceSyncKeys.get(glass) === key) return
+  surfaceSyncKeys.set(glass, key)
   const mainColors = main._colorsTexture?.image.data as Float32Array | undefined
   const glassColorsTexture = glassMesh._colorsTexture
   const glassColors = glassColorsTexture?.image.data as Float32Array | undefined
@@ -1605,11 +1647,6 @@ function syncSurfaceBatch(batch: BatchState, glass: SurfaceBatchState) {
   }
   if (colorsChanged && glassColorsTexture) glassColorsTexture.needsUpdate = true
   if (matricesChanged) glassMatricesTexture.needsUpdate = true
-  const mainMaterial = (Array.isArray(main.material) ? main.material[0] : main.material) as THREE.Material
-  const glassMaterial = glassMesh.material as THREE.Material
-  glassMaterial.clippingPlanes = mainMaterial.clippingPlanes
-  glassMaterial.clipShadows = mainMaterial.clipShadows
-  glassMesh.visible = main.visible
 }
 
 // Applies Realistic mode to one still-batched model and returns the material
@@ -1645,7 +1682,7 @@ export function applyRealisticToBatch(
           let settings = settingsByValue.get(raw)
           if (!settings) { settings = textureSettingsForKey(key, local); settingsByValue.set(raw, settings) }
           texData[inst.instanceId * 4 + 1] = Math.log2(settings.scale) + 2
-          texData[inst.instanceId * 4 + 2] = settings.rotation / 90
+          texData[inst.instanceId * 4 + 2] = textureProjectionCode(settings)
         }
       }
     }

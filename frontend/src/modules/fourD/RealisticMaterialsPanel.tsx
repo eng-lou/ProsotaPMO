@@ -9,7 +9,7 @@ import { roadWearForKey } from './realisticMaterials'
 import {
   REALISTIC_CLASSES, REALISTIC_CLASS_LABELS, colourOverrideHex, colourOverridesInUse, opacityForKey, footprintEdgesForKey,
   REALISTIC_TEXTURE_SCALES, textureSettingsForKey, realisticTileSize,
-  type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
+  type RealisticTextureSettings, type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
 } from './realisticMaterials'
 
 // Per-material colour override (2026-10-02, per Maro: "allow me to change
@@ -146,12 +146,14 @@ export function RealisticMaterialsPanel({
           const mixedFinish = targets.some(target => (mappingAtTarget(mapping, target)[entry.key] || undefined) !== manual)
           const edit = (fields: Parameters<typeof editMaterialFields>[2], reset = false) =>
             onMappingChange(editMaterialFields(mapping, targets, fields, reset))
-          const updateTexture = (patch: {scale?: number; rotation?: number}) => edit(local => {
+          const updateTexture = (patch: Partial<RealisticTextureSettings>) => edit(local => {
             const value = { ...textureSettingsForKey(entry.key, local), ...patch }
-            return { ['texture:' + entry.key]: value.scale === 1 && value.rotation === 0 ? null : JSON.stringify(value) }
+            return { ['texture:' + entry.key]: value.scale === 1 && value.rotation === 0 && !value.siteAligned ? null : JSON.stringify(value) }
           })
           const cls = manual === 'original' ? null : manual ?? entry.autoClass
           const texture = textureSettingsForKey(entry.key, current)
+          const mixedAlignment = targets.some(target =>
+            !!textureSettingsForKey(entry.key, mappingAtTarget(mapping, target)).siteAligned !== !!texture.siteAligned)
           const tile = cls ? realisticTileSize(cls, texture.scale) : null
           const guideKey = 'guide:' + entry.key
           const guideMode = (target: MaterialTarget) => String(mappingAtTarget(mapping, target)[guideKey]) === 'surface' ? 'surface' : 'outline'
@@ -174,7 +176,7 @@ export function RealisticMaterialsPanel({
           const mixedEdgeLocation=targets.some(t=>!!footprintEdgesForKey(entry.key,mappingAtTarget(mapping,t)).endsOnly!==!!edges.endsOnly)
           const edgeFields=[['fade','edgeFade:','Edge fade width'],['radius','cornerRadius:','Corner radius']] as const
           const hasEdgeEdit=targets.some(t=>{const e=footprintEdgesForKey(entry.key,mappingAtTarget(mapping,t));return !!(e.fade||e.radius||e.endsOnly)})
-          const customised = targets.some(target => !!mappingAtTarget(mapping, target)[guideKey]) || hasOpacityEdit || targets.some(target => target.length > 0 && [entry.key, 'colour:' + entry.key, 'texture:' + entry.key].some(k => Object.prototype.hasOwnProperty.call(mappingAtTarget(mapping, target), k))) || mixedFinish || !!manual || !!colourOverrideHex(entry.key, current) || texture.scale !== 1 || texture.rotation !== 0
+          const customised = targets.some(target => !!mappingAtTarget(mapping, target)[guideKey]) || hasOpacityEdit || targets.some(target => target.length > 0 && [entry.key, 'colour:' + entry.key, 'texture:' + entry.key].some(k => Object.prototype.hasOwnProperty.call(mappingAtTarget(mapping, target), k))) || mixedFinish || !!manual || !!colourOverrideHex(entry.key, current) || texture.scale !== 1 || texture.rotation !== 0 || !!texture.siteAligned || mixedAlignment
           const flagged = needsMapping(entry)
           const models = entryModels[entry.key] ?? []
           const autoLabel = entry.autoClass
@@ -277,6 +279,16 @@ export function RealisticMaterialsPanel({
                       </select>
                     </label>
                   </div>
+                  <label className="block py-1">Texture alignment
+                    <select aria-label={`Texture alignment for ${entry.label}`} value={mixedAlignment ? 'mixed' : texture.siteAligned ? 'site' : 'object'}
+                      onChange={e => updateTexture({siteAligned: e.target.value === 'site'})}
+                      className="block w-full border rounded px-1 py-0.5 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper">
+                      {mixedAlignment && <option value="mixed" disabled>Mixed</option>}
+                      <option value="object">Object coordinates</option>
+                      <option value="site">Site coordinates</option>
+                    </select>
+                  </label>
+                  {texture.siteAligned && !mixedAlignment && <p>Adjacent surfaces share one pattern when their finish, scale and direction match.</p>}
                   {tile && <p>Pattern repeat: {Number(tile[0].toFixed(3))} × {Number(tile[1].toFixed(3))} m. Preview changes in the model.</p>}
                 </details>
               )}

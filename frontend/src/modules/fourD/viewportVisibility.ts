@@ -3,12 +3,19 @@ import type { BatchedMesh, Mesh } from 'three'
 // A paused animation and a manual Hide both have a say in the rendered result.
 // Keep the animation verdict apart from the last value written to the mesh.
 const hiddenBySchedule = new WeakSet<Mesh>()
+const hiddenWhileMoving = new WeakSet<Mesh>()
 const scheduledInstances = new WeakMap<BatchedMesh, Set<number>>()
 
 export function updateMeshVisibility(mesh: Mesh, scheduleVisible?: boolean) {
   if (scheduleVisible === false) hiddenBySchedule.add(mesh)
   else if (scheduleVisible === true) hiddenBySchedule.delete(mesh)
-  mesh.visible = mesh.userData.baseVisible !== false && !hiddenBySchedule.has(mesh)
+  mesh.visible = mesh.userData.baseVisible !== false && !hiddenBySchedule.has(mesh) && !hiddenWhileMoving.has(mesh)
+}
+
+export function setMeshMovingHidden(mesh: Mesh, hidden: boolean) {
+  if (hidden) hiddenWhileMoving.add(mesh)
+  else hiddenWhileMoving.delete(mesh)
+  updateMeshVisibility(mesh)
 }
 
 export function updateInstanceVisibility(mesh: BatchedMesh, id: number, scheduleVisible?: boolean) {

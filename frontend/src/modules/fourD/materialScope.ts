@@ -27,6 +27,21 @@ export function materialScope(mapping: RealisticMaterialMap, owner: string): Rea
   return children.size ? children.get(prefix(owner)) ?? mapping : mapping
 }
 
+// Built-in shape slots also contain their placement ID, including legacy unscoped slots.
+export function copySiteMaterialMappings(mapping: RealisticMaterialMap, copies: Map<string, string>) {
+  const next = { ...mapping }
+  for (const [key, value] of Object.entries(mapping)) {
+    const scoped = key.startsWith('@')
+    const end = scoped ? key.indexOf('/') : -1
+    const field = key.slice(end + 1)
+    const owner = scoped ? key.slice(1, end) : ''
+    const id = scoped && owner.startsWith('site%3A') ? owner.slice(7) : field.match(/site-(?:shape|geo)\|([^|]+)\|/)?.[1]
+    const target = id && copies.get(id)
+    if (target) next[(scoped ? prefix('site:' + target) : '') + field.split('|' + id + '|').join('|' + target + '|')] = value
+  }
+  return next
+}
+
 export function mappingAtTarget(mapping: RealisticMaterialMap, target: MaterialTarget) {
   return target.reduce(materialScope, mapping)
 }

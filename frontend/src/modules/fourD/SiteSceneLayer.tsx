@@ -131,7 +131,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const resolved = useMemo(() => resolveSiteLinks(item.id, links, activities, profiles, state.items), [item.id, links, activities, profiles, state.items])
   const animationBase = useMemo(() => new THREE.Vector3(), [])
   useSiteAnimation(root, animationBase, resolved, links.some(l => l.source_kind === 'site' && l.element_ref === item.id), dateRef, preview,
-    () => !item.activity_id || presentAt(activity, dateRef.current))
+    () => !item.activity_id || presentAt(activity, dateRef.current), instance)
   const rotation = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), item.up_axis === 'z' ? Math.PI / 2 : 0)
     .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), item.yaw * Math.PI / 180)), [item.up_axis, item.yaw])
   const colour = !preview && state.selected === item.id ? '#38bdf8' : item.color

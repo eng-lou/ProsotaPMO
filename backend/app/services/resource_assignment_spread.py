@@ -50,8 +50,35 @@ def default_hours_for_day(
     return (Decimal(str(resource.max_hours_per_day)) * utilisation / Decimal(100)).quantize(_HOURS)
 
 
+def assignment_cells(lookup, calendar, resource, assignment, activity, start, end, overrides, *, sparse=False):
+    """Sparse consumers treat missing demand as zero; explicit overrides always survive.
+
+    Work is proportional to the activity span, not the whole multi-year programme.
+    Dense responses remain the default for existing API clients.
+    """
+    first, last = start, end
+    if sparse:
+        if activity is None or activity.start is None or activity.finish is None:
+            first = last
+        else:
+            first = max(start, activity.start.date())
+            finish = activity.finish.date()
+            last = min(end, finish + timedelta(days=1) if finish < date.max else date.max)
+    day = first
+    while day < last:
+        override = overrides.get(day)
+        hours = override if override is not None else default_hours_for_day(lookup, calendar, resource, assignment, activity, day)
+        if not sparse or hours != 0 or override is not None:
+            yield {"assignment_id": assignment.id, "date": day, "hours": hours, "is_override": override is not None}
+        day += timedelta(days=1)
+    if sparse:
+        for day, hours in sorted(overrides.items()):
+            if start <= day < end and not first <= day < last:
+                yield {"assignment_id": assignment.id, "date": day, "hours": hours, "is_override": True}
+
+
 async def get_spreads_for_resources(
-    db: AsyncSession, resource_ids: list[uuid.UUID], start: date, end: date
+    db: AsyncSession, resource_ids: list[uuid.UUID], start: date, end: date, *, sparse: bool = False
 ) -> dict[uuid.UUID, tuple[list[dict], list[dict]]]:
     """Batched form of get_spread_for_resource — one calendar lookup shared
     across every resource, instead of the old one-HTTP-request-per-resource
@@ -105,6 +132,10 @@ async def get_spreads_for_resources(
             )).scalars().all()
         }
 
+    overrides_by_assignment: dict[uuid.UUID, dict[date, Decimal]] = defaultdict(dict)
+    for (assignment_id, work_date), hours in overrides_by_key.items():
+        overrides_by_assignment[assignment_id][work_date] = hours
+
     assignments_by_resource: dict[uuid.UUID, list[ResourceAssignment]] = defaultdict(list)
     for a in assignments:
         assignments_by_resource[a.resource_id].append(a)
@@ -124,12 +155,8 @@ async def get_spreads_for_resources(
         for a in assignments_by_resource.get(resource.id, []):
             activity = activities_by_id.get(a.activity_id)
             calendar = lookup.resolve(activity) if activity is not None else resource_calendar
-            d = start
-            while d < end:
-                override = overrides_by_key.get((a.id, d))
-                hours = override if override is not None else default_hours_for_day(lookup, calendar, resource, a, activity, d)
-                cells.append({"assignment_id": a.id, "date": d, "hours": hours, "is_override": override is not None})
-                d += timedelta(days=1)
+            cells.extend(assignment_cells(lookup, calendar, resource, a, activity, start, end,
+                                          overrides_by_assignment.get(a.id, {}), sparse=sparse))
 
         results[resource.id] = (days, cells)
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-import anthropic
 from fastapi import HTTPException
 
 from app.core.config import settings
@@ -25,6 +24,7 @@ def _get_client() -> anthropic.AsyncAnthropic:
         # module (e.g. for a health check or a future non-AI use of
         # app/ai/) must not itself require a key to be configured.
         raise HTTPException(status_code=503, detail="AI assistant is not configured (missing anthropic_api_key)")
+    import anthropic
     return anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
 

@@ -1,5 +1,6 @@
 import { updateInstanceVisibility } from './viewportVisibility'
 import * as THREE from 'three'
+import { batchContentKey } from './batchRevision'
 import { captureBaseline, getBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
 // Split out of ifcModel.ts (2026-07-17) specifically so Viewport3D.tsx can
@@ -97,7 +98,7 @@ export interface BatchState {
 // mesh becomes real either way, so registering it there is the single choke
 // point that keeps this index complete without any other call site needing
 // to know it exists.
-function getMeshIndex(rootObject: THREE.Object3D): Map<number, THREE.Mesh[]> {
+export function getMeshIndex(rootObject: THREE.Object3D): Map<number, THREE.Mesh[]> {
   let index = rootObject.userData.expressIdMeshIndex as Map<number, THREE.Mesh[]> | undefined
   if (!index) {
     index = new Map()
@@ -670,10 +671,14 @@ export function setBatchedInstanceMatrix(
 // timeline playback, Hide/Isolate, scopes and "Simplify while orbiting" all
 // change batch visibility after the outlines are built. Called every frame
 // by the main view and the comparison views; only flips are written.
+const edgesSyncKeys = new WeakMap<EdgesBatch, string>()
 export function syncEdgesBatch(rootObject: THREE.Object3D): void {
   const batch = rootObject.userData.batch as BatchState | undefined
   const edgesBatch = rootObject.userData.edgesBatch as EdgesBatch | undefined
   if (!batch || !edgesBatch) return
+  const key = batchContentKey(batch.mesh)
+  if (edgesSyncKeys.get(edgesBatch) === key) return
+  edgesSyncKeys.set(edgesBatch, key)
   const drawInfo = (batch.mesh as THREE.BatchedMesh & { _drawInfo: { visible: boolean; active: boolean }[] })._drawInfo
   for (const entry of edgesBatch.entries.values()) {
     let changed = false

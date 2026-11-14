@@ -11,6 +11,7 @@ from sqlalchemy import Integer, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
+from app.services.activity_refresh import refresh_changed_activities
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
@@ -777,9 +778,7 @@ async def _recompute_hierarchy(db: AsyncSession, schedule_period_id: uuid.UUID) 
     # (found at ~140-activity schedule scale, 2026-07-04 per Maro).
     dirty_ids = {a.id for a in activities if db.is_modified(a)}
     await db.commit()
-    for a in activities:
-        if a.id in dirty_ids:
-            await db.refresh(a)
+    await refresh_changed_activities(db, dirty_ids)
 
 
 def _parent_filter(parent_id: uuid.UUID | None):
@@ -934,6 +933,21 @@ async def update_activity(
     updates = data.model_dump(exclude_unset=True)
     old_code = activity.code
     amend_relationships = updates.pop("amend_relationships", False)
+
+    # Forms may echo unchanged schedule fields. A label/review edit cannot
+    # affect the network: do not run two hierarchy passes and CPM for it.
+    changed = {key: value for key, value in updates.items()
+               if key == "finish" or value != getattr(activity, key)}
+    if set(changed) <= {"task_name", "commentary", "last_reviewed_date"}:
+        for key, value in changed.items():
+            setattr(activity, key, value)
+        if "commentary" in changed and activity.p6_data:
+            activity.p6_data = {k: v for k, v in activity.p6_data.items() if k != "Notes"}
+        if changed:
+            await db.commit()
+            await db.refresh(activity)
+        await _attach_evm_fields(db, [activity])
+        return activity
 
     # A rendering profile cannot change schedule dates, hierarchy or costs.
     # Bulk profile edits must not run competing full-period CPM passes.

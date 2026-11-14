@@ -5,7 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 from fastapi import HTTPException
-from app.services import object_storage, ifc_revision_worker
+from app.services import object_storage
 from app.services.ifc_worker_runtime import run_worker
 
 MAX_BYTES = 128 * 1024 * 1024
@@ -24,6 +24,7 @@ def unpack(key, destination):
             target.write(chunk)
 
 def process(review, mode, **options):
+    from app.services import ifc_revision_worker
     with tempfile.TemporaryDirectory(prefix='prosota-revision-') as folder:
         root = Path(folder)
         before, after = root / 'before.ifc', root / 'after.ifc'

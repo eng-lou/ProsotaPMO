@@ -27,6 +27,7 @@ export function applySiteSurfaceOpacity(source: THREE.MeshStandardMaterial, key:
   source.transparent = source.opacity < 1 || (original.blend && original.opacity === 1)
   source.depthWrite = source.opacity >= 1 && original.depthWrite
   source.visible = source.opacity > 0
+  source.userData.siteSurfaceState = { opacity: source.opacity, transparent: source.transparent, depthWrite: source.depthWrite, visible: source.visible }
 }
 
 export function siteMaterialLook(source: THREE.MeshStandardMaterial, key: string, mapping: RealisticMaterialMap, transmission: boolean) {
@@ -38,6 +39,7 @@ export function siteMaterialLook(source: THREE.MeshStandardMaterial, key: string
   if (variant.alphaHash !== source.alphaHash) { variant.alphaHash=source.alphaHash; variant.needsUpdate=true }
   if(source.alphaTest>0 || source.alphaHash)variant.map=source.map
   variant.side=source.side
+  variant.userData.siteSurfaceState = source.userData.siteSurfaceState
   return variant
 }
 

@@ -23,6 +23,41 @@ test('union and intersection in either up axis, transformed cutter',()=>{
  }
  b.rotation.y=.4;b.scale.set(1,.5,1);assert.ok(computeShapeBoolean(a,b,'y','subtract')[0].mesh.geometry.attributes.position.count>0)
 })
+test('cut faces inherit the platform slot; unions retain the second solid finish',()=>{
+ const platform=box(134,.05,85),cutter=box(43,3,25,3,0,-4)
+ cutter.material.color.setHex(0x00ffff)
+ const grey=platform.material.color.getHex(),cyan=cutter.material.color.getHex()
+ for(const op of ['excavate','subtract','intersect','union']){
+   const result=computeShapeBoolean(platform,cutter,'y',op),mesh=result[0].mesh
+   const colours=mesh.geometry.groups.map(g=>mesh.material[g.materialIndex].color.getHex())
+   assert.ok(colours.includes(grey));assert.equal(colours.includes(cyan),op==='union')
+   if(op!=='union')assert.equal(mesh.material.length,1)
+   assert.equal(mesh.userData.prosotaShapeOperation.operation,op)
+   if(op==='excavate')assert.equal(result[1].mesh.material.color.getHex(),0xdc2626)
+   disposeBooleanResults(result)
+ }
+ assert.equal(cutter.material.color.getHex(),cyan)
+})
+
+test('cut uses the dominant base surface while retaining authored secondary finishes',()=>{
+ const platform=box(10,.1,9),cutter=box(2,2,3)
+ const side=new T.MeshStandardMaterial({color:0x554422}), top=platform.material
+ platform.material=[side,top]
+ platform.geometry.groups.forEach((group,i)=>group.materialIndex=i===2||i===3?1:0)
+ cutter.material.color.setHex(0x00ffff)
+ const result=computeShapeBoolean(platform,cutter,'y','subtract'),mesh=result[0].mesh
+ const at=mesh.geometry.attributes.position
+ let interior=0,exterior=0
+ for(const g of mesh.geometry.groups)for(let i=g.start;i<g.start+g.count;i+=3){
+   const x=(at.getX(i)+at.getX(i+1)+at.getX(i+2))/3,z=(at.getZ(i)+at.getZ(i+1)+at.getZ(i+2))/3
+   if(Math.abs(mesh.geometry.attributes.normal.getY(i))>.1)continue
+   const inside=Math.abs(x)<2 && Math.abs(z)<2
+   assert.equal(mesh.material[g.materialIndex].color.getHex(),(inside?top:side).color.getHex())
+   if(inside)interior++;else exterior++
+ }
+ assert.ok(interior&&exterior);disposeBooleanResults(result)
+})
+
 test('reject open inputs and empty cuts',()=>{
  assert.throws(()=>computeShapeBoolean(box(2,2,2),new T.Mesh(new T.PlaneGeometry(2,2),new T.MeshStandardMaterial()),'y','subtract'),/closed solids/)
  assert.throws(()=>computeShapeBoolean(box(2,2,2),box(2,2,2,50),'y','excavate'),/partial overlap/)

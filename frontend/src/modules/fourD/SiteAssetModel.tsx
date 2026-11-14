@@ -1,11 +1,14 @@
 import { setImportedLightsEnabled } from './importedLights'
+import { bindAnimationShadows } from './animationRendering'
+import { prepareCutoutRendering } from './cutoutRendering'
 import { applyFootprintEdges } from './footprintEdges'
-import { footprintEdgesForKey } from './realisticMaterials'
+import { footprintEdgesForKey, inheritCutFinish } from './realisticMaterials'
 import { animatedAssetBounds } from './animatedAssetBounds'
 import { WorkerActionPlayer, type WorkerAction } from './workerActions'
 import { clipPathAnchor } from './clipPathAnchor'
 import { useFrame } from '@react-three/fiber'
 import { markRenderActivity } from './IdleRenderDriver'
+import { isObjectRendered } from './visibleAnimation'
 import { waterExportTime } from './WaterSurface'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
@@ -56,7 +59,7 @@ export function SiteAssetModel({ id, part, preview = false, selected = false, fi
     if(motionTime?.current != null) time=playing?motionTime.current*speed:0
     else if(waterExportTime.current!==null) time=playing?waterExportTime.current*speed:elapsed.current
     else {
-      if(playing && speed>0){elapsed.current+=delta*speed;markRenderActivity()}
+      if(playing && speed>0){elapsed.current+=delta*speed;if(isObjectRendered(object))markRenderActivity()}
       time=elapsed.current
     }
     if(time!==lastPoseTime.current){
@@ -75,18 +78,24 @@ export function SiteAssetModel({ id, part, preview = false, selected = false, fi
         if (!(node instanceof THREE.Mesh)) return
         node.castShadow = true; node.receiveShadow = true
         const copy = (source: THREE.Material) => {
+          const key = slots.get(source)!
+          const baseSlot = source.userData.prosotaCutBaseSlot
+          const finish = mapping && Number.isInteger(baseSlot) ? inheritCutFinish(mapping, key, `site|${id}|${baseSlot}`) : mapping
           const mat = source.clone(); materials.push(mat)
-          if(mat instanceof THREE.MeshStandardMaterial){captureMaterialChannels(mat);applyCustomMaterial(mat,textures);applySiteSurfaceOpacity(mat,slots.get(source)!,mapping ?? {},opacity ?? 1)}
+          if(mat instanceof THREE.MeshStandardMaterial){captureMaterialChannels(mat);applyCustomMaterial(mat,textures);applySiteSurfaceOpacity(mat,key,finish ?? {},opacity ?? 1)}
           if (preview) { mat.transparent = true; mat.opacity *= .65; mat.depthWrite = false }
           if(mat instanceof THREE.MeshStandardMaterial){mat.userData.exportEmissive=mat.emissive.getHex();mat.userData.exportEmissiveIntensity=mat.emissiveIntensity}
           if (selected && mat instanceof THREE.MeshStandardMaterial) { mat.emissive.set('#0c4a6e'); mat.emissiveIntensity = .4 }
-          const result=mapping && !hasCustomTextures(textures) && mat instanceof THREE.MeshStandardMaterial ? siteMaterialLook(mat,slots.get(source)!,mapping,transmission) : mat
-          if(mapping) applyFootprintEdges(result,footprintEdgesForKey(slots.get(source),mapping))
+          const result=finish && !hasCustomTextures(textures) && mat instanceof THREE.MeshStandardMaterial ? siteMaterialLook(mat,key,finish,transmission) : mat
+          if(finish) applyFootprintEdges(result,footprintEdgesForKey(key,finish))
           if(source instanceof THREE.MeshStandardMaterial){result.userData.exportEmissive=source.emissive.getHex();result.userData.exportEmissiveIntensity=source.emissiveIntensity}
           return result
         }
         node.material = Array.isArray(node.material) ? node.material.map(copy) : copy(node.material)
+        bindAnimationShadows(node)
       })
+      // SkeletonUtils clones meshes but omits their custom shadow materials.
+      prepareCutoutRendering(value)
       setObject(value)
     }).catch(reason => { if (active) setError(reason.message || 'Asset unavailable') })
     return () => { active = false; materials.forEach(material => { disposeRealisticVariant(material); material.dispose() }) }

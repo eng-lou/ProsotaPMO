@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.activity_refresh import refresh_changed_activities
 from app.models.activity import Activity
 from app.models.activity_relationship import ActivityRelationship
 from app.models.calendar import Calendar, CalendarBreak, CalendarException
@@ -160,6 +161,7 @@ class _CalendarLookup:
         for br in breaks:
             self._breaks[br.calendar_id].append(br)
         self._window_cache: dict[tuple[uuid.UUID, date], list[tuple[time, time]]] = {}
+        self._year_minutes: dict[tuple[uuid.UUID, int], list[int]] = {}
 
     def resolve(self, activity: Activity) -> Calendar:
         return self.resolve_calendar_id(activity.calendar_id)
@@ -497,18 +499,45 @@ class _CalendarLookup:
             return Decimal("0.00")
         sign = 1 if b > a else -1
         lo, hi = (a, b) if b > a else (b, a)
-        total_minutes = 0
-        d = lo.date()
-        while d <= hi.date():
-            windows = self._windows(calendar, d)
-            day_lo = lo if d == lo.date() else datetime.combine(d, time.min)
-            day_hi = hi if d == hi.date() else datetime.combine(d, time(23, 59))
-            for s, e in windows:
-                w_start, w_end = datetime.combine(d, s), datetime.combine(d, e)
-                overlap_start, overlap_end = max(w_start, day_lo), min(w_end, day_hi)
-                if overlap_end > overlap_start:
-                    total_minutes += int((overlap_end - overlap_start).total_seconds() // 60)
-            d += timedelta(days=1)
+        def partial_day(d: date, left: datetime, right: datetime) -> int:
+            total = 0
+            for start, end in self._windows(calendar, d):
+                a = max(datetime.combine(d, start), left)
+                b = min(datetime.combine(d, end), right)
+                if b > a:
+                    total += int((b - a).total_seconds() // 60)
+            return total
+
+        if lo.date() == hi.date():
+            total_minutes = partial_day(lo.date(), lo, hi)
+        else:
+            total_minutes = partial_day(lo.date(), lo, datetime.combine(lo.date(), time(23, 59)))
+            total_minutes += partial_day(hi.date(), datetime.combine(hi.date(), time.min), hi)
+            # Whole interior days use request-local cumulative totals. Long
+            # project floats/rollups otherwise revisit years of days per row.
+            d = lo.date() + timedelta(days=1)
+            stop = hi.date()
+            while d < stop:
+                key = (calendar.id, d.year)
+                # Short ranges should not pay to prepare an entire year.
+                if (stop - d).days <= 7 and key not in self._year_minutes:
+                    total_minutes += partial_day(d, datetime.combine(d, time.min), datetime.combine(d, time(23, 59)))
+                    d += timedelta(days=1)
+                    continue
+                prefix = self._year_minutes.get(key)
+                year_start = date(d.year, 1, 1)
+                year_end = date(d.year + 1, 1, 1)
+                if prefix is None:
+                    prefix = [0]
+                    day = year_start
+                    while day < year_end:
+                        minutes = partial_day(day, datetime.combine(day, time.min), datetime.combine(day, time(23, 59)))
+                        prefix.append(prefix[-1] + minutes)
+                        day += timedelta(days=1)
+                    self._year_minutes[key] = prefix
+                end = min(stop, year_end)
+                total_minutes += prefix[(end - year_start).days] - prefix[(d - year_start).days]
+                d = end
         return (sign * Decimal(total_minutes) / 60).quantize(Decimal("0.01"))
 
 
@@ -1296,9 +1325,7 @@ async def recompute_schedule(
     # second `is_modified()` check here wrongly see them as already-clean.
     dirty_ids = master_dirty_ids | subproject_dirty_ids
     await db.commit()
-    for a in all_activities:
-        if a.id in dirty_ids:
-            await db.refresh(a)
+    await refresh_changed_activities(db, dirty_ids)
 
     # Deferred import — resource_assignment_spread.py already imports
     # _build_calendar_lookup/_CalendarLookup from this module at load time,

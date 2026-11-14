@@ -93,10 +93,10 @@ export function useSiteScene(projectId: string | undefined) {
     } catch (error) { if (project.current === id) setError(siteError(error)) }
   }
   useEffect(() => { accept({ revision: 0, items: [] }); setDraft(null); setSelected(null); setPlacing(false); setPlacement(null); setError(''); setReady(false); void reload() }, [projectId])
-  async function save(items: SiteItem[], label: string, effects?: { redo(): void; undo(): void }) {
-    if (!projectId || pending.current || !ready) return
+  async function save(items: SiteItem[] | ((currentItems: SiteItem[]) => SiteItem[]), label: string, effects?: { redo(): void; undo(): void }) {
+    if (!projectId || pending.current || !ready) return false
     const id = projectId, before = current.current.items.map(recipe)
-    let after = items.map(recipe)
+    let after = (typeof items === 'function' ? items(current.current.items) : items).map(recipe)
     const apply = async (expected: SiteItem[], next: SiteItem[], effect?: () => void) => {
       if (project.current !== id) throw new Error('Switch back to the original project')
       if (stableRecipe(current.current.items.map(recipe)) !== stableRecipe(expected)) throw new Error('Site scene changed. Reload before undoing this operation.')
@@ -110,6 +110,7 @@ export function useSiteScene(projectId: string | undefined) {
       await apply(before, after, effects?.redo)
       after = current.current.items.map(recipe)
       if (project.current === id) undoHistory.record({ label, undo: () => apply(after, before, effects?.undo), redo: () => apply(before, after, effects?.redo) })
+      return project.current === id
     } catch (error) { if (project.current === id) setError(siteError(error)); throw error }
     finally { pending.current = false; setBusy(false) }
   }

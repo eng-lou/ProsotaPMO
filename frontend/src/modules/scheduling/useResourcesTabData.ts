@@ -17,7 +17,7 @@ export interface AssignmentRow {
 // zoom/date-range/selection so all three stay in sync.
 export function useResourcesTabData(
   resources: Resource[], resourceAssignments: ResourceAssignment[], activities: Activity[],
-  selectedResourceIds: Set<string>, zoom: GanttZoom, rangeStartOverride: Date | null, rangeEndOverride: Date | null,
+  selectedResourceIds: Set<string>, zoom: GanttZoom, rangeStartOverride: Date | null, rangeEndOverride: Date | null, enabled = true,
 ) {
   const [spreadByResource, setSpreadByResource] = useState<Map<string, ResourceSpread>>(new Map())
   const [loading, setLoading] = useState(true)
@@ -27,18 +27,19 @@ export function useResourcesTabData(
   const assignedResourceIds = useMemo(() => new Set(resourceAssignments.map(a => a.resource_id)), [resourceAssignments])
 
   const trackedResources = useMemo(
-    () => resources.filter(r =>
+    () => enabled ? resources.filter(r =>
       (r.resource_type === 'labour' || r.resource_type === 'equipment' || r.resource_type === 'crew')
       && assignedResourceIds.has(r.id)
       && (selectedResourceIds.size === 0 || selectedResourceIds.has(r.id))
-    ),
-    [resources, assignedResourceIds, selectedResourceIds]
+    ) : [],
+    [enabled, resources, assignedResourceIds, selectedResourceIds]
   )
 
   // Base grouping only (no sort/filter) — Resource Tracking applies its own
   // sort on top of this; Profile just sums it as-is.
   const assignmentsByResource = useMemo(() => {
     const map = new Map<string, AssignmentRow[]>()
+    if (!enabled) return map
     for (const assignment of resourceAssignments) {
       const activity = activitiesById.get(assignment.activity_id)
       if (!activity || activity.start == null || activity.finish == null) continue
@@ -50,7 +51,7 @@ export function useResourcesTabData(
       rows.sort((a, b) => (a.activity.start ?? '').localeCompare(b.activity.start ?? ''))
     }
     return map
-  }, [resourceAssignments, activitiesById])
+  }, [enabled, resourceAssignments, activitiesById])
 
   const autoRange = useMemo(() => {
     const dates = [...assignmentsByResource.values()]
@@ -76,7 +77,16 @@ export function useResourcesTabData(
 
   const buckets = useMemo(() => computePeriodBuckets(rangeStart, rangeEnd, zoom), [rangeStart, rangeEnd, zoom])
 
+  // A changed duration/utilisation inside the same overall range must invalidate
+  // demand too. The stable key avoids refetching for names or selection changes.
+  const demandRevision = useMemo(() => enabled ? JSON.stringify([
+    trackedResources.map(r => [r.id, r.calendar_id, r.max_hours_per_day]),
+    [...assignmentsByResource.values()].flat().map(({ assignment: a, activity: t }) =>
+      [a.id, a.resource_id, a.utilisation_pct, t.start, t.finish, t.calendar_id]),
+  ]) : '', [enabled, trackedResources, assignmentsByResource])
   useEffect(() => {
+    if (!enabled) return
+    const controller = new AbortController()
     let cancelled = false
     async function load() {
       if (trackedResources.length === 0) {
@@ -100,7 +110,8 @@ export function useResourcesTabData(
       try {
         const { data } = await api.post<{ spreads: Record<string, ResourceSpread> }>(
           '/api/v1/resource-assignment-spreads/bulk-fetch',
-          { resource_ids: trackedResources.map(r => r.id), start: toDateOnly(rangeStart), end: toDateOnly(rangeEnd) },
+          { sparse: true, resource_ids: trackedResources.map(r => r.id), start: toDateOnly(rangeStart), end: toDateOnly(rangeEnd) },
+          { signal: controller.signal },
         )
         if (!cancelled) {
           const entries = Object.entries(data.spreads)
@@ -128,9 +139,9 @@ export function useResourcesTabData(
       }
     }
     load()
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackedResources.map(r => r.id).join(','), toDateOnly(rangeStart), toDateOnly(rangeEnd)])
+  }, [enabled, demandRevision, toDateOnly(rangeStart), toDateOnly(rangeEnd)])
 
   const refetchResource = useCallback(async (resourceId: string) => {
     const { data } = await api.get<ResourceSpread>('/api/v1/resource-assignment-spreads/', {
@@ -152,7 +163,11 @@ export function useResourcesTabData(
   }), [trackedResources, assignmentsByResource, rangeStart, rangeEnd, buckets, spreadByResource, loading, spreadFetchError, refetchResource])
 }
 
+type SpreadIndex = { hoursByAssignmentDate: Map<string, { hours: number; isOverride: boolean }>; capacityByDate: Map<string, number> }
+const spreadIndices = new WeakMap<ResourceSpread, SpreadIndex>()
 export function indexSpread(spread: ResourceSpread | undefined) {
+  const cached = spread && spreadIndices.get(spread)
+  if (cached) return cached
   const hoursByAssignmentDate = new Map<string, { hours: number; isOverride: boolean }>()
   const capacityByDate = new Map<string, number>()
   if (!spread) return { hoursByAssignmentDate, capacityByDate }
@@ -162,7 +177,9 @@ export function indexSpread(spread: ResourceSpread | undefined) {
   for (const day of spread.days) {
     capacityByDate.set(day.date, Number(day.capacity))
   }
-  return { hoursByAssignmentDate, capacityByDate }
+  const result = { hoursByAssignmentDate, capacityByDate }
+  spreadIndices.set(spread, result)
+  return result
 }
 
 export function eachDate(start: Date, end: Date): string[] {
@@ -191,6 +208,49 @@ export function usageUnitFactor(resource: Resource, unit: 'hours' | 'days' | 'co
 // Resource Usage Profile's bar/limit data — shared by the screen widget and
 // its print view so the "has actuals -> green, overallocated -> red"
 // colouring logic can't drift between the two (2026-07-08, per Maro).
+type DemandBucket = { start: Date; end: Date; label: string }
+const bucketDateIndices = new WeakMap<DemandBucket[], Map<string, number[]>>()
+function aggregateDemand(resources: Resource[], assignments: Map<string, AssignmentRow[]>, buckets: DemandBucket[],
+  spreads: Map<string, ResourceSpread>, selected: Set<string>, unit: 'hours' | 'days' | 'cost', dataDate: Date | null) {
+  let byDate = bucketDateIndices.get(buckets)
+  if (!byDate) {
+    byDate = new Map()
+    buckets.forEach((bucket, i) => {
+      for (const day of eachDate(bucket.start, bucket.end)) {
+        const indices = byDate!.get(day) ?? []
+        indices.push(i); byDate!.set(day, indices)
+      }
+    })
+    bucketDateIndices.set(buckets, byDate)
+  }
+  const bars = buckets.map(() => 0), actualFlags = buckets.map(() => false), capacityByBucket = buckets.map(() => 0)
+  for (const resource of resources) {
+    const spread = spreads.get(resource.id)
+    if (!spread) continue
+    const factor = usageUnitFactor(resource, unit)
+    const rows = new Map<string, AssignmentRow[]>()
+    for (const row of assignments.get(resource.id) ?? []) {
+      if (selected.size && !selected.has(row.activity.id)) continue
+      const list = rows.get(row.assignment.id) ?? []; list.push(row); rows.set(row.assignment.id, list)
+    }
+    for (const day of spread.days) for (const i of byDate.get(day.date) ?? []) {
+      capacityByBucket[i] += Number(day.capacity) * factor
+    }
+    // Visit actual demand once, instead of every programme day for every row.
+    for (const cell of spread.cells) {
+      const hours = Number(cell.hours)
+      if (!(hours > 0)) continue
+      const matched = rows.get(cell.assignment_id)
+      if (!matched) continue
+      for (const i of byDate.get(cell.date) ?? []) for (const row of matched) {
+        bars[i] += hours * factor
+        if (row.activity.ac !== null && (!dataDate || buckets[i].start <= dataDate)) actualFlags[i] = true
+      }
+    }
+  }
+  return { bars, actualFlags, capacityByBucket }
+}
+
 export function computeUsageProfileBars(
   trackedResources: Resource[], assignmentsByResource: Map<string, AssignmentRow[]>,
   buckets: { start: Date; end: Date; label: string }[], spreadByResource: Map<string, ResourceSpread>,
@@ -220,29 +280,9 @@ export function computeUsageProfileBars(
   // the identical map indexSpread had already built moments earlier in the
   // bars pass) into this same single per-resource loop, reusing indexSpread's
   // own capacityByDate directly instead of rebuilding it.
-  const bars = buckets.map(() => 0)
-  const actualFlags = buckets.map(() => false)
-  const capacityByBucket = buckets.map(() => 0)
-  for (const resource of trackedResources) {
-    const spread = spreadByResource.get(resource.id)
-    if (!spread) continue
-    const factor = usageUnitFactor(resource, unit)
-    const { hoursByAssignmentDate, capacityByDate } = indexSpread(spread)
-    const rows = (assignmentsByResource.get(resource.id) ?? [])
-      .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
-    buckets.forEach((bucket, i) => {
-      for (const d of eachDate(bucket.start, bucket.end)) {
-        capacityByBucket[i] += (capacityByDate.get(d) ?? 0) * factor
-        for (const row of rows) {
-          const hours = hoursByAssignmentDate.get(`${row.assignment.id}:${d}`)?.hours ?? 0
-          if (hours > 0) {
-            bars[i] += hours * factor
-            if (row.activity.ac !== null && (!dataDate || bucket.start <= dataDate)) actualFlags[i] = true
-          }
-        }
-      }
-    })
-  }
+  const { bars, actualFlags, capacityByBucket } = aggregateDemand(
+    trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate,
+  )
   const maxCapacity = capacityByBucket.reduce((max, c) => Math.max(max, c), 0)
   return { barValues: bars, hasActuals: actualFlags, limitValue: maxCapacity }
 }
@@ -290,23 +330,8 @@ export function computeUsageProfileSeries(
   const actualValues: (number | null)[] = buckets.map(() => null)
   const evValues: (number | null)[] = buckets.map(() => null)
 
-  for (const resource of trackedResources) {
-    const spread = spreadByResource.get(resource.id)
-    if (!spread) continue
-    const factor = usageUnitFactor(resource, unit)
-    const { hoursByAssignmentDate, capacityByDate } = indexSpread(spread)
-    const rows = (assignmentsByResource.get(resource.id) ?? [])
-      .filter(row => selectedActivityIds.size === 0 || selectedActivityIds.has(row.activity.id))
-    buckets.forEach((bucket, i) => {
-      for (const d of eachDate(bucket.start, bucket.end)) {
-        capacityByBucket[i] += (capacityByDate.get(d) ?? 0) * factor
-        for (const row of rows) {
-          const hours = hoursByAssignmentDate.get(`${row.assignment.id}:${d}`)?.hours ?? 0
-          if (hours > 0) budgetValues[i] += hours * factor
-        }
-      }
-    })
-  }
+  const demand = aggregateDemand(trackedResources, assignmentsByResource, buckets, spreadByResource, selectedActivityIds, unit, dataDate)
+  demand.bars.forEach((value, i) => { budgetValues[i] = value; capacityByBucket[i] = demand.capacityByBucket[i] })
 
   // One (activity, its resource) pair per activity, first-seen across the
   // tracked resources — matches the "one time-based resource" convention

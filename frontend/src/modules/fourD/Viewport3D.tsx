@@ -1,4 +1,8 @@
+import { mergeClipPlanes } from './clipPlaneOwnership'
+import { scheduleBindingKey, updateResolvedSchedule } from './timelineScheduleUpdate'
+import { fitSunShadow } from './shadowFrustum'
 import { updateMeshVisibility, updateInstanceVisibility } from './viewportVisibility'
+import { applyAnimationOpacity, bindAnimationShadows } from './animationRendering'
 import { materialScope } from './materialScope'
 import { SimulationPlayback } from '../simulator/SimulationPlayback'
 import { rememberDesignPose } from '../simulator/handling'
@@ -21,8 +25,17 @@ import { HAUL_ROAD_CLASS, footprintEdgesForMesh, restoreFootprintElements } from
 import { SitePlacementCatcher } from './SitePlacementCatcher'
 import type { EquipmentRig } from './equipmentRig'
 import { forwardRef, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { visibleViewportEvents } from './viewportPicking'
+import { GroupMoveGizmo } from './GroupMoveGizmo'
+import type { GroupMove, MoveTarget } from './groupMove'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
+import { ViewportPerformanceProbe } from './ViewportPerformanceProbe'
+import { createBatchAnimationGate } from './batchAnimationGate'
+import { createIndividualAnimationGate } from './individualAnimationGate'
+import { createNavigationSession } from './navigationSession'
+import { shouldSimplifyNavigation } from './navigationQuality'
+import { beginViewportWork, endViewportWork } from './viewportFrameMetrics'
 import { Environment, Grid, GizmoHelper, OrbitControls, Sky, TransformControls } from '@react-three/drei'
 import { SelectionGesture, sameSelectionHit } from './selectionGesture'
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
@@ -37,7 +50,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import type { EffectComposer as EffectComposerImpl } from 'postprocessing'
 import type { Activity } from '@/modules/scheduling/types'
 import { AxisGizmo } from './AxisGizmo'
-import { IdleRenderDriver, markRenderActivity, renderAllViewsNow, setOfflineExportActive } from './IdleRenderDriver'
+import { IdleRenderDriver, markRenderActivity, renderAllViewsNow, setOfflineExportActive, isOfflineExportActive } from './IdleRenderDriver'
 import { DEFAULT_ANIMATION_CONFIG, type AnimationProfile, type AnimationProfileConfig, type Axis } from './animationProfiles'
 // Type-only — see ifcModel.ts's own header + IfcDataPanel.tsx's matching
 // note: the real getExpressIdFromGuid is dynamic-import()ed inside
@@ -343,7 +356,7 @@ export interface ResolvedSectionBox {
 // not something newly introduced by sharing this component a second time.
 export const AmbientOcclusionEffect = lazy(() =>
   Promise.all([import('@react-three/postprocessing'), import('postprocessing')]).then(([{ EffectComposer, N8AO, ToneMapping }, { ToneMappingMode }]) => ({
-    default: ({ enabled, boostQuality, modelRadius }: { enabled: boolean; boostQuality: boolean; modelRadius: number }) => {
+    default: ({ enabled, boostQuality, modelRadius, movingRef, simplify = false }: { enabled: boolean; boostQuality: boolean; modelRadius: number; movingRef?: React.MutableRefObject<CameraSyncState | null>; simplify?: boolean }) => {
       const { gl, camera } = useThree()
       // `camera` in deps (2026-10-02, orthographic toggle): the composer is
       // rebuilt whenever R3F's camera changes, and its constructor forces
@@ -393,7 +406,12 @@ export const AmbientOcclusionEffect = lazy(() =>
       // same device-pixel space), so this only ever calls setSize on an
       // actual mismatch, not every single frame.
       const composerRef = useRef<EffectComposerImpl | null>(null)
+      const aoRef = useRef<React.ElementRef<typeof N8AO>>(null)
       useFrame(() => {
+        // Keep the composer and tone-mapping pass mounted: only bypass AO's
+        // expensive sampling/blur passes during an opted-in navigation drag.
+        // Captures and offline exports always use the requested effects.
+        if (aoRef.current) aoRef.current.enabled = !shouldSimplifyNavigation(simplify, !!movingRef?.current?.moving, boostQuality || isOfflineExportActive())
         const composer = composerRef.current
         if (!composer) return
         const canvas = gl.domElement
@@ -419,6 +437,7 @@ export const AmbientOcclusionEffect = lazy(() =>
       return (
         <EffectComposer ref={composerRef} enabled={enabled}>
           <N8AO
+            ref={aoRef}
             aoRadius={aoScale} intensity={0.8} distanceFalloff={aoScale}
             aoSamples={boostQuality ? 64 : 16} denoiseSamples={boostQuality ? 32 : 8}
             // Half-resolution AO in the live view (2026-10-02, per Maro live:
@@ -728,6 +747,12 @@ interface Props {
   // same "just hand over a ready callback" split as onToggleIsolate/
   // onShowAll above), rather than replacing what's visible the way Isolate
   // does — additive, so hiding a second batch doesn't un-hide the first.
+  groupMoveTargets?: MoveTarget[]
+  onGroupMove?: (move: GroupMove) => void
+  onBeginGroupMove?: (targets: MoveTarget[]) => GroupMove
+  onDuplicate?: () => void
+  canDuplicate?: boolean
+  duplicating?: boolean
   onHideSelected: () => void
   // Unload Selected (2026-07-26, per Maro: "i need to be able to unload
   // selected elements") — real disposal (elementBatching.ts's own
@@ -1035,6 +1060,8 @@ interface Props {
   // calls, unit: 'cost', bucketed to a fixed month zoom independent of
   // whatever the live Resource Usage window's own zoom is currently set
   // to. Viewport3D never recomputes this, only draws whatever it's handed.
+  onCostProfileDemandChange?: (needed: boolean) => void
+  costProfileLoading?: boolean
   costProfileBuckets: { start: Date; end: Date; label: string }[]
   costProfileValues: number[]
   costProfileResourceBreakdown: { name: string; values: number[] }[]
@@ -1372,7 +1399,7 @@ function ModelObjects({
   useEffect(() => {
     const heavyDeps = [
       objects, settings.showFaces, settings.renderMode, settings.showEdges, settings.showVarianceColors,
-      settings.showClashColors, settings.shadows, settings.xrayUnselected, hasSelection, upAxis, customTextures,
+      settings.showClashColors, settings.shadows, settings.xrayUnselected, settings.xrayUnselected && hasSelection, upAxis, customTextures,
       customOpacity, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, varianceByElementKey, clashByElementKey,
       materializeVersion, settings.realisticGlassTransmission, realisticMapping, realisticInfoVersion,
     ]
@@ -1852,6 +1879,17 @@ function ModelObjects({
             if (overrides?.map) { mat.map = overrides.map.texture; mat.color.set(0xffffff) }
             else if (original) { mat.map = original.map; mat.color.copy(original.color) }
 
+            // Static planning copies use the authored colour, independent of the blue selection tint.
+            if (isExpressSelected || isExpressAlsoSelected || isPlainObjectSelected) {
+              mat.userData.exportColour = '#' + mat.color.getHexString()
+              mat.userData.exportEmissive = 0
+              mat.userData.exportEmissiveIntensity = 0
+            } else {
+              delete mat.userData.exportColour
+              delete mat.userData.exportEmissive
+              delete mat.userData.exportEmissiveIntensity
+            }
+
             // Variance/clash colour-coding (2026-07-12) — applied here,
             // *underneath* the selection lerps just below, so selecting a
             // tinted element still reads as a real selection on top of it
@@ -1947,6 +1985,8 @@ function ModelObjects({
             mat.userData.surfaceBlend = !!original?.transparent && original.opacity === 1
             mat.depthWrite = mat.opacity < 1 ? false : (original?.depthWrite ?? true)
             mat.visible = !outline && mat.opacity > 0
+            mat.userData.surfaceDepthWrite = original?.depthWrite ?? true
+            mat.userData.surfaceVisible = !outline
             if (child.userData.ifcGeometryId !== undefined) {
               const tint = colourOverrideForMesh(child, mat, realisticInfo, objectMapping)
               setMeshOutline(child, outline && settings.showFaces, mat, tint ?? mat.color)
@@ -2889,24 +2929,6 @@ const EXPORT_CANCELLED = Symbol('export cancelled')
 // endpoint.
 const ANIMATION_VISIBILITY_EPSILON = 0.02
 
-// Caps how many materials get their GPU-facing `needsUpdate` flag set in a
-// single frame (2026-07-21 perf fix, per Maro — same bounded-budget idiom as
-// geometrySubdivision.ts's own MAX_TOTAL_SUBDIVIDED_TRIANGLES). Jumping the
-// timeline a long way (vs. smooth Play, where only a handful of elements
-// cross a state boundary in any given frame) can flip many linked elements'
-// state at once, and `material.needsUpdate = true` forces three.js to
-// synchronously recompile that material's shader program the next time it
-// renders — genuinely expensive, and this session's earlier fix (see
-// target.materials' own loop below) already established that doing this for
-// every changed material in one frame is fine at structural+architectural
-// scale but not at six combined discipline files' worth of linked elements.
-// Spreads a big jump's material changes across a handful of frames instead
-// of one — a brief, staggered "pop in" for the elements past this frame's
-// budget rather than a multi-second freeze. Pure pacing, no semantic change:
-// ordinary Play-speed scrubbing never comes close to this many changes in a
-// single frame, so behaviour there is unaffected.
-const MAX_NEEDS_UPDATE_PER_FRAME = 40
-
 // No longer takes elementKey/variance/clash args (2026-07-24, third pass)
 // — originalColor is a plain, untinted snapshot; TimelinePlayback's own
 // per-frame tick loop composes variance/clash tint fresh every frame
@@ -2943,6 +2965,7 @@ function collectStandardMaterials(
     materials.forEach((mat, i) => {
       if (!(mat instanceof THREE.MeshStandardMaterial)) return
       const originalColor = (originalSlots[i]?.color ?? mat.color).clone()
+      bindAnimationShadows(child)
       found.push({ material: mat, originalColor, mesh: child })
     })
   })
@@ -3088,7 +3111,7 @@ function EmbeddedAnimationLoop({
   animWindows: Map<string, { start: Date | null; end: Date | null }>
   timelineDateRef: React.MutableRefObject<Date | null>
 }) {
-  const mixersRef = useRef(new Map<string, { mixer: THREE.AnimationMixer; name: string }>())
+  const mixersRef = useRef(new Map<string, { mixer: THREE.AnimationMixer; name: string; object: THREE.Object3D }>())
 
   useEffect(() => {
     const mixers = mixersRef.current
@@ -3100,18 +3123,25 @@ function EmbeddedAnimationLoop({
       if (object.animations.length === 0 || mixers.has(id)) continue
       const mixer = new THREE.AnimationMixer(object)
       for (const clip of object.animations) mixer.clipAction(clip).play()
-      mixers.set(id, { mixer, name })
+      mixers.set(id, { mixer, name, object })
     }
   }, [objects])
 
   useFrame((_, delta) => {
     const now = timelineDateRef.current
-    for (const { mixer, name } of mixersRef.current.values()) {
+    for (const { mixer, name, object } of mixersRef.current.values()) {
       const window = animWindows.get(name)
       const active = !window || !window.start || !window.end || !now
         ? true
         : now.getTime() >= window.start.getTime() && now.getTime() <= window.end.getTime()
-      if (active) mixer.update(delta)
+      let visible = true
+      for (let node: THREE.Object3D | null = object; node; node = node.parent) {
+        if (!node.visible) { visible = false; break }
+      }
+      if (active) {
+        mixer.update(delta)
+        if (visible) markRenderActivity()
+      }
     }
   })
 
@@ -3150,12 +3180,6 @@ function EmbeddedAnimationLoop({
 // computeWorldClipPlanes (Material.clone deep-copies planes).
 const SECTION_BOX_IDLE_PLANES = () => Array.from({ length: 6 }, () => new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e9))
 
-function mergeClipPlanes(existing: THREE.Plane[] | null, owner: string, ownPlanes: THREE.Plane[]): THREE.Plane[] | null {
-  const foreign = (existing ?? []).filter(p => (p as THREE.Plane & { __clipOwner?: string }).__clipOwner !== owner)
-  for (const p of ownPlanes) (p as THREE.Plane & { __clipOwner?: string }).__clipOwner = owner
-  const combined = [...foreign, ...ownPlanes]
-  return combined.length > 0 ? combined : null
-}
 
 // Exported (2026-07-12, per Maro's "advanced 4D" baseline-vs-actual
 // compare request) so ComparisonViewportPane.tsx can mount its own instance
@@ -3172,7 +3196,11 @@ export function TimelinePlayback({
   clashByElementKey = EMPTY_CLASH_MAP,
   showClashColors = false,
   renderMode,
+  appearanceRevision,
 }: {
+  // Main viewport supplies a stable token for actual scene/appearance edits.
+  // Legacy/comparison callers retain reconciliation on every commit.
+  appearanceRevision?: object
   // Realistic mode's colour-replacing classes need a white per-instance base
   // here too (2026-10-02) — see the batch colour write below.
   renderMode?: string
@@ -3258,18 +3286,40 @@ export function TimelinePlayback({
   const targetsRef = useRef<ResolvedTimelineTarget[]>([])
   const pathTargetsRef = useRef<ResolvedPathTarget[]>([])
   const batchVisibilityTargetsRef = useRef<ResolvedBatchVisibilityTarget[]>([])
+  const batchFrameGate = useMemo(() => createBatchAnimationGate<ResolvedBatchVisibilityTarget>(), [])
+  const individualFrameGate = useMemo(() => createIndividualAnimationGate<ResolvedTimelineTarget>(), [])
+  const timingRenderer = useThree(s => s.gl)
+  // Opening a panel or pressing an unrelated button is not an animation edit.
+  // Preserve reconciliation for selection/material/isolation and timeline data,
+  // without discarding every paused target's cache on every UI commit.
+  useLayoutEffect(() => { batchFrameGate.invalidate(); individualFrameGate.invalidate() }, appearanceRevision ? [
+    appearanceRevision, dateRef, sceneObjects, activities, links, profiles, elementKeyframes, upAxis, ifcHandles,
+    paths, pathFollowers, selectedExpressId, materializeVersion, dateField, varianceByElementKey, showVarianceColors,
+    clashByElementKey, showClashColors, renderMode,
+  ] : undefined)
   // expressID -> { handle, target } for every element resolve() just gave a
   // ResolvedBatchVisibilityTarget (2026-07-22) — see migrateSelectedExpressId's
   // own header below for what this feeds. Rebuilt in lockstep with
   // batchVisibilityTargetsRef on every real resolve() pass; entries are
   // deleted as elements get individually migrated out, so a repeat click on
   // an already-migrated element is a single Map.has() miss, not repeated work.
-  const expressIdToBatchTargetRef = useRef<Map<number, { handle: IfcModelHandle; target: ResolvedBatchVisibilityTarget }>>(new Map())
+  const expressIdToBatchTargetRef = useRef<Map<number, { handle: IfcModelHandle; target: ResolvedBatchVisibilityTarget }[]>>(new Map())
+  const resolvedInputsRef = useRef<unknown[] | null>(null)
+
 
   useEffect(() => {
     let cancelled = false
 
     async function resolve() {
+      const bindingKey = scheduleBindingKey(activities, links, dateField === 'baseline')
+      const inputs = [sceneObjects, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField, materializeVersion, showVarianceColors ? varianceByElementKey : null, showVarianceColors, showClashColors ? clashByElementKey : null, showClashColors, upAxis, bindingKey]
+      if (resolvedInputsRef.current?.every((value, i) => value === inputs[i])) {
+        updateResolvedSchedule(targetsRef.current, activities, dateField === 'baseline')
+        updateResolvedSchedule(batchVisibilityTargetsRef.current, activities, dateField === 'baseline')
+        lastAppliedDateMs.current = null
+        return
+      }
+      resolvedInputsRef.current = null
       const activityById = new Map(activities.map(a => [a.id, a]))
       const profileById = new Map(profiles.map(p => [p.id, p]))
       // Dynamic import — see this component's own import block header for
@@ -3580,7 +3630,7 @@ export function TimelinePlayback({
                   batchVisibilityByKey.set(key, bvTarget)
 
                 }
-                const bvLink: ResolvedTimelineLink = { activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis }
+                const bvLink: ResolvedTimelineLink = { activityId: link.activity_id, activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis }
                 bvTarget.links.push(bvLink)
                 createdLinks.push(bvLink)
                 if (staggering && !staggerCenter && batchInfo.instances.length > 0) {
@@ -3614,7 +3664,7 @@ export function TimelinePlayback({
 
         for (const { object, elementKey } of resolved) {
           const target = getOrCreate(object, elementKey)
-          const targetLink: ResolvedTimelineLink = { activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis }
+          const targetLink: ResolvedTimelineLink = { activityId: link.activity_id, activity: window, startMs: windowStartMs, finishMs: windowFinishMs, profile, axis: profile.axis }
           target.links.push(targetLink)
           createdLinks.push(targetLink)
           if (staggering && !staggerCenter) {
@@ -3749,8 +3799,20 @@ export function TimelinePlayback({
             if (old.expressIdByInstanceId.get(instanceId) === old.expressID) updateInstanceVisibility(old.mesh, instanceId, true)
           }
         }
+        resolvedInputsRef.current = inputs
         targetsRef.current = [...byObject.values()]
         batchVisibilityTargetsRef.current = [...batchVisibilityByKey.values()]
+        // Selection materializes batch instances without rebuilding the schedule.
+        // Publish the migration index together with the targets, not while resolving.
+        expressIdToBatchTargetRef.current.clear()
+        const handlesByRoot = new Map<THREE.Object3D, IfcModelHandle>(ifcHandles.map(handle => [handle.object, handle]))
+        for (const target of batchVisibilityTargetsRef.current) {
+          const handle = handlesByRoot.get(target.root)
+          if (!handle) continue
+          const entries = expressIdToBatchTargetRef.current.get(target.expressID) ?? []
+          entries.push({ handle, target })
+          expressIdToBatchTargetRef.current.set(target.expressID, entries)
+        }
         for (const previous of pathTargetsRef.current) {
           const next = nextPathTargets.find(target => target.object === previous.object)
           if (!next || !next.orientToPath) {
@@ -3834,7 +3896,7 @@ export function TimelinePlayback({
 
     resolve()
     return () => { cancelled = true }
-  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField, materializeVersion, varianceByElementKey, showVarianceColors, clashByElementKey, showClashColors])
+  }, [sceneObjects, activities, links, profiles, elementKeyframes, ifcHandles, paths, pathFollowers, dateField, materializeVersion, varianceByElementKey, showVarianceColors, clashByElementKey, showClashColors, upAxis])
 
   // Surgical migration for one just-materialized element (2026-07-22) — see
   // this component's own selectedExpressId prop header for the full story
@@ -3852,8 +3914,9 @@ export function TimelinePlayback({
   // below is guaranteed to see whatever that call just produced.
   useEffect(() => {
     if (selectedExpressId === null) return
-    const entry = expressIdToBatchTargetRef.current.get(selectedExpressId)
-    if (!entry) return
+    const entries = expressIdToBatchTargetRef.current.get(selectedExpressId)
+    if (!entries) return
+    for (const entry of [...entries]) {
     const { handle, target: bvTarget } = entry
     const meshes = getMaterializedMeshes(handle.object, selectedExpressId)
     // Not actually materialized (yet, or ever, e.g. a transform-driven
@@ -3861,9 +3924,10 @@ export function TimelinePlayback({
     // batch fast path to begin with) — left in the map so a later
     // selection change checks again cheaply instead of assuming this one
     // negative result forever.
-    if (meshes.length === 0) return
+    if (meshes.length === 0) continue
 
-    expressIdToBatchTargetRef.current.delete(selectedExpressId)
+    const remaining = (expressIdToBatchTargetRef.current.get(selectedExpressId) ?? []).filter(candidate => candidate !== entry)
+    expressIdToBatchTargetRef.current.set(selectedExpressId, remaining)
     batchVisibilityTargetsRef.current = batchVisibilityTargetsRef.current.filter(t => t !== bvTarget)
     // bvTarget.links carries the exact same {activity, startMs, finishMs,
     // profile, axis} entries the batch fast path was already driving this
@@ -3945,6 +4009,7 @@ export function TimelinePlayback({
       }
     })
     targetsRef.current = [...targetsRef.current, ...migrated]
+    }
   }, [selectedExpressId])
 
   // Tracks the last date keyframed transforms were actually applied for
@@ -3974,12 +4039,18 @@ export function TimelinePlayback({
     if (!now || (
       targetsRef.current.length === 0 && pathTargetsRef.current.length === 0 && batchVisibilityTargetsRef.current.length === 0
     )) return
+    const workStarted = beginViewportWork(timingRenderer)
     const nowMs = now.getTime()
     const dateChanged = lastAppliedDateMs.current !== nowMs
     lastAppliedDateMs.current = nowMs
-    let needsUpdateBudget = MAX_NEEDS_UPDATE_PER_FRAME
 
     for (const target of targetsRef.current) {
+      if (!dateChanged && !target.object.userData.simulatorOwnsPose && target.cachedState
+        && target.cachedState.opacity <= ANIMATION_VISIBILITY_EPSILON) {
+        for (const { mesh } of target.materials) updateMeshVisibility(mesh, false)
+        continue
+      }
+      if (!individualFrameGate.needsUpdate(target, dateChanged)) continue
       const simulationControlled=!!target.object.userData.simulatorOwnsPose
       const hasKeyframes = Object.keys(target.keyframeTracks).length > 0
       // Only recomputed on an actual date change (see cachedActiveLink/
@@ -4072,7 +4143,7 @@ export function TimelinePlayback({
         // TimelinePlayback) so the two features' clips compose instead of
         // racing, regardless of which effect happens to run first.
         let growClipPlane: THREE.Plane | null = null
-        if (state.growProgress !== null && activeLink) {
+        if (state.growProgress !== null && state.growProgress < 1 && activeLink) {
           if (!target.worldBBox) {
             // Parents first (2026-10-03): setFromObject only refreshes the
             // object's own matrixWorld from its parent's cached one, and a
@@ -4122,8 +4193,7 @@ export function TimelinePlayback({
           // useFrame header above for the full "shadows of clipped-away
           // geometry still show" story; same fix, same reason, here too).
           material.clipShadows = true
-          const nextOpacity = state.opacity * (material.userData.surfaceBaseOpacity ?? 1)
-          const nextTransparent = nextOpacity < 1 || material.userData.surfaceBlend === true
+          applyAnimationOpacity(material, state.opacity)
           // state.color is a hex string (profile config), originalColor a
           // real, untinted THREE.Color — normalized through one reused
           // scratch Color (module-level, below) rather than allocating a
@@ -4140,26 +4210,7 @@ export function TimelinePlayback({
             if (varianceActive) _scratchColor.lerp(target.cachedVarianceIsLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, target.cachedVarianceMagnitude)
             if (clashActive) _scratchColor.lerp(CLASH_COLOR, CLASH_LERP)
           }
-          let changed = false
-          if (material.transparent !== nextTransparent) { material.transparent = nextTransparent; changed = true }
-          if (material.opacity !== nextOpacity) { material.opacity = nextOpacity; changed = true }
-          if (!material.color.equals(_scratchColor)) { material.color.copy(_scratchColor); changed = true }
-          // Frame-budgeted (2026-07-21) — see MAX_NEEDS_UPDATE_PER_FRAME's
-          // own header. The property values above are always written
-          // immediately regardless of budget (cheap, no GPU cost); only the
-          // `needsUpdate` flag itself — the expensive part — can be
-          // deferred to a later frame. pendingAnimUpdate (material.userData,
-          // same idiom as lambertVariant/hiddenLineVariant below) persists
-          // across frames so a material that missed this frame's budget
-          // isn't silently dropped: `changed` alone can't be relied on for
-          // this, since by the next frame the properties already match (we
-          // just wrote them) and would otherwise never re-trigger the flag.
-          if (changed) material.userData.pendingAnimUpdate = true
-          if (material.userData.pendingAnimUpdate && needsUpdateBudget > 0) {
-            material.needsUpdate = true
-            material.userData.pendingAnimUpdate = false
-            needsUpdateBudget--
-          }
+          if (!material.color.equals(_scratchColor)) material.color.copy(_scratchColor)
 
           // Combined with ModelObjects' own showFaces/isolate/hidden verdict
           // (cached on mount/settings-change as userData.baseVisible, since
@@ -4190,6 +4241,8 @@ export function TimelinePlayback({
           if (lambertVariant) {
             lambertVariant.transparent = material.transparent
             lambertVariant.opacity = material.opacity
+            lambertVariant.depthWrite = material.depthWrite
+            lambertVariant.visible = material.visible
             lambertVariant.color.copy(material.color)
             lambertVariant.clippingPlanes = material.clippingPlanes
             lambertVariant.clipShadows = true
@@ -4201,6 +4254,8 @@ export function TimelinePlayback({
             // only opacity/transparency need to track playback here.
             hiddenLineVariant.transparent = material.transparent
             hiddenLineVariant.opacity = material.opacity
+            hiddenLineVariant.depthWrite = material.depthWrite
+            hiddenLineVariant.visible = material.visible
             hiddenLineVariant.clippingPlanes = material.clippingPlanes
             hiddenLineVariant.clipShadows = true
           }
@@ -4233,112 +4288,120 @@ export function TimelinePlayback({
           }
         }
       }
+      if (!dateChanged) individualFrameGate.applied(target)
     }
 
+    endViewportWork(timingRenderer, '4D meshes', workStarted)
+    const batchWorkStarted = beginViewportWork(timingRenderer)
     // Batched-visibility fast path (2026-07-21) — see
     // ResolvedBatchVisibilityTarget's own header. No transform, no
     // individual mesh/material at all: just a per-instance visible flip
     // (and, only for profiles that ask for it, a colour tint) directly on
     // the shared THREE.BatchedMesh — draw-call count for this element never
     // changes no matter how the schedule links it.
-    for (const bv of batchVisibilityTargetsRef.current) {
-      if (dateChanged) {
-        bv.cachedActiveLink = pickActiveLink(bv.links, now)
-        bv.cachedState = bv.cachedActiveLink
-          ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now, upAxis)
-          : null
-        // Same per-real-date-change refresh as the individual-mesh path
-        // above (2026-07-24, third pass) — a batch instance's variance
-        // tint must turn on/off exactly when `now` crosses its own
-        // activity's start/finish too.
-        const variance = resolveVarianceTint(bv.elementKey, nowMs, varianceByElementKey)
-        bv.cachedVarianceMagnitude = variance.magnitude
-        bv.cachedVarianceIsLate = variance.isLate
-      }
-      const state = bv.cachedState
-      const scheduleVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
-      // Composed with ModelObjects' own isolate/hide verdict, not just the
-      // schedule's (2026-07-21 fix, per Maro: "still not isolating" — a
-      // real, confirmed bug, not the theoretical "corrected next frame"
-      // this comment used to claim). ModelObjects' settings-driven pass
-      // (showFaces/isolate/hidden) also calls setVisibleAt on this same
-      // BatchedMesh, but only on its own much rarer heavyChanged trigger,
-      // while this loop runs unconditionally every animation frame — so
-      // "an external change is corrected on the very next frame" only ever
-      // ran in this loop's own favour: the instant a schedule-linked
-      // element was isolated, this loop's next tick silently reasserted
-      // scheduleVisible over it, with zero awareness isolate mode even
-      // existed, permanently. batchBaseVisibleByInstanceId (set by that
-      // same ModelObjects pass, immediately above in this same file) is
-      // that verdict, cached per instance the same way an individual
-      // mesh's own userData.baseVisible already is — ANDed in here exactly
-      // like `(mesh.userData.baseVisible ?? true) && state.opacity > ...`
-      // already does for the individual-mesh path a few dozen lines above.
-      for (const { instanceId } of bv.instances) {
-        if (bv.expressIdByInstanceId.get(instanceId) === bv.expressID) {
-          updateInstanceVisibility(bv.mesh, instanceId, scheduleVisible)
+    if (batchFrameGate.needsUpdate(batchVisibilityTargetsRef.current, dateChanged)) {
+      for (const bv of batchVisibilityTargetsRef.current) {
+        if (dateChanged) {
+          bv.cachedActiveLink = pickActiveLink(bv.links, now)
+          bv.cachedState = bv.cachedActiveLink
+            ? computeAppliedAnimationStateAt(bv.cachedActiveLink, now, upAxis)
+            : null
+          // Same per-real-date-change refresh as the individual-mesh path
+          // above (2026-07-24, third pass) — a batch instance's variance
+          // tint must turn on/off exactly when `now` crosses its own
+          // activity's start/finish too.
+          const variance = resolveVarianceTint(bv.elementKey, nowMs, varianceByElementKey)
+          bv.cachedVarianceMagnitude = variance.magnitude
+          bv.cachedVarianceIsLate = variance.isLate
         }
-      }
-      // Translate/fall (2026-10-03) — the element's rest matrix shifted by
-      // the profile's offset, written only when the offset changes. The
-      // offset is in the model group's space, the same space an individual
-      // element mesh's own `position` (and so the non-batched path's
-      // basePosition + positionOffset) lives in.
-      const offset = state?.positionOffset
-      const offsetKey = offset ? `${offset[0]},${offset[1]},${offset[2]}` : '0,0,0'
-      if (bv.lastOffsetKey !== offsetKey) {
-        for (const inst of bv.instances) {
-          if (bv.expressIdByInstanceId.get(inst.instanceId) !== bv.expressID) continue
-          _scratchMatrix.copy(inst.restMatrix)
-          if (offset) _scratchMatrix.premultiply(_scratchTranslation.makeTranslation(offset[0], offset[1], offset[2]))
-          setBatchedInstanceMatrix(bv.root, bv.mesh, inst.instanceId, inst.geometryId, _scratchMatrix)
-        }
-        bv.lastOffsetKey = offsetKey
-      }
-      // null once the profile's own colour window has passed (see
-      // computeAppliedAnimationStateAt's own header) — restores each
-      // instance's real imported colour (plus any live variance/clash
-      // tint) rather than leaving the last tint applied stuck on forever.
-      // nextColorKey is a composite (2026-07-24, third pass — see
-      // lastColorKey's own header): profile colour alone used to be the
-      // only thing that could change here, but variance tint can now
-      // switch on/off independently of it (the activity window opening/
-      // closing) while the profile's own colour stays exactly `null`
-      // throughout, so the write-gate has to notice that too.
-      const nextColorHex = state?.color ?? null
-      const clashActive = showClashColors && bv.elementKey ? (clashByElementKey.get(bv.elementKey) ?? false) : false
-      const varianceActive = showVarianceColors && bv.cachedVarianceMagnitude > 0
-      const nextColorKey = `${nextColorHex}|${varianceActive ? bv.cachedVarianceMagnitude.toFixed(3) : 0}|${bv.cachedVarianceIsLate}|${clashActive}|${renderMode === 'realistic' ? 'r' : ''}`
-      if (bv.lastColorKey !== nextColorKey) {
-        if (nextColorHex) {
-          _scratchColor.set(nextColorHex)
-          for (const { instanceId } of bv.instances) {
-            if (bv.expressIdByInstanceId.get(instanceId) === bv.expressID) bv.mesh.setColorAt(instanceId, _scratchColor)
-          }
-        } else {
-          // Realistic mode (2026-10-02, per Maro: a roof remapped to Timber
-          // "goes back to a green for some reason"): an instance whose class
-          // replaces the imported colour (timber/brick/grass/...) must keep
-          // the white base ModelObjects' own batch pass gives it so the
-          // class texture's colour shows — writing the raw IFC colour here
-          // re-tinted the texture with it every time this colour key
-          // changed (activity windows opening/closing, a re-resolve), and
-          // whichever of the two writers ran last won.
-          const realisticClasses = renderMode === 'realistic'
-            ? bv.mesh.userData.realisticActiveClasses as Uint8Array | undefined
-            : undefined
-          for (const { instanceId, originalColor } of bv.instances) {
-            if (bv.expressIdByInstanceId.get(instanceId) !== bv.expressID) continue
-            _scratchColor.copy(realisticClasses ? realisticInstanceBase(bv.mesh, instanceId, originalColor, REALISTIC_WHITE) : originalColor)
-            if (varianceActive) _scratchColor.lerp(bv.cachedVarianceIsLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, bv.cachedVarianceMagnitude)
-            if (clashActive) _scratchColor.lerp(CLASH_COLOR, CLASH_LERP)
-            bv.mesh.setColorAt(instanceId, _scratchColor)
+        const state = bv.cachedState
+        const scheduleVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
+        // Composed with ModelObjects' own isolate/hide verdict, not just the
+        // schedule's (2026-07-21 fix, per Maro: "still not isolating" — a
+        // real, confirmed bug, not the theoretical "corrected next frame"
+        // this comment used to claim). ModelObjects' settings-driven pass
+        // (showFaces/isolate/hidden) also calls setVisibleAt on this same
+        // BatchedMesh, but only on its own much rarer heavyChanged trigger,
+        // while this loop runs unconditionally every animation frame — so
+        // "an external change is corrected on the very next frame" only ever
+        // ran in this loop's own favour: the instant a schedule-linked
+        // element was isolated, this loop's next tick silently reasserted
+        // scheduleVisible over it, with zero awareness isolate mode even
+        // existed, permanently. batchBaseVisibleByInstanceId (set by that
+        // same ModelObjects pass, immediately above in this same file) is
+        // that verdict, cached per instance the same way an individual
+        // mesh's own userData.baseVisible already is — ANDed in here exactly
+        // like `(mesh.userData.baseVisible ?? true) && state.opacity > ...`
+        // already does for the individual-mesh path a few dozen lines above.
+        for (const { instanceId } of bv.instances) {
+          if (bv.expressIdByInstanceId.get(instanceId) === bv.expressID) {
+            updateInstanceVisibility(bv.mesh, instanceId, scheduleVisible)
           }
         }
-        bv.lastColorKey = nextColorKey
+        // Translate/fall (2026-10-03) — the element's rest matrix shifted by
+        // the profile's offset, written only when the offset changes. The
+        // offset is in the model group's space, the same space an individual
+        // element mesh's own `position` (and so the non-batched path's
+        // basePosition + positionOffset) lives in.
+        const offset = state?.positionOffset
+        const offsetKey = offset ? `${offset[0]},${offset[1]},${offset[2]}` : '0,0,0'
+        if (bv.lastOffsetKey !== offsetKey) {
+          for (const inst of bv.instances) {
+            if (bv.expressIdByInstanceId.get(inst.instanceId) !== bv.expressID) continue
+            _scratchMatrix.copy(inst.restMatrix)
+            if (offset) _scratchMatrix.premultiply(_scratchTranslation.makeTranslation(offset[0], offset[1], offset[2]))
+            setBatchedInstanceMatrix(bv.root, bv.mesh, inst.instanceId, inst.geometryId, _scratchMatrix)
+          }
+          bv.lastOffsetKey = offsetKey
+        }
+        // null once the profile's own colour window has passed (see
+        // computeAppliedAnimationStateAt's own header) — restores each
+        // instance's real imported colour (plus any live variance/clash
+        // tint) rather than leaving the last tint applied stuck on forever.
+        // nextColorKey is a composite (2026-07-24, third pass — see
+        // lastColorKey's own header): profile colour alone used to be the
+        // only thing that could change here, but variance tint can now
+        // switch on/off independently of it (the activity window opening/
+        // closing) while the profile's own colour stays exactly `null`
+        // throughout, so the write-gate has to notice that too.
+        const nextColorHex = state?.color ?? null
+        const clashActive = showClashColors && bv.elementKey ? (clashByElementKey.get(bv.elementKey) ?? false) : false
+        const varianceActive = showVarianceColors && bv.cachedVarianceMagnitude > 0
+        const nextColorKey = `${nextColorHex}|${varianceActive ? bv.cachedVarianceMagnitude.toFixed(3) : 0}|${bv.cachedVarianceIsLate}|${clashActive}|${renderMode === 'realistic' ? 'r' : ''}`
+        if (bv.lastColorKey !== nextColorKey) {
+          if (nextColorHex) {
+            _scratchColor.set(nextColorHex)
+            for (const { instanceId } of bv.instances) {
+              if (bv.expressIdByInstanceId.get(instanceId) === bv.expressID) bv.mesh.setColorAt(instanceId, _scratchColor)
+            }
+          } else {
+            // Realistic mode (2026-10-02, per Maro: a roof remapped to Timber
+            // "goes back to a green for some reason"): an instance whose class
+            // replaces the imported colour (timber/brick/grass/...) must keep
+            // the white base ModelObjects' own batch pass gives it so the
+            // class texture's colour shows — writing the raw IFC colour here
+            // re-tinted the texture with it every time this colour key
+            // changed (activity windows opening/closing, a re-resolve), and
+            // whichever of the two writers ran last won.
+            const realisticClasses = renderMode === 'realistic'
+              ? bv.mesh.userData.realisticActiveClasses as Uint8Array | undefined
+              : undefined
+            for (const { instanceId, originalColor } of bv.instances) {
+              if (bv.expressIdByInstanceId.get(instanceId) !== bv.expressID) continue
+              _scratchColor.copy(realisticClasses ? realisticInstanceBase(bv.mesh, instanceId, originalColor, REALISTIC_WHITE) : originalColor)
+              if (varianceActive) _scratchColor.lerp(bv.cachedVarianceIsLate ? VARIANCE_LATE_COLOR : VARIANCE_EARLY_COLOR, bv.cachedVarianceMagnitude)
+              if (clashActive) _scratchColor.lerp(CLASH_COLOR, CLASH_LERP)
+              bv.mesh.setColorAt(instanceId, _scratchColor)
+            }
+          }
+          bv.lastColorKey = nextColorKey
+        }
       }
+      batchFrameGate.applied()
     }
 
+    endViewportWork(timingRenderer, '4D batches', batchWorkStarted)
+    const otherWorkStarted = beginViewportWork(timingRenderer)
     // Mode C runs LAST, deliberately (2026-07-12 fix, per Maro: "the
     // profile isnt working right... profile + path now both fight/glitch")
     // — the first attempt at this fix only guarded Mode A's own transform
@@ -4363,8 +4426,12 @@ export function TimelinePlayback({
     // callback. Reconcile after playback too, so a single demanded/exported
     // frame never draws the previous date's outlines.
     for (const { object } of sceneObjects) syncEdgesBatch(object)
+    endViewportWork(timingRenderer, '4D paths/edges', otherWorkStarted)
 
-    if (activeObjectId) onTick()
+    // Selection and gizmo edits already notify React through their own handlers.
+    // Orbiting a paused sequence must not rerender the whole BIM workspace.
+    // Keep material/visibility reconciliation above running to preserve scrubbing.
+    if (activeObjectId && dateChanged) onTick()
   })
 
   return null
@@ -4527,9 +4594,9 @@ function ActiveCameraPose({ activeCamera, elementKeyframes, timelineDateRef, con
 //   camera's focal length at its own target distance.
 // Drops Realistic mode's glass transmission pass while an orbit drag is in
 // progress (see setRealisticGlassMoving, realisticMaterials.ts) and restores
-// it on release. Listens to the same OrbitControls start/end events
-// ShadowFrustumSync uses for its own shadow-map freeze.
-function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify }: {
+// it once navigation settles. Wheel events are grouped into one session;
+// OrbitControls otherwise sends start/end before a zoom frame can render.
+function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify, capturing }: {
   controlsRef: React.MutableRefObject<OrbitControlsImpl | null>
   // Publishes drag start/end to synced comparison views (see
   // CameraSyncState.moving); the version bump makes them render once more
@@ -4539,6 +4606,7 @@ function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify 
   enabled: boolean
   // "Simplify while orbiting" (movingDetail.ts) — independent of render mode.
   simplify: boolean
+  capturing: boolean
 }) {
   const invalidate = useThree(s => s.invalidate)
   const get = useThree(s => s.get)
@@ -4549,9 +4617,19 @@ function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify 
   const simplifyRef = useRef(simplify)
   simplifyRef.current = simplify
   const listenedRef = useRef<OrbitControlsImpl | null>(null)
+  const cleanupRef = useRef<(() => void) | null>(null)
+  const sessionRef = useRef<ReturnType<typeof createNavigationSession> | null>(null)
+  const capturingRef = useRef(capturing)
+  capturingRef.current = capturing
+  useLayoutEffect(() => { if (capturing) sessionRef.current?.finish() }, [capturing])
+  useEffect(() => () => { cleanupRef.current?.() }, [])
+  useEffect(() => () => {
+    for (const { object } of objects) { restoreAfterMoving(object); setRealisticGlassMoving(object, false) }
+  }, [objects])
   useFrame(() => {
     const controls = controlsRef.current
     if (!controls || listenedRef.current === controls) return
+    cleanupRef.current?.()
     listenedRef.current = controls
     const publishMoving = (moving: boolean) => {
       const prev = syncRef.current
@@ -4563,28 +4641,53 @@ function MovingQualityDriver({ controlsRef, syncRef, objects, enabled, simplify 
         moving,
       }
     }
-    controls.addEventListener('start', () => {
+    const onStart = () => {
+      if (capturingRef.current || isOfflineExportActive()) return
       publishMoving(true)
+      for (const { object } of objectsRef.current) {
+        const batch = object.userData.batch as BatchState | undefined
+        if (batch) batch.mesh.perObjectFrustumCulled = true
+      }
       if (simplifyRef.current) {
         const { camera, size } = get()
         for (const { object } of objectsRef.current) hideSmallWhileMoving(object, camera, size.height)
       }
       if (!enabledRef.current) return
       for (const { object } of objectsRef.current) setRealisticGlassMoving(object, true)
-    })
-    controls.addEventListener('end', () => {
+    }
+    const onEnd = () => {
       publishMoving(false)
       for (const { object } of objectsRef.current) {
+        const batch = object.userData.batch as BatchState | undefined
+        if (batch) batch.mesh.perObjectFrustumCulled = false
         restoreAfterMoving(object)
         setRealisticGlassMoving(object, false)
       }
       invalidate()
-    })
+    }
+    const session = createNavigationSession(onStart, onEnd)
+    sessionRef.current = session
+    controls.addEventListener('start', session.start)
+    controls.addEventListener('end', session.end)
+    controls.addEventListener('change', session.change)
+    cleanupRef.current = () => {
+      controls.removeEventListener('start', session.start)
+      controls.removeEventListener('end', session.end)
+      controls.removeEventListener('change', session.change)
+      session.finish()
+      sessionRef.current = null
+    }
   })
+  // Offline export can start without a React commit. Restore temporary detail
+  // before any animation/effect/render pass of its first captured frame.
+  useFrame(() => { if (isOfflineExportActive()) sessionRef.current?.finish() }, -100)
   // Leaving Realistic mode or turning transmission off mid-drag: restore.
   useEffect(() => {
     if (!enabled) for (const { object } of objectsRef.current) setRealisticGlassMoving(object, false)
   }, [enabled])
+  useEffect(() => {
+    if (!simplify) for (const { object } of objectsRef.current) restoreAfterMoving(object)
+  }, [simplify])
   return null
 }
 
@@ -4962,18 +5065,10 @@ export function ShadowFrustumSync({
     const visibleRadius = camera instanceof THREE.OrthographicCamera
       ? orthoVisibleHeight(camera)
       : distance * Math.tan((fov / 2) * (Math.PI / 180)) * 2
-    const shadowRadius = THREE.MathUtils.clamp(visibleRadius, 10, modelRadius)
-    const shadowCam = light.shadow.camera
-    shadowCam.left = -shadowRadius * 2
-    shadowCam.right = shadowRadius * 2
-    shadowCam.top = shadowRadius * 2
-    shadowCam.bottom = -shadowRadius * 2
-    shadowCam.far = sunRadius + shadowRadius * 2
-    shadowCam.updateProjectionMatrix()
-    light.shadow.normalBias = shadowRadius * 0.002
-    // toPrecision: an orbit preserves distance only up to float drift in
-    // the last digits, which must not count as "the frustum changed".
-    const shadowKey = `${shadowRadius.toPrecision(5)}|${light.position.toArray().map(v => v.toPrecision(6)).join(',')}|${light.shadow.mapSize.x}`
+    const frustumKey = fitSunShadow(light, controls.target, visibleRadius, modelRadius, sunRadius)
+    // Include the light-space focus: panning must refresh shadows even at
+    // constant zoom. Pure orbit can still reuse the same map during a drag.
+    const shadowKey = `${frustumKey}|${light.position.toArray().map(v => v.toPrecision(6)).join(',')}|${light.target.position.toArray().map(v => v.toPrecision(6)).join(',')}|${light.shadow.mapSize.x}`
     gl.shadowMap.autoUpdate = !(draggingRef.current && shadowKey === lastShadowKeyRef.current)
     lastShadowKeyRef.current = shadowKey
     // Shadow-map resolution reallocation (checked directly in
@@ -5200,7 +5295,7 @@ export function Viewport3D({
   siteScene,
   equipmentRigs, equipmentPreview, onEquipmentError, equipmentVisual, equipmentObjects, simulationScenario, onSimulationError, sequenceExportRequest, onSequenceExportDone,
   settings, importedObjects: modelObjects, transformTick, meshAnimWindows, selectedExpressId, selectedExpressIds, onSelect, activeObjectId, selectedObjectIds, onSelectObject,
-  onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget,
+  onSelectAll, materializeVersion, realisticMapping, realisticInfoVersion, onBoxSelect, isolateMode, isolatedObjectIds, isolatedElementKeys, hiddenExpressIds, onToggleIsolate, onShowAll, onHideSelected, onUnloadSelected, linkedActivitiesWidget, groupMoveTargets, onGroupMove, onBeginGroupMove, onDuplicate, canDuplicate, duplicating,
   linkedObjectIds, linkedElementKeys, onSelectUnassigned, onFilterApply,
   gizmoMode, gizmoSpace, editPivot, snapToSurface, onTransformChange, onTimelineTick,
   environmentTexture, onEnvironmentError, customTextures, customOpacity, cameraSyncRef,
@@ -5220,7 +5315,7 @@ export function Viewport3D({
   varianceByElementKey, clashByElementKey, pivotPicking, onPickPivotPoint, elementParents,
   measurements, unitPreference, selectedMeasurementId, onSelectMeasurement, measuringTool, measuringPoints, measuringToMetres, onMeasurementHit,
   measurementHoverPoint, onMeasurementHoverPoint,
-  comparisonCanvasRefs, onCaptureQualityChange, onCaptureBackgroundChange, costProfileBuckets, costProfileValues, costProfileResourceBreakdown,
+  comparisonCanvasRefs, onCaptureQualityChange, onCaptureBackgroundChange, onCostProfileDemandChange, costProfileLoading, costProfileBuckets, costProfileValues, costProfileResourceBreakdown,
 }: Props) {
   useLayoutEffect(() => {
     if (settings.importedLights !== false) return
@@ -5229,6 +5324,12 @@ export function Viewport3D({
     return () => { for (const root of roots) setImportedLightsEnabled(root, true) }
   }, [modelObjects, settings.importedLights])
   const importedObjects = useMemo(() => [...modelObjects, ...(siteScene?.objects || [])], [modelObjects, siteScene?.objects])
+  const animationAppearanceRevision = useMemo(() => ({}), [
+    importedObjects, transformTick, customTextures, customOpacity, settings, realisticMapping, realisticInfoVersion,
+    selectedExpressId, selectedExpressIds, selectedObjectIds, materializeVersion, isolateMode, isolatedObjectIds,
+    isolatedElementKeys, hiddenExpressIds, varianceByElementKey, clashByElementKey, sectionBoxes, elementParents,
+    equipmentVisual, simulationScenario,
+  ])
   const activeImportedObject = importedObjects.find(o => o.id === activeObjectId) ?? null
   const activeCamera = cameras.find(c => c.id === activeCameraId) ?? null
   // The gizmo targets the *specific selected sub-element*, not the whole
@@ -5581,66 +5682,11 @@ export function Viewport3D({
   // read it back at capture time.
   const exportLabelsRef = useRef<ExportLabelRegistry>(createExportLabelRegistry())
   const controlsRef = useRef<OrbitControlsImpl | null>(null)
-  // "Real-time path tracer" was the actual ask, scoped down deliberately
-  // (2026-07-11, per Maro: "i just wont move around so it gives me a good
-  // preview") — true GPU path tracing needs a three.js version bump (this
-  // app is 11 minors behind what three-gpu-pathtracer's own peerDependencies
-  // require), a new WebGPU-only rendering pipeline, and three new
-  // dependencies, judged too risky given how much of this app's own code
-  // already reaches directly into three.js internals; Maro agreed to this
-  // lower-risk alternative instead. Delivers the same underlying want — a
-  // noticeably better-looking preview once the camera settles — by boosting
-  // the *existing* raster pipeline's own quality knobs (supersampling via
-  // Canvas's dpr, shadow-map resolution) only while genuinely idle, since
-  // none of those are affordable to run at
-  // full strength during live orbiting. True path tracing (accurate global
-  // illumination, reflections, soft shadows from real light transport) is
-  // still not what this is — it's the existing look, just cleaner/sharper —
-  // an honest limitation worth remembering if this ever gets revisited.
-  //
-  // Tracks OrbitControls' own 'start'/'end' interaction events (fired by
-  // three.js's OrbitControls itself, not something built here) rather than
-  // polling — 'end' means the drag/zoom/pan that was happening has genuinely
-  // stopped, not just "no mouse movement this exact frame."
-  const [boostQuality, setBoostQuality] = useState(false)
-  useEffect(() => {
-    const controls = controlsRef.current
-    if (!controls) return
-    const onStart = () => setBoostQuality(false)
-    const onEnd = () => setBoostQuality(true)
-    controls.addEventListener('start', onStart)
-    controls.addEventListener('end', onEnd)
-    return () => {
-      controls.removeEventListener('start', onStart)
-      controls.removeEventListener('end', onEnd)
-    }
-  }, [])
-  // Per-instance frustum culling, only while actively orbiting (2026-07-25,
-  // per Maro: "the navigation/orbit speed... slow just turning around" on a
-  // real high-rise file — 265,943 batched instances, 100% batched, per the
-  // app's own console.info at import). loadIfcModel (ifcModel.ts) sets each
-  // BatchedMesh's own perObjectFrustumCulled permanently false — see that
-  // file's own header for why: a real, previously-reported bug (columns
-  // flickering in/out near the frustum edge from floating-point noise
-  // during continuous rotation). Leaving culling off ALWAYS was the fix, at
-  // the cost of every instance being submitted to the GPU every frame
-  // regardless of whether it's actually on screen — for a building this
-  // size, that's the dominant cost of "just turning around" while zoomed
-  // into any one part of it. Reusing the exact same boostQuality signal
-  // this file already tracks for shadow-map resolution (OrbitControls'
-  // own 'start'/'end' events, not polling) rather than inventing a second
-  // one: culled ON only during the drag itself (boostQuality false — real
-  // GPU savings exactly when responsiveness matters most), OFF the instant
-  // the camera settles (boostQuality true — restores the original
-  // flicker-free guarantee for the static, "look closely" case the bug was
-  // actually reported against). A geometry-side change (a boolean flag on
-  // an already-shared mesh), not a per-frame cost of its own.
-  useEffect(() => {
-    for (const handle of ifcHandles) {
-      const batch = handle.object.userData.batch as BatchState | null | undefined
-      if (batch) batch.mesh.perObjectFrustumCulled = !boostQuality
-    }
-  }, [boostQuality, ifcHandles])
+  const [showPerformance, setShowPerformance] = useState(false)
+  const performanceOutput = useRef<HTMLPreElement>(null)
+  // Navigation quality is managed imperatively by MovingQualityDriver.
+  // Mouse release must not rebuild the BIM React tree or switch the live view
+  // to capture-quality AO / 8192px shadows. Capture quality is explicit below.
   // 2026-07-19 fix, per Maro: "when i move the axis angles the elements in
   // view visibly shake before settling" plus a separate, intermittent
   // "exploded on refresh" report — both traced to real, repeated
@@ -5756,7 +5802,7 @@ export function Viewport3D({
   // treatment (shadows included), not just the extra resolution.
   // Draft-quality video exports skip the capture boost (videoDraft,
   // renderCaptureSettings.ts) — the views render as they do live.
-  const highQuality = captureDprMultiplier !== null ? !captureDraft : boostQuality
+  const highQuality = captureDprMultiplier !== null && !captureDraft
   // Shadow-map texel density (2026-08-31, per Maro's own report: shadows
   // "disappeared" once a second, much larger IFC model — e.g. a site-
   // context import — joined the scene). The shadow-camera frustum below
@@ -5833,6 +5879,9 @@ export function Viewport3D({
   const [overlaySettings, setOverlaySettings] = useState(loadOverlays)
   const overlays = overlaySettings[hidePathHelpers ? 'render' : 'app']
   const [renderCaptureSettings, setRenderCaptureSettings] = useState<RenderCaptureSettings>(loadRenderCaptureSettings)
+  useEffect(() => {
+    onCostProfileDemandChange?.(renderCaptureSettings.includeCostProfile)
+  }, [onCostProfileDemandChange, renderCaptureSettings.includeCostProfile])
   const handleRenderCaptureSettingsChange = (next: RenderCaptureSettings) => {
     setRenderCaptureSettings(next)
     saveRenderCaptureSettings(next)
@@ -6097,6 +6146,7 @@ export function Viewport3D({
   }, [isolateViewRequest])
 
   const handleCaptureImage = async () => {
+    if (renderCaptureSettings.includeCostProfile && costProfileLoading) throw Error('Cost profile is still loading. Please retry when resource data has loaded.')
     const canvas = rendererRef.current?.domElement
     if (!canvas) return
     // Include Comparison Panes (2026-07-24, generalized 2026-08-03 for up
@@ -6392,6 +6442,7 @@ export function Viewport3D({
   const reportSimulationError = useCallback((error:string) => {simulationErrorRef.current=error;onSimulationError?.(error)}, [onSimulationError])
   const handleExportVideo = async (sequence?:{durationSec:number}) => {
     const motionExport = !sequence && cameraMotion.state.current.active && cameraMotion.state.current.shots.length > 0
+    if (renderCaptureSettings.includeCostProfile && costProfileLoading) throw Error('Cost profile is still loading. Please retry when resource data has loaded.')
     if (isExportingVideo) throw Error('A video export is already running.')
     if (!sequence && !motionExport && (!scheduleStart || !scheduleEnd)) return
     if (sequence && (!simulationScenario?.result || simulationScenario.status!=='current')) throw Error('Run the current sequence before exporting.')
@@ -7048,6 +7099,11 @@ export function Viewport3D({
         >
           Hide
         </button>
+        {onDuplicate && <button type="button" onClick={onDuplicate} disabled={!canDuplicate || duplicating}
+          title="Create independent planning copies in 3D Site tools at the selected positions"
+          className="text-xs px-2 py-1 rounded-md border border-gray-300 dark:border-prosota-line bg-white/90 text-gray-600 dark:text-prosota-muted hover:bg-gray-50 dark:hover:bg-prosota-panel2 shadow-sm disabled:opacity-50">
+          {duplicating ? 'Duplicating…' : 'Duplicate'}
+        </button>}
         <button
           onClick={onUnloadSelected}
           disabled={selectedExpressIds.size === 0}
@@ -7129,7 +7185,13 @@ export function Viewport3D({
           settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length}
           timing={timelineFormat ? { format: timelineFormat, ...captureTiming, onChange: setCaptureTiming } : null}
         />
+        <button className="text-xs px-2 py-1 rounded-md border bg-white/90 text-gray-600" aria-pressed={showPerformance}
+          onClick={() => setShowPerformance(value => !value)}>Performance</button>
       </div>
+      {showPerformance && <div className="absolute bottom-3 left-3 z-20 rounded border bg-white/95 text-gray-800 p-3 shadow text-xs max-w-[90%]">
+        <pre ref={performanceOutput} className="whitespace-pre-wrap">Drag to orbit for a few seconds to measure this view.</pre>
+        <div className="mt-2">CPU submission excludes GPU execution. Figures remain local.</div>
+      </div>}
       {/* "Linked Activities" widget (2026-07-09) — sits directly below the
           Isolate/Show All toolbar, since it's only ever meaningful while
           isolating; renders as nothing (LinkedActivitiesWidget.tsx's own
@@ -7164,6 +7226,7 @@ export function Viewport3D({
         )
       })()}
       <Canvas
+        events={visibleViewportEvents}
         // 'demand' + IdleRenderDriver below (2026-09-30) — see that file's
         // header: a static scene no longer redraws every frame.
         frameloop={active ? 'demand' : 'never'}
@@ -7229,7 +7292,7 @@ export function Viewport3D({
         {active && (
           <IdleRenderDriver
             dateRef={timelineDateRef}
-            continuous={isExportingVideo || importedObjects.some(o => o.object.animations.length > 0)}
+            continuous={isExportingVideo}
           />
         )}
         <CameraSync syncRef={cameraSyncRef} controlsRef={controlsRef} fieldOfView={settings.fieldOfView} />
@@ -7494,6 +7557,7 @@ export function Viewport3D({
             clashByElementKey={clashByElementKey}
             showClashColors={settings.showClashColors}
             renderMode={settings.renderMode}
+            appearanceRevision={animationAppearanceRevision}
           />
           <EquipmentVisualEditor transformMode={gizmoMode} transformSpace={gizmoSpace} state={equipmentVisual ?? null} objects={equipmentObjects ?? timelineSceneObjects} />
           <EquipmentPlayback siteScene={siteScene} paths={paths} daysPerSecond={timelineFormat?.speedDaysPerSecond??1} rendering={hidePathHelpers} visual={equipmentVisual} rigs={equipmentRigs} objects={equipmentObjects ?? timelineSceneObjects} dateRef={pathDateRef} preview={equipmentPreview} onError={onEquipmentError} />
@@ -7637,8 +7701,9 @@ export function Viewport3D({
             pose when the timeline date itself actually changes, so it
             never fights a live drag at a static date). */}
         <StableOrbitControls ref={controlsRef} makeDefault enableRotate={!planMode} enabled={!boxSelectMode && !sectionBoxDragging && !cameraMotion.active && !pickingMotionTarget} />
+        {showPerformance && <ViewportPerformanceProbe output={performanceOutput} controlsRef={controlsRef} />}
         <ProjectionController orthographic={settings.orthographic} controlsRef={controlsRef} />
-        <MovingQualityDriver controlsRef={controlsRef} syncRef={cameraSyncRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} simplify={settings.simplifyWhileOrbiting} />
+        <MovingQualityDriver controlsRef={controlsRef} syncRef={cameraSyncRef} objects={importedObjects} enabled={settings.renderMode === 'realistic' && settings.realisticGlassTransmission} simplify={settings.simplifyWhileOrbiting} capturing={captureDprMultiplier !== null} />
         {/* Suppressed while the active object has a visible Section Box
             (2026-09-01, per Maro live: "after i click rotate and rotate
             and go back to resize, i'm unable to manipulate the individual
@@ -7653,6 +7718,9 @@ export function Viewport3D({
             one of the box's own per-face cone handles could land on this
             gizmo's own arm instead, especially in Scale mode, matching
             the reported "scales the whole thing" symptom exactly. */}
+        {!simulationScenario && overlays.helpers && !equipmentVisual && !!groupMoveTargets?.length && onGroupMove && (
+          <GroupMoveGizmo targets={groupMoveTargets} onBegin={onBeginGroupMove} revision={transformTick} onStart={() => selectionGesture.current.consume()} onCommit={onGroupMove} />
+        )}
         {!simulationScenario && overlays.helpers && activeObject && !siteScene?.items.some(i => 'site:' + i.id === activeObject.id && i.locked) && !equipmentVisual && !sectionBoxes.some(b => b.sceneObjectId === activeObject.id && b.visible) && (
           <TransformControls
             object={activeObject.object}
@@ -7690,6 +7758,7 @@ export function Viewport3D({
           <Suspense fallback={null}>
             <AmbientOcclusionEffect
               enabled={settings.ambientOcclusion}
+              movingRef={cameraSyncRef} simplify={settings.simplifyWhileOrbiting}
               boostQuality={highQuality}
               modelRadius={modelRadius}
             />

@@ -1,4 +1,8 @@
-import { type MaterialTarget } from './materialScope'
+import { createFrameNotifier } from './frameNotifier'
+import { replaceEqualDeep } from '@tanstack/react-query'
+import { loadRenderCaptureSettings } from './renderCaptureSettings'
+import { searchActivityIds } from './activitySearch'
+import { copySiteMaterialMappings, type MaterialTarget } from './materialScope'
 import { useWorkingSequence } from '../simulator/useWorkingSequence'
 import { Simulator } from '../simulator/Simulator'
 import type { Scenario as SimulationScenario } from '../simulator/types'
@@ -108,6 +112,8 @@ import { ensureMaterialized, getMaterializedMeshes, getElementTransformTarget, h
 import { DataPanel } from './DataPanel'
 import { DockDivider } from './DockDivider'
 import { PropertiesPanel } from './PropertiesPanel'
+import { beginGroupMove, translateGroup, type GroupMove, type MoveTarget } from './groupMove'
+import { GroupMovePanel } from './GroupMovePanel'
 import { captureSiteObjectState } from './siteObjectTransform'
 import { captureAttachmentTransform } from './attachmentTransform'
 import { computeVisibleActivities, ScheduleWindow, type ScheduleWindowEditableField } from './ScheduleWindow'
@@ -125,7 +131,9 @@ import { SiteScheduleWizard } from './SiteScheduleWizard'
 import { SiteToolsPanel } from './SiteToolsPanel'
 import { loadSiteAsset, importSiteAsset } from './siteAssets'
 import { siteMaterialInfo, primitiveMaterialInfo } from './siteAssetMaterials'
-import { sitePlacementPoint, useSiteScene } from './siteScene'
+import { getSplitElementRef } from './splitElementRefs'
+import { copyName, copySitePlacements, planningCopyFile, ifcCopySource } from './planningCopies'
+import { siteError, sitePlacementPoint, useSiteScene } from './siteScene'
 import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoint } from './zones'
 import { ZonesPanel } from './ZonesPanel'
 import { createRadialChart, deleteRadialChart, listRadialCharts, updateRadialChart, uploadRadialChartIcon, type RadialChart, type RadialChartCenterMode } from './radialCharts'
@@ -329,7 +337,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // same now-wrong period id — asking the right question of the wrong
   // period, however many times you ask it.
   const { period, refetch: refetchPeriod } = useActiveScheduleVariant(selectedProject?.id)
-  const workingSequence=useWorkingSequence(selectedProject?.id,period?.id)
+  const workingSequence=useWorkingSequence(selectedProject?.id,period?.id,active)
   const simulationScenario=previewScenario??workingSequence.scenario
   const { period: costPeriod } = useActivePeriod(selectedProject?.id)
 
@@ -391,11 +399,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         api.get<Calendar[]>('/api/v1/calendars/', { params: { project_id: selectedProject.id } }),
       ])
       if (requestId !== scheduleRequestRef.current) return
-      setActivities(activitiesRes.data)
-      setRelationships(relationshipsRes.data)
-      setResources(resourcesRes.data)
-      setResourceAssignments(assignmentsRes.data)
-      setCalendars(calendarsRes.data)
+      // A workspace switch still checks the server, but identical responses
+      // must not invalidate the resolved 4D schedule and all derived panels.
+      setActivities(previous => replaceEqualDeep(previous, activitiesRes.data))
+      setRelationships(previous => replaceEqualDeep(previous, relationshipsRes.data))
+      setResources(previous => replaceEqualDeep(previous, resourcesRes.data))
+      setResourceAssignments(previous => replaceEqualDeep(previous, assignmentsRes.data))
+      setCalendars(previous => replaceEqualDeep(previous, calendarsRes.data))
       return activitiesRes.data
     } finally {
       if (requestId === scheduleRequestRef.current) setScheduleLoading(false)
@@ -420,25 +430,20 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // what's in the schedule even clicking the refresh icon") — see this
   // component's own comment by the `period` destructure above: re-fetching
   // *activities* alone was never enough if `period` itself had gone stale.
-  // refetchPeriod() always resolves a *new* period object (a fresh
-  // deserialized API response, never the same reference even when nothing's
-  // actually changed — see useScheduleVariant.ts's own loadPeriodFor), so
-  // this effect's own `period` dependency below is guaranteed to see a
-  // change and re-run `refreshSchedule()` against whatever period is
-  // *actually* live now — not relying on this same synchronous call seeing
-  // the update immediately, since setPeriod() inside the hook only takes
-  // effect on the next render.
+  // React to the resolved ID, not the identity of a fresh period response.
+  // Activation already refreshes the current schedule; a changed ID needs
+  // another refresh, but an identical period must not fetch everything twice.
   useEffect(() => {
     if (!active) return
     refetchPeriod()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProject, active])
+  }, [selectedProject?.id, active])
 
   useEffect(() => {
     if (!active) return
     refreshSchedule()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedProject, period, active])
+  }, [selectedProject?.id, period?.id, active])
 
   // Activity↔model-element links (2026-07-11) — the frontend half of
   // model_element_link.py's backend (built earlier this session, tested,
@@ -446,7 +451,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // activities above — a link survives across periods/re-imports as long as
   // the same element_ref (GlobalId or filename) comes back, per the
   // backend's own persistence model.
-  useEffect(() => { if (undoRevision) refreshSchedule() }, [undoRevision])
+  // Scheduling edits should not also fetch/reconcile the hidden BIM tree.
+  // The activation effect above refreshes it before the next visible session.
+  useEffect(() => { if (active && undoRevision) refreshSchedule() }, [undoRevision])
 
   const [modelElementLinks, setModelElementLinks] = useState<ModelElementLink[]>([])
   const [linkError, setLinkError] = useState<string | null>(null)
@@ -558,7 +565,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const siteBoxes = useMemo(() => siteScene.scene.items.flatMap(item => (item.section_boxes ?? []).map(box => ({
     ...box, id: 'site:' + item.id + '/' + box.id, siteId: item.id, element_ref: null,
   }))), [siteScene.scene.items])
-  const allSectionBoxes = [...sectionBoxes, ...siteBoxes]
+  const allSectionBoxes = useMemo(() => [...sectionBoxes, ...siteBoxes], [sectionBoxes, siteBoxes])
   async function saveSiteBoxes(itemId: string, change: (boxes: SiteSectionBox[]) => SiteSectionBox[]) {
     await siteScene.save(siteScene.scene.items.map(item => item.id === itemId
       ? { ...item, section_boxes: change(item.section_boxes ?? []) } : item), 'Edit section box')
@@ -954,6 +961,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const selectCollectionRefs = async (refs: Pick<CollectionMember, 'source_kind' | 'element_ref'>[]) => {
     const { objectIds, expressKeys } = await resolveElementRefsToTargets(refs, collectionObjects, ifcHandles)
+    selectResolvedTargets(objectIds, expressKeys)
+  }
+  const selectResolvedTargets = (objectIds: Set<string>, expressKeys: Set<string>) => {
     if (!objectIds.size) return
     const byModel = new Map<string, Set<number>>()
     for (const key of expressKeys) {
@@ -966,6 +976,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     setSelectedObjectIds(objectIds)
     const only = objectIds.size === 1 ? [...objectIds][0] : null
     setActiveObjectId(only)
+    if (objectIds.size > 1 && !expressKeys.size) setPropertiesOpen(true)
     setActiveIfcModelId(byModel.size === 1 ? [...byModel.keys()][0] : null)
     siteScene.setSelected(only?.startsWith('site:') ? only.slice(5) : null)
   }
@@ -3935,7 +3946,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // header). An element-scoped box additionally needs its own expressID
   // resolved (sectionBoxElementIds above) before it's usable — left out
   // until then, same as an unloaded target.
-  const resolvedSectionBoxes: ResolvedSectionBox[] = allSectionBoxes.flatMap(box => {
+  const resolvedSectionBoxes: ResolvedSectionBox[] = useMemo(() => allSectionBoxes.flatMap(box => {
     const sceneObject = 'siteId' in box
       ? (siteRoots.has(box.siteId) ? { id: 'site:' + box.siteId } : undefined)
       : sceneObjects.find(o => o.fileId === box.model3d_file_id)
@@ -3953,7 +3964,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       id: box.id, sceneObjectId: sceneObject.id, active: box.active, visible: box.visible, bounds, pivotBounds: box, rotation,
       elementExpressId: box.element_ref !== null ? sectionBoxElementIds[box.id] : undefined,
     }]
-  })
+  }), [allSectionBoxes, siteRoots, sceneObjects, sectionBoxElementIds, draggingSectionBox, draggingSectionBoxRotation])
 
   // Which loaded IFC model IfcDataPanel.tsx is currently showing the
   // spatial tree/Object Information for — a real UI decision now that more
@@ -5319,6 +5330,17 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // nothing happens") if none of the selected activities have any linked
   // element at all — isolate simply doesn't turn on rather than isolating
   // an empty/everything set.
+  const [activitySearch, setActivitySearch] = useState('')
+  const [selectingLinked, setSelectingLinked] = useState(false)
+  const handleSelectLinkedElements = async () => {
+    if (!selectedActivityIds.size) return
+    setSelectingLinked(true)
+    try {
+      const { objectIds, expressKeys } = await resolveActivityLinksToIsolationTargets(selectedActivityIds, modelElementLinks, collectionObjects, ifcHandles)
+      selectResolvedTargets(objectIds, expressKeys)
+    } catch { window.alert('Could not select linked elements. Please try again.') }
+    finally { setSelectingLinked(false) }
+  }
   const [isolatingLinked, setIsolatingLinked] = useState(false)
   const handleIsolateLinkedElements = async () => {
     if (selectedActivityIds.size === 0) return
@@ -5673,13 +5695,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
     return keep
   }, [isolateMode, isolatedLinkedActivityIds, scheduleWindowActivities])
+  const searchedScheduleIds = useMemo(() => searchActivityIds(scheduleWindowActivities, activitySearch, isolatedScheduleActivityIds), [scheduleWindowActivities, activitySearch, isolatedScheduleActivityIds])
   const scheduleVisibleActivities = useMemo(() => {
     const base = computeVisibleActivities(
       scheduleWindowActivities,
-      isolatedScheduleActivityIds ? new Set<string>() : scheduleCollapsedIds,
+      (isolatedScheduleActivityIds || searchedScheduleIds) ? new Set<string>() : scheduleCollapsedIds,
     )
-    return isolatedScheduleActivityIds ? base.filter(a => isolatedScheduleActivityIds.has(a.id)) : base
-  }, [scheduleWindowActivities, scheduleCollapsedIds, isolatedScheduleActivityIds])
+    return base.filter(a => (!isolatedScheduleActivityIds || isolatedScheduleActivityIds.has(a.id)) && (!searchedScheduleIds || searchedScheduleIds.has(a.id)))
+  }, [scheduleWindowActivities, scheduleCollapsedIds, isolatedScheduleActivityIds, searchedScheduleIds])
 
   // Native scrollTop mirroring between the Activity Table and Gantt windows
   // (2026-07-09, per Maro) — plain DOM scroll-sync between two independent,
@@ -5780,8 +5803,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     }
   }, [selectedActivityIds, scheduleVisibleActivities, scheduleWindowActivities, scheduleCollapsedIds])
 
+  const [needsCostProfile, setNeedsCostProfile] = useState(() => loadRenderCaptureSettings().includeCostProfile)
+  const needsResourceData = active && (openWindows.has('tracking') || openWindows.has('usage') || needsCostProfile)
   const resourcesTabData = useResourcesTabData(
-    resources, resourceAssignments, activities, selectedResourceIds, zoom, null, null,
+    resources, resourceAssignments, activities, selectedResourceIds, zoom, null, null, needsResourceData,
   )
 
   // Real Cost Baseline history for the Resource Usage Profile's Actual/
@@ -5825,11 +5850,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     [resourcesTabData.rangeStart, resourcesTabData.rangeEnd],
   )
   const costProfileValues = useMemo(
-    () => computeUsageProfileBars(
+    () => needsCostProfile ? computeUsageProfileBars(
       resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource,
       costProfileBuckets, resourcesTabData.spreadByResource, new Set(), 'cost',
-    ).barValues,
-    [resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, costProfileBuckets, resourcesTabData.spreadByResource],
+    ).barValues : [],
+    [needsCostProfile, resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, costProfileBuckets, resourcesTabData.spreadByResource],
   )
   // Per-resource breakdown (2026-07-25, second pass, per Maro: "an
   // indication of the resources driving the cost profile not just the
@@ -5841,14 +5866,14 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // — cheap at the handful-of-resources scale a real project's Resources
   // tab tracks.
   const costProfileResourceBreakdown = useMemo(
-    () => resourcesTabData.trackedResources.map(resource => ({
+    () => (needsCostProfile ? resourcesTabData.trackedResources : []).map(resource => ({
       name: resource.name,
       values: computeUsageProfileBars(
         [resource], resourcesTabData.assignmentsByResource,
         costProfileBuckets, resourcesTabData.spreadByResource, new Set(), 'cost',
       ).barValues,
     })),
-    [resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, costProfileBuckets, resourcesTabData.spreadByResource],
+    [needsCostProfile, resourcesTabData.trackedResources, resourcesTabData.assignmentsByResource, costProfileBuckets, resourcesTabData.spreadByResource],
   )
 
   // Memoized (2026-07-20, optimization pass — a confirmed regression, not a
@@ -5886,6 +5911,21 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     o.object.traverse(node=>{if(node.userData.siteAssetRigRoot)rigRoot=node})
     return {...o,name:o.id,label:o.name,object:rigRoot || o.object}
   })], [sceneObjects, siteViewportObjects, siteScene.scene.items])
+  const groupMoveTargets = useMemo(() => {
+    // A collection has no primary member. IFC owner IDs accompanying element
+    // selections must never be treated as whole models here.
+    if (activeObjectId || selectedObjectIds.size < 2 || selectedExpressIds.size) return null
+    const targets: MoveTarget[] = []
+    const locked = new Set(siteScene.scene.items.filter(item => item.locked).map(item => 'site:' + item.id))
+    for (const row of [...siteViewportObjects, ...viewportObjects]) {
+      if (!selectedObjectIds.has(row.id)) continue
+      if (row.kind !== 'mesh') return null
+      if (!locked.has(row.id)) targets.push(row)
+    }
+    const lockedCount = [...selectedObjectIds].filter(id => locked.has(id)).length
+    return targets.length + lockedCount === selectedObjectIds.size ? { targets, lockedCount } : null
+  }, [activeObjectId, selectedObjectIds, selectedExpressIds, siteScene.scene.items, siteViewportObjects, viewportObjects])
+
   const activeSiteItem = siteScene.scene.items.find(item => 'site:' + item.id === activeObjectId)
   const activeSiteRoot = activeSiteItem ? siteRoots.get(activeSiteItem.id) : null
   useEffect(() => {
@@ -5944,7 +5984,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const [realisticEntries, setRealisticEntries] = useState<RealisticMaterialEntry[]>([])
   const [realisticEntryModels, setRealisticEntryModels] = useState<Record<string, RealisticEntryModel[]>>({})
   const [siteRealisticSources, setSiteRealisticSources] = useState<{objectId:string; name:string; isIfc:boolean; info:RealisticModelInfo}[]>([])
-  const siteMaterialSignature = JSON.stringify([...siteScene.scene.items, ...(siteScene.draft ? [siteScene.draft] : [])].map(i=>[i.id,i.asset_id,i.name,i.kind,i.finish,i.placement_kind,i.geographic,i.asset_part]))
+  const siteMaterialSignature = useMemo(() => JSON.stringify([...siteScene.scene.items, ...(siteScene.draft ? [siteScene.draft] : [])].map(i=>[i.id,i.asset_id,i.name,i.kind,i.finish,i.placement_kind,i.geographic,i.asset_part])), [siteScene.scene.items, siteScene.draft])
   const [realisticAnalysing, setRealisticAnalysing] = useState(false)
   const [realisticLoadErrors, setRealisticLoadErrors] = useState<string[]>([])
   const [realisticRetry, setRealisticRetry] = useState(0)
@@ -6403,6 +6443,149 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }, [active, activeTransformObject, activeObjectId, selectedObjectIds, sceneObjects, equipmentVisual])
   useEffect(() => () => undoHistory.remove(transformUndoOwner.current), [selectedProject?.id])
 
+  const [duplicating, setDuplicating] = useState(false)
+  const duplicatePending = useRef(false)
+  const canDuplicate = !simulationScenario && !equipmentVisual && !siteScene.draft && siteScene.ready && !siteScene.busy
+    && selectedObjectIds.size > 0 && [...selectedObjectIds].every(id => id.startsWith('site:')
+      || sceneObjects.some(obj => obj.id === id && (obj.kind === 'ifc' ? !!currentIfcPick().get(id)?.size : !obj.object.userData.siteCaptureId)))
+  const duplicateSelection = async () => {
+    if (!selectedProject || !canDuplicate || duplicatePending.current) return
+    duplicatePending.current = true
+    setDuplicating(true)
+    const assets: string[] = []
+    let committed = false
+    try {
+      const sources = siteScene.scene.items.filter(item => selectedObjectIds.has('site:' + item.id))
+      const copies = copySitePlacements(sources)
+      const pairs = new Map(sources.map((item, i) => [item.id, copies[i].id]))
+      for (const [i, source] of sources.entries()) {
+        const object = siteRoots.get(source.id)
+        if (!object || copies[i].attachment) continue
+        // Detach at the visible pose when duplicating a worker or a travelling machine.
+        object.updateWorldMatrix(true, false)
+        const pos = object.getWorldPosition(new Vector3())
+        const rot = new Euler().setFromQuaternion(object.getWorldQuaternion(object.quaternion.clone()), 'XYZ')
+        copies[i].position = {x:pos.x,y:pos.y,z:pos.z}
+        copies[i].rotation = {x:rot.x,y:rot.y,z:rot.z}
+      }
+      const capture = async (object: Object3D, label: string) => {
+        if (planningContextRef.current !== planningContext) throw Error('The project changed during duplication.')
+        const name = copyName(label)
+        const {file, position} = await planningCopyFile(object, settings.upAxis, name)
+        const asset = await importSiteAsset(selectedProject.id, file, 'Other', () => {}, name)
+        assets.push(asset.id)
+        copies.push({id:crypto.randomUUID(), kind:'asset', name, asset_id:asset.id, ...asset.dimensions,
+          generator_version:1, up_axis:settings.upAxis, units:'m', position, yaw:0, color:'#ffffff', locked:false,
+          activity_id:null, path_id:null, points:[], closed:false, module_length:2, gate_start:0, gate_width:0})
+      }
+      const byModel = currentIfcPick()
+      for (const scene of sceneObjects.filter(row => selectedObjectIds.has(row.id))) {
+        if (scene.kind === 'mesh') { await capture(scene.object, scene.name); continue }
+        const handle = getIfcHandleFor(scene.id)
+        if (!handle || !byModel.get(scene.id)?.size) throw Error('Select individual IFC elements to duplicate.')
+        for (const id of byModel.get(scene.id)!) {
+          if (getSplitElementRef(handle, id)) throw Error('Select the original IFC element to duplicate a level-split object.')
+          const props = await handle.api.properties.getItemProperties(handle.ifcModelID, id, false)
+          await capture(ifcCopySource(handle.object, id), String(props?.Name?.value || 'IFC element ' + id))
+        }
+      }
+      if (planningContextRef.current !== planningContext) throw Error('The project changed during duplication.')
+      if (!copies.length) throw Error('Select a site object or a loaded IFC element to duplicate.')
+      const selected = new Set(copies.map(item => 'site:' + item.id))
+      const selectCopies = () => {
+        setIfcPick(new Map()); setActiveIfcModelId(null)
+        setSelectedObjectIds(new Set(selected))
+        const only = copies.length === 1 ? copies[0].id : null
+        setActiveObjectId(only ? 'site:' + only : null)
+        siteScene.setSelected(only)
+        setIsolatedObjectIds(previous => new Set([...previous, ...selected]))
+        setPropertiesOpen(true); setGizmoMode('translate'); setEditPivot(false)
+      }
+      const saved = await siteScene.save(items => {
+        if (items !== siteScene.scene.items) throw Error('The scene changed during duplication. Select the objects and try again.')
+        return [...items, ...copies]
+      }, 'Duplicate ' + copies.length + (copies.length === 1 ? ' object' : ' objects'), {
+        redo: selectCopies, undo: () => {
+          setIfcPick(new Map()); setSelectedObjectIds(new Set()); setActiveObjectId(null); siteScene.setSelected(null)
+          setIsolatedObjectIds(previous => new Set([...previous].filter(id => !selected.has(id))))
+        },
+      })
+      if (!saved) throw Error('The scene is busy. Try Duplicate again.')
+      committed = true
+      if (pairs.size) {
+        const mapping = copySiteMaterialMappings(realisticMapping, pairs)
+        setRealisticMapping(mapping)
+        const copySlots = <T,>(previous: Record<string, T>) => {
+          const next = { ...previous }
+          for (const [src, dst] of pairs) if ('site:' + src in previous) next['site:' + dst] = previous['site:' + src]
+          return next
+        }
+        setCustomTextures(copySlots); setCustomOpacity(copySlots)
+      }
+      if (assets.length) window.dispatchEvent(new Event('prosota-site-assets-changed'))
+    } catch (error) {
+      if (!committed) await Promise.allSettled(assets.map(id => api.delete('/api/v1/site-assets/' + id)))
+      addImportError(siteError(error))
+    } finally {
+      duplicatePending.current = false
+      setDuplicating(false)
+      if (assets.length) setMaterializeVersion(value => value + 1)
+    }
+  }
+
+  const startGroupMove = (targets: MoveTarget[]) => {
+    const moving = new Set(targets.map(row => row.id))
+    const anchors = new Map(siteScene.scene.items.map(item => ['site:' + item.id, item.attachment?.parent_id]))
+    return beginGroupMove(targets.filter(row => {
+      const seen = new Set<string>()
+      let id = row.id
+      while (siteRoots.get(id.slice(5))?.userData.siteAttachmentActive && !seen.has(id)) {
+        seen.add(id)
+        const parent = anchors.get(id)
+        if (!parent) break
+        id = 'site:' + parent
+        if (moving.has(id)) return false
+      }
+      return true
+    }))
+  }
+
+  const commitGroupMove = async (move: GroupMove) => {
+    const changes = new Map(move.map(row => [row.id, row]))
+    const legacy = sceneObjects.flatMap(scene => {
+      const row = changes.get(scene.id)
+      return row ? [{ scene, before: row.start, after: scene.object.position.clone() }] : []
+    })
+    const restoreLegacy = (pose: 'before' | 'after') => {
+      for (const { scene, before, after } of legacy) {
+        scene.object.position.copy(pose === 'before' ? before : after)
+        scene.object.updateMatrixWorld(true)
+        persistSiblingTransform(scene)
+      }
+      setTransformTick(t => t + 1)
+    }
+    const effects = { undo: () => restoreLegacy('before'), redo: () => restoreLegacy('after') }
+    const label = 'Move ' + move.length + ' objects'
+    try {
+      if (move.length > legacy.length) {
+        const items = siteScene.scene.items.map(item => {
+          const row = changes.get('site:' + item.id)
+          if (!row) return item
+          const {x, y, z} = row.object.position
+          return { ...item, ...(captureAttachmentTransform(item, row.object) ?? {position: {x, y, z}}) }
+        })
+        if (!await siteScene.save(items, label, effects)) throw Error('Wait for the current site edit to finish, then move the selection again.')
+      } else {
+        effects.redo()
+        undoHistory.record({ label, owner: transformUndoOwner.current, ...effects })
+      }
+    } catch (error) {
+      translateGroup(move, new Vector3())
+      setTransformTick(t => t + 1)
+      addImportError(error instanceof Error ? error.message : 'Could not save the group move.')
+    }
+  }
+
   const recordTransformUndo = () => {
     if (undoHistory.busy || !active || equipmentVisual || !transformBefore.current.length) return
     const before = transformBefore.current
@@ -6454,7 +6637,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // live; there is nothing here for persistActiveTransform to save in the
   // first place — playback-driven position/rotation is never itself
   // persisted as a manual transform.
-  const handleTransformTick = () => setTransformTick(t => t + 1)
+  const transformNotifier = useMemo(() => createFrameNotifier(() => setTransformTick(t => t + 1)), [])
+  useEffect(() => () => transformNotifier.dispose(), [transformNotifier])
+  const handleTransformTick = transformNotifier.trigger
 
   // "Edit Pivot" (2026-07-23) — ensures elementPivot.ts's own pre-pivot
   // snapshot (prePivotPosition/prePivotQuaternion) exists *before* a drag
@@ -7010,6 +7195,10 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
                 {scheduleLoading ? '…' : '⟳'}
               </button>
             )}
+            {key === 'schedule' && <>
+              <input type="search" aria-label="Search activities by name or code" placeholder="Search name / code…" value={activitySearch} onChange={e => setActivitySearch(e.target.value)} onPointerDown={e => e.stopPropagation()} className="w-44 min-w-0 rounded border border-gray-300 dark:border-prosota-line bg-transparent px-2 py-0.5 text-xs" />
+              <button onClick={handleSelectLinkedElements} disabled={!selectedActivityIds.size || selectingLinked} title="Select the 3D/IFC elements linked to the selected activities" className="text-[11px] px-1.5 py-0.5 rounded border border-gray-300 dark:border-prosota-line disabled:opacity-50">{selectingLinked ? 'Selecting…' : 'Select Linked'}</button>
+            </>}
             {key === 'schedule' && selectedActivityIds.size > 0 && (
               // "Isolate Linked Elements" (2026-07-09, per Maro: "if i
               // click on an activity or activities, i can click to
@@ -7621,6 +7810,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         siteScene.setSelected(additive && selectedObjectIds.has(owner) ? null : id)
         setPropertiesOpen(true); setEditPivot(false); setSiteToolsOpen(true)
       } }}
+      onDuplicate={duplicateSelection} canDuplicate={canDuplicate} duplicating={duplicating}
+      onBeginGroupMove={startGroupMove}
+      groupMoveTargets={siteScene.ready && !siteScene.busy ? groupMoveTargets?.targets : undefined} onGroupMove={commitGroupMove}
       equipmentObjects={equipmentObjects} equipmentVisual={equipmentVisual} equipmentRigs={playbackEquipment} equipmentPreview={equipmentPreview} onEquipmentError={setEquipmentRuntimeError}
       key="primary"
       settings={settings}
@@ -7672,6 +7864,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       comparisonCanvasRefs={comparisonCanvasRefs.slice(0, paneConfigs.length)}
       onCaptureQualityChange={setBaselineDprMultiplier}
       onCaptureBackgroundChange={setBaselineBackgroundOverride}
+      onCostProfileDemandChange={setNeedsCostProfile}
+      costProfileLoading={resourcesTabData.loading || !!resourcesTabData.spreadFetchError}
       costProfileBuckets={costProfileBuckets}
       costProfileValues={costProfileValues}
       costProfileResourceBreakdown={costProfileResourceBreakdown}
@@ -7966,7 +8160,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
   const simulationObjects=useMemo(()=>equipmentObjects.map(o=>({ref:o.name,label:siteScene.scene.items.find(i=>'site:'+i.id===o.name)?.name??o.name,parts:o.kind==='mesh'?[...simulationEquipmentNodes(o.object)].filter(([id])=>!!id).map(([id,node])=>({id,name:node.name||id})):[]})),[equipmentObjects,siteScene.scene.items])
   useEffect(()=>{setSimulationScenario(null);setSimulationError('');setSequenceExport(null)},[selectedProject?.id,period?.id])
-  useEffect(()=>{const timer=setTimeout(()=>void workingSequence.refresh(),400);return()=>clearTimeout(timer)},[workingSequence.refresh,undoRevision,activities,siteScene.scene.items,paths])
+  useEffect(()=>{if(!active)return;const timer=setTimeout(()=>void workingSequence.refresh(),400);return()=>clearTimeout(timer)},[active,workingSequence.refresh,undoRevision,activities,siteScene.scene.items,paths])
   if (!selectedProject) return null
 
   return (
@@ -8242,7 +8436,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
 
       <div className="flex flex-1 min-h-0">
         <PropertiesPanel
-          siteSelectionPanel={activeSiteItem ? <div className="px-3 text-xs">{siteScene.busy ? "Saving object…" : siteScene.error}</div> : null}
+          siteSelectionPanel={groupMoveTargets && !simulationScenario ? <GroupMovePanel count={groupMoveTargets.targets.length} locked={groupMoveTargets.lockedCount}
+            busy={!siteScene.ready || siteScene.busy} onMove={delta => {
+              const move = startGroupMove(groupMoveTargets.targets)
+              translateGroup(move, delta)
+              void commitGroupMove(move)
+            }} /> : activeSiteItem ? <div className="px-3 text-xs">{siteScene.busy ? "Saving object…" : siteScene.error}</div> : null}
           equipmentPivot={!simulationScenario && equipmentVisual?.joint && equipmentVisual.pivot && equipmentObjects.find(o=>o.name===equipmentVisual.model)
             ? {state:equipmentVisual,root:equipmentObjects.find(o=>o.name===equipmentVisual.model)!.object} : null}
           open={propertiesOpen}
@@ -8326,6 +8525,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           </>
         )}
         <DataPanel
+          selectedActivityIds={selectedActivityIds}
           open={dataPanelOpen}
           onToggle={toggleDataPanel}
           ifcHandles={ifcHandles}
