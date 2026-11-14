@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { ProjectTransferPanel } from './ProjectTransferPanel'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth0 } from '@auth0/auth0-react'
@@ -14,6 +15,7 @@ export function ProjectSelector() {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [transfer, setTransfer] = useState<{ project?: Project } | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [newClient, setNewClient] = useState('')
@@ -225,6 +227,9 @@ export function ProjectSelector() {
           </div>
         )}
 
+        <button disabled={!!transfer} onClick={() => setTransfer({})} className="mb-3 text-sm font-medium text-blue-600 dark:text-prosota-azure disabled:opacity-50">Import project…</button>
+        {transfer && <ProjectTransferPanel key={transfer.project?.id ?? 'import'} project={transfer.project} onClose={() => setTransfer(null)} onImported={() => { void refresh() }} />}
+
         {selectedIds.size > 0 && (
           <div className="mb-3 flex items-center gap-3 bg-blue-50 dark:bg-prosota-azure/10 border border-blue-200 dark:border-prosota-azure/30 rounded-lg px-4 py-2.5">
             <span className="text-xs font-medium text-blue-800 dark:text-prosota-azure">{selectedIds.size} selected</span>
@@ -315,7 +320,8 @@ export function ProjectSelector() {
                         {project.status}
                       </span>
                     </button>
-                    <div className="shrink-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="shrink-0 flex items-center gap-2">
+                      <button disabled={!!transfer} onClick={() => setTransfer({ project })} className="text-xs text-blue-600 dark:text-prosota-azure font-medium disabled:opacity-50">Export project</button>
                       <button
                         onClick={e => { e.stopPropagation(); startRename(project) }}
                         className="text-xs text-gray-400 dark:text-prosota-muted hover:text-blue-600 font-medium"

@@ -58,6 +58,7 @@ from app.api.paths import router as paths_router
 from app.api.periods import router as periods_router
 from app.api.project_letterhead import router as project_letterhead_router
 from app.api.projects import router as projects_router
+from app.api.project_transfers import router as project_transfers_router
 from app.api.radial_charts import router as radial_charts_router
 from app.api.reassessments import router as reassessments_router
 from app.api.record_links import router as record_links_router
@@ -133,6 +134,7 @@ app.include_router(site_scenes_router, prefix="/api/v1", dependencies=_auth_appr
 app.include_router(site_assets_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(access_requests_router, prefix="/api/v1", dependencies=_auth)
 app.include_router(projects_router, prefix="/api/v1", dependencies=_auth_approved)
+app.include_router(project_transfers_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(periods_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(activities_router, prefix="/api/v1", dependencies=_auth_approved)
 app.include_router(activity_relationships_router, prefix="/api/v1", dependencies=_auth_approved)

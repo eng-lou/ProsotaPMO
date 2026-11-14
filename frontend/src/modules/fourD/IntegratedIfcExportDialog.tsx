@@ -24,6 +24,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [conversionLimited, setConversionLimited] = useState(false)
   const [result, setResult] = useState<{ url: string; warnings: string[] } | null>(null)
   const [reportUrl, setReportUrl] = useState<string | null>(null)
   const reportDownloadUrl = useRef<string | null>(null)
@@ -41,8 +42,9 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       if (reportDownloadUrl.current) URL.revokeObjectURL(reportDownloadUrl.current)
     }
   }, [project.id])
-  const run = async () => {
+  const run = async (schema = targetSchema) => {
     if (!files?.length) return
+    setConversionLimited(false)
     setBusy(true); setError(''); setCounts(''); setStatus('Reading saved project data…')
     let stage = 'Reading project data'
     try {
@@ -76,7 +78,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         stage = `Downloading source model: ${file.name}`
         let blob = await downloadModel3DFile(file)
         const header = await blob.slice(0, 65536).text()
-        if (targetSchema === 'IFC4' && /FILE_SCHEMA\s*\(\s*\(\s*'IFC2X3'/i.test(header)) {
+        if (schema === 'IFC4' && /FILE_SCHEMA\s*\(\s*\(\s*'IFC2X3'/i.test(header)) {
           setStatus(`Converting model ${i + 1} of ${files.length} to IFC4: ${file.name}`)
           stage = `Converting source model to IFC4: ${file.name}`
           const { data: converted } = await api.post<{ download_url: string }>(`/api/v1/model3d-files/${file.id}/ifc4-export-source`, undefined, { timeout: 240000 })
@@ -88,7 +90,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
           blob = await decompressIfGzip(packed)
         }
         const bytes = new Uint8Array(await blob.arrayBuffer())
-        if (targetSchema === 'IFC4' && !/FILE_SCHEMA\s*\(\s*\(\s*'IFC4'/i.test(new TextDecoder().decode(bytes.slice(0, 65536)))) {
+        if (schema === 'IFC4' && !/FILE_SCHEMA\s*\(\s*\(\s*'IFC4'/i.test(new TextDecoder().decode(bytes.slice(0, 65536)))) {
           throw new Error(`${file.name} could not be prepared as IFC4.`)
         }
         sources.push({ name: file.name, bytes })
@@ -96,7 +98,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       if (!alive.current) return
       const data: IntegratedIfcData = { project, schedulePeriodId, costPeriodId, currency, exportedAt: new Date().toISOString(),
         activities, relationships, resources, assignments, calendars, breaks, exceptions, costs, links, animationProfiles,
-        compatibility: synchro ? 'synchro' : undefined }
+        compatibility: schema === 'IFC2X3' ? 'synchro' : undefined }
       const w = new Worker(new URL('./integratedIfc.worker.ts', import.meta.url), { type: 'module' })
       worker.current = w
       const fail = (message: string) => { setError(message); setBusy(false); setStatus(''); w.terminate(); worker.current = null }
@@ -113,7 +115,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
           if (!resources.length) warnings.push('The selected project returned no resources. This export has no resource catalogue.')
           if (!assignments.length) warnings.push('The active schedule returned no resource assignments. No native assignment resources were exported.')
           if (!costs.length) warnings.push('The active cost period returned no cost items.')
-          if (targetSchema === 'IFC4') warnings.push('IFC4 output selected. Converted sources should be checked in the receiving application; original saved models are unchanged.')
+          if (schema === 'IFC4') warnings.push('IFC4 output selected. Converted sources should be checked in the receiving application; original saved models are unchanged.')
           w.terminate(); worker.current = null
           setResult({ url, warnings })
           if (destination === 'powerbi') {
@@ -143,6 +145,7 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
       if (alive.current) {
         const detail = axios.isAxiosError(e) ? e.response?.data?.detail : null
         const message = typeof detail === 'string' ? detail : e instanceof Error ? e.message : 'Request failed.'
+        setConversionLimited(schema === 'IFC4' && axios.isAxiosError(e) && e.response?.status === 413)
         setError(`${stage} failed. ${message}${stage.startsWith('Downloading converted') ? ' The converted model is cached; retrying will reuse it. If this persists, check browser network errors for blocked storage access.' : ''}`)
         setBusy(false); setStatus('')
       }
@@ -153,10 +156,11 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
     <div style={{ color: foreground, backgroundColor: dark ? '#0C1A2E' : '#FFFFFF' }} className="bg-white dark:bg-prosota-panel text-gray-800 dark:text-prosota-paper rounded-lg shadow-xl p-5 w-full max-w-xl max-h-[85vh] overflow-auto text-sm">
       <h2 style={{ color: foreground }} id="integrated-ifc-title" className="font-semibold text-base mb-3">{destination === 'powerbi' ? 'Open in Power BI' : 'Export integrated IFC'}</h2>
       <p style={{ color: muted }} className="text-gray-500 dark:text-prosota-muted">Export your saved models with schedule and cost data.</p>
+      {destination === 'ifc' && <p className="mt-2 rounded border border-blue-300 dark:border-prosota-line p-2">Moving this project to another Prosota workspace? Use <strong>Switch project → Export project</strong>, then <strong>Import project</strong> in the destination. IFC export does not include the complete Prosota project.</p>}
       {webPowerBI && <p style={{ color: muted }} className="mt-2">Includes the Prosota visual and model. Requires Power BI Desktop on Windows.</p>}
       {destination === 'ifc' && <label style={{ color: foreground }} className="block my-3">Output format
         <select style={fieldStyle} value={targetSchema} disabled={busy || !!result} onChange={e => setTargetSchema(e.target.value as 'source' | 'IFC2X3' | 'IFC4')} className="mt-2 block w-full border rounded px-3 py-2 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line">
-          <option value="source">Keep source</option>
+          <option value="source">Keep source (recommended)</option>
           <option value="IFC2X3">IFC 2x3 (compatible)</option>
           <option value="IFC4">IFC 4</option>
         </select>
@@ -171,19 +175,20 @@ export function IntegratedIfcExportDialog({ project, schedulePeriodId, costPerio
         <ul className="my-2 list-disc pl-5">{files?.map(f => <li key={f.id}>{f.name}</li>)}</ul>
         <p>Uses saved geometry and materials, including hidden elements. Viewport edits and animation are not baked. Mesh and point-cloud files are excluded. Sources must have matching units; Keep source also requires matching schemas.</p>
         {synchro && <p className="mt-2">For appearance profiles in Synchro, enable “Use InPro profile for IFC integration” under Options → Synchronization → IFC. Labour and equipment assignments are retained as task properties, not native allocations.</p>}
-        {targetSchema === 'IFC4' && <p className="mt-2">IFC 2x3 sources are converted to IFC 4. Conversion can take several minutes. Original models are preserved.</p>}
+        {targetSchema === 'IFC4' && <p className="mt-2">IFC 2x3 sources are converted to IFC 4. Conversion is limited to 128 MB per uncompressed source and can take several minutes. For larger IFC 2x3 models, choose Keep source. Original models are preserved.</p>}
         <p className="mt-2">No currency conversion. Receiving applications may not support every exported feature.</p>
         <p className="mt-2">IFC 4 maps green/red profile start colours to Construction/Demolition. The default is green Construction. Bonsai uses its own colour scheme; exact profile settings are retained as properties.</p>
         {counts && <p className="mt-2">{counts}</p>}
       </details>
       {status && <p style={{ color: foreground }} role="status" className="mt-3">{status}</p>}
       {error && <p role="alert" className="mt-3 text-red-600 dark:text-red-400">{error}</p>}
+      {conversionLimited && <button disabled={busy} className="mt-2 border rounded px-3 py-1.5" onClick={() => { setTargetSchema('source'); void run('source') }}>Retry with Keep source</button>}
       {!!result?.warnings.length && <details className="mt-3 text-xs text-amber-700 dark:text-amber-300"><summary className="cursor-pointer">Export notes ({result.warnings.length})</summary><ul className="mt-2 list-disc pl-5">{result.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul></details>}
       <div className="flex justify-end gap-3 mt-4">
         <button style={{ color: foreground, borderColor: fieldStyle.borderColor }} onClick={onClose} className="border dark:border-prosota-line rounded px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-prosota-panel2">{busy ? 'Cancel export' : 'Close'}</button>
         {reportUrl ? <a download={filename.replace(/\.ifc$/, '-PowerBI.zip')} href={reportUrl} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download Power BI report</a>
           : result && !webPowerBI ? <a download={filename} href={result.url} className="bg-indigo-600 text-white rounded px-3 py-1.5">Download IFC</a>
-          : <button disabled={busy || !files?.length || currency.length !== 3} onClick={run} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">{busy ? 'Building…' : webPowerBI ? 'Build Power BI report' : destination === 'powerbi' ? 'Build and open' : 'Build IFC'}</button>}
+          : <button disabled={busy || !files?.length || currency.length !== 3} onClick={() => void run()} className="bg-indigo-600 text-white rounded px-3 py-1.5 disabled:opacity-50">{busy ? 'Building…' : webPowerBI ? 'Build Power BI report' : destination === 'powerbi' ? 'Build and open' : 'Build IFC'}</button>}
       </div>
     </div>
   </div>

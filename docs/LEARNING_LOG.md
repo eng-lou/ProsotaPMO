@@ -9113,3 +9113,13 @@ The owner committed the prepared web changes as 72fecfa, but GitHub rejected the
 The new worktree initially had no dependencies; a junction was denied, so dependencies were copied as ordinary files from the existing installation. Initial validation attempts could not resolve dependencies and were rerun after the copy. Git still cannot write the worktree index from this session, so marking the files resolved, completing the cherry-pick and pushing must run through normal PowerShell. No force push and no successful publication occurred during resolution.
 
 Fresh release-worktree validation passed: 387 frontend tests, two optional tests skipped; TypeScript and production build passed (19.96s). No remaining conflict markers, no frontend/backend source differences from 72fecfa, and no desktop changes against origin/main. Backend regressions were not repeated because the entire backend tree is unchanged from the already-tested commit.
+
+
+## 2026-11-14 — Preview-to-Web project transfer
+
+- An integrated IFC export is not a whole-project transfer. Do not describe its planning snapshot as preserving site objects, non-IFC assets, all variants, or full authored state.
+- Added an explicit project-folder export/import path: direct file streaming/uploads, all persisted project modules, ownership checks, remapped IDs/JSON references, file inventory verification, atomic new-project import, retry and staging cleanup. Source IFC bytes are retained without conversion.
+- Kept the 128 MB IFC4 conversion resource bound. The IFC dialog now explains its scope, points to project transfer, and offers an explicit Keep source retry after a conversion-limit response.
+- Added a checksum-checked legacy desktop-backup bridge using an isolated temporary development database; never restore a desktop workspace dump into the live web database.
+- Current Preview project has NOT been transferred. Latest existing backup found was 1 November 2026; obtain a fresh backup instead of silently migrating old project data. Installed Preview and deployed Stable do not yet include these source changes.
+- Validation: 12 backend transfer tests pass on a disposable PostgreSQL database, including real pg_dump/pg_restore bridge; frontend suite 390 pass, 2 optional skips; TypeScript and production build pass. No live Tower migration or browser file-picker end-to-end run claimed.
