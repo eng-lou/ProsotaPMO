@@ -59,7 +59,7 @@ const FACE_NORMAL_DOT_THRESHOLD = 0.996
 // every vertex up front) so the area is correct even under non-uniform
 // scale without a separate normal-matrix correction. Supports indexed IFC
 // meshes and non-indexed triangle soup from other model formats.
-export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetres: number): FacePatchResult | null {
+export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetres: number, matrixWorld = mesh.matrixWorld): FacePatchResult | null {
   const geometry = mesh.geometry
   const position = geometry.attributes.position
   if (!position || !Number.isFinite(toMetres) || toMetres <= 0) return null
@@ -70,7 +70,7 @@ export function measureFacePatch(mesh: THREE.Mesh, seedFaceIndex: number, toMetr
 
   const worldPositions: THREE.Vector3[] = []
   for (let i = 0; i < position.count; i++) {
-    worldPositions.push(new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(mesh.matrixWorld))
+    worldPositions.push(new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(matrixWorld))
   }
 
   // Weld tolerance for adjacency purposes only (2026-07-19 fix, per Maro:
@@ -289,12 +289,12 @@ function worldToScreenPx(point: THREE.Vector3, camera: THREE.Camera, viewportWid
 // falls back to a freeform point the same way when nothing is close enough.
 export function findSnapPoint(
   object: THREE.Mesh, camera: THREE.Camera,
-  cursorPx: { x: number; y: number }, viewportWidth: number, viewportHeight: number,
+  cursorPx: { x: number; y: number }, viewportWidth: number, viewportHeight: number, matrixWorld = object.matrixWorld,
 ): MeasurementPoint | null {
   const geometry = object.geometry
-  const index = geometry.index
   const position = geometry.attributes.position
-  if (!index || !position) return null
+  if (!position) return null
+  const index = geometry.index ?? { count: position.count, getX: (i: number) => i }
   const triCount = index.count / 3
 
   const screenDistance = (p: THREE.Vector3) => {
@@ -304,7 +304,7 @@ export function findSnapPoint(
 
   const worldPositions: THREE.Vector3[] = []
   for (let i = 0; i < position.count; i++) {
-    worldPositions.push(new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(object.matrixWorld))
+    worldPositions.push(new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(matrixWorld))
   }
 
   let best: { point: THREE.Vector3; distance: number } | null = null

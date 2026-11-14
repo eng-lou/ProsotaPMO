@@ -2,6 +2,7 @@ import { useOverallocationPreference, resourcePeriodWidth, useResourceSeries } f
 import { OrderedColumns, reconcileColumnOrder } from '@/components/OrderedColumns'
 import { buildDirectAssignments } from './directResourceAssignment'
 import axios from 'axios'
+import { replaceEqualDeep } from '@tanstack/react-query'
 import { scheduleLoadError } from './scheduleLoadError'
 import { lazyPanel } from '@/components/LazyPanel'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -25,7 +26,7 @@ import { useAnimationProfiles } from '@/modules/fourD/animationProfiles'
 import { buildScheduleResourcePlan } from './scheduleResourceGeneration'
 import { ModuleLoadError } from '@/components/ModuleLoadError'
 import { ReassessmentLog } from '@/components/ReassessmentLog'
-import { ActivityForm, toActivityPayload, type ActivityFormValues } from './ActivityForm'
+import { ActivityForm, toActivityPatch, type ActivityFormValues } from './ActivityForm'
 import { ActivityLogic } from './ActivityLogic'
 import { ActivityStepsWidget } from './ActivityStepsWidget'
 import { BulkAssignWidget, type BulkAssignMode } from './BulkAssignWidget'
@@ -551,6 +552,8 @@ const PASTE_FIELD_OPTIONS: PasteFieldOption[] = [
 ]
 
 export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' | 'resources'} = {}) {
+  const [activeTab, setActiveTab] = useState<'schedule' | 'resources'>(initialTab)
+  useEffect(() => setActiveTab(initialTab), [initialTab])
   const { selectedProject } = useProject()
   const { theme } = useTheme()
   const stickyHeaderBg = theme === 'dark' ? '#101F36' : '#f9fafb'
@@ -868,7 +871,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
 
   const resourcesTabData = useResourcesTabData(
     resources, resourceAssignments, activities, selectedResourceIds,
-    resourcesZoom, resourcesRangeStartOverride, resourcesRangeEndOverride,
+    resourcesZoom, resourcesRangeStartOverride, resourcesRangeEndOverride, activeTab === 'resources',
   )
 
   // Cost Plan's own reporting period (distinct from the schedule's own
@@ -879,7 +882,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   const { period: costPeriod } = useActivePeriod(selectedProject?.id)
   const [actualsHistory, setActualsHistory] = useState<ActualsHistoryItem[]>([])
   useEffect(() => {
-    if (!selectedProject || !costPeriod) return
+    if (activeTab !== 'resources' || !selectedProject || !costPeriod) return
     let cancelled = false
     api.get<{ items: ActualsHistoryItem[] }>('/api/v1/cost-elements/actuals-history', {
       params: { project_id: selectedProject.id, period_id: costPeriod.id },
@@ -887,7 +890,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
       .then(r => { if (!cancelled) setActualsHistory(r.data.items) })
       .catch(() => { if (!cancelled) setActualsHistory([]) })
     return () => { cancelled = true }
-  }, [selectedProject, costPeriod])
+  }, [selectedProject, costPeriod, activeTab])
 
   useEffect(() => {
     if (resourcesPrintTrigger > 0) window.print()
@@ -1188,8 +1191,6 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // widget in there"). Assign-resources-to-an-activity stays in the bottom
   // detail panel (ResourceAssignments, below) — only the resource *pool*
   // definitions move.
-  const [activeTab, setActiveTab] = useState<'schedule' | 'resources'>(initialTab)
-  useEffect(() => setActiveTab(initialTab), [initialTab])
   // "Generate Resources" / "Auto Assign Resources" (2026-07-17, per Maro's
   // two-stage flow — schedule generation itself no longer creates any
   // Resource/ResourceAssignment rows, see buildStagedSchedule's own header
@@ -1700,6 +1701,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // modal form. Only a handful of fields are safe to edit this way (everything else
   // is either computed by the CPM engine or benefits from the modal's fuller context).
   const [editingCell, setEditingCell] = useState<{ id: string; field: EditableField } | null>(null)
+  const committingCell = useRef<typeof editingCell>(null)
   const [editingValue, setEditingValue] = useState('')
 
   // The task_name cell needs both a single-click (open the unified activity-detail
@@ -2116,6 +2118,19 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
 
   if (!selectedProject) return null
 
+  // Preserve CPM cascades without reloading unchanged model links, calendars or resource pools.
+  const refreshActivityEdit = async () => {
+    if (!period) return
+    const [a, r, assignments] = await Promise.all([
+      api.get<Activity[]>('/api/v1/activities/', { params: { project_id: selectedProject.id, schedule_period_id: period.id } }),
+      api.get<ActivityRelationship[]>('/api/v1/activity-relationships/', { params: { schedule_period_id: period.id } }),
+      api.get<ResourceAssignment[]>('/api/v1/resource-assignments/', { params: { schedule_period_id: period.id } }),
+    ])
+    setActivities(previous => replaceEqualDeep(previous, a.data))
+    setRelationships(previous => replaceEqualDeep(previous, r.data))
+    setResourceAssignments(previous => replaceEqualDeep(previous, assignments.data))
+    setError(null)
+  }
   const refresh = async () => {
     if (!period) return
     const [activitiesRes, relationshipsRes, calendarsRes, resourcesRes, assignmentsRes, elementLinks] = await Promise.all([
@@ -2240,16 +2255,22 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     const { data } = await api.post<Activity>('/api/v1/activities/', {
       task_name: 'New Activity', project_id: selectedProject.id, schedule_period_id: period.id, duration_hours: 8,
     })
-    await refresh()
+    await refreshActivityEdit()
     setExpandedId(data.id)
   }
 
   const handleUpdate = async (
     activity: Activity, values: ActivityFormValues, reassessmentNote: string | null, amendRelationships = false
-  ) => {
-    const payload = toActivityPayload(values, calendarLookup, activity.activity_type === 'wbs_summary', activity.status)
+  ): Promise<void | false> => {
+    // Compare normalized form values so untouched dates retain server precision.
+    const payload = toActivityPatch(activity, values, calendarLookup)
+    if (!Object.keys(payload).length && !reassessmentNote) return
+    const metadataOnly = Object.keys(payload).every(key => ['task_name', 'commentary', 'last_reviewed_date'].includes(key))
     try {
-      await api.patch(`/api/v1/activities/${activity.id}`, amendRelationships ? { ...payload, amend_relationships: true } : payload)
+      if (Object.keys(payload).length) {
+        const { data } = await api.patch<Activity>(`/api/v1/activities/${activity.id}`, amendRelationships ? { ...payload, amend_relationships: true } : payload)
+        if (metadataOnly) setActivities(rows => rows.map(row => row.id === data.id ? data : row))
+      }
     } catch (err) {
       // Changing activity_type to/from a Start/Finish Milestone can leave
       // existing relationships invalid — the backend flags this as a 409
@@ -2261,7 +2282,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
         if (window.confirm(`${detail}\n\nAmend them automatically and proceed?`)) {
           return handleUpdate(activity, values, reassessmentNote, true)
         }
-        return
+        return false
       }
       throw err
     }
@@ -2271,7 +2292,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
       })
       setReassessmentRefreshKey(k => k + 1)
     }
-    await refresh()
+    if (!metadataOnly) await refreshActivityEdit()
   }
 
   const handleDelete = async (activity: Activity): Promise<boolean> => {
@@ -2339,12 +2360,12 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // meant deleting and recreating activities in the right order.
   const handleMoveUp = async (activity: Activity) => {
     await api.post(`/api/v1/activities/${activity.id}/move`, { direction: 'up' })
-    await refresh()
+    await refreshActivityEdit()
   }
 
   const handleMoveDown = async (activity: Activity) => {
     await api.post(`/api/v1/activities/${activity.id}/move`, { direction: 'down' })
-    await refresh()
+    await refreshActivityEdit()
   }
 
   const dropActivityRow = async (target: Activity, direction: 'before' | 'after') => {
@@ -2405,7 +2426,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // instead of waiting for it to round-trip through state sidesteps the
   // timing gap entirely — see the select's own onChange below.
   const commitEdit = async (overrideValue?: string) => {
-    if (!editingCell) return
+    if (!editingCell || committingCell.current === editingCell) return
     const { id, field } = editingCell
     const value = overrideValue ?? editingValue
 
@@ -2466,14 +2487,21 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
       payload = { [field]: value }
     }
 
+    const original = activities.find(a => a.id === id)
+    if (original && Object.entries(payload).every(([key, next]) => {
+      const previous = (original as unknown as Record<string, unknown>)[key]
+      return previous == null ? next == null : next != null && String(previous) === String(next)
+    })) { setEditingCell(null); return }
+    committingCell.current = editingCell
     try {
-      await api.patch(`/api/v1/activities/${id}`, payload)
+      const { data } = await api.patch<Activity>(`/api/v1/activities/${id}`, payload)
       setEditingCell(null)
-      await refresh()
+      if (field === 'task_name') setActivities(rows => rows.map(row => row.id === id ? data : row))
+      else await refreshActivityEdit()
     } catch (err) {
       const message = axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
       window.alert(message ?? 'Could not save that change.')
-    }
+    } finally { committingCell.current = null }
   }
 
   const handleCopyRow = (a: Activity) => {
@@ -2542,7 +2570,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
       const parent = activities.find(x => x.id === a.parent_id)
       await api.patch(`/api/v1/activities/${a.id}`, { parent_id: parent?.parent_id ?? null })
     }
-    await refresh()
+    await refreshActivityEdit()
   }
 
   // Indent needs one shared target: whichever row sits immediately above the
@@ -2569,7 +2597,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     for (const a of sorted) {
       await api.patch(`/api/v1/activities/${a.id}`, { parent_id: target.id })
     }
-    await refresh()
+    await refreshActivityEdit()
   }
 
   const handleBulkPaste = () => {
@@ -4437,7 +4465,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
               <div className="col-span-2 divide-y divide-gray-100 overflow-y-auto" style={{ maxHeight: 420 }}>
                 <ActivityLogic
                   activity={expandedActivity} activities={activities} relationships={relationships} calendars={calendars}
-                  onChange={refresh} onFocusActivity={handleFocusActivity} ganttStyle={ganttStyle}
+                  onChange={refreshActivityEdit} onFocusActivity={handleFocusActivity} ganttStyle={ganttStyle}
                 />
                 <ResourceAssignments activity={expandedActivity} resources={resources} onChange={refresh} />
                 <ReassessmentLog

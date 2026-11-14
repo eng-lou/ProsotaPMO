@@ -14,6 +14,7 @@ import { resolveDisplayAxis, type UpAxis } from './upAxis'
 // already clamps that), so falling back to the earliest link when `now`
 // precedes every link's start is safe, not just a default-of-convenience.
 export interface ResolvedTimelineLink {
+  activityId?: string
   activity: Pick<Activity, 'start' | 'finish'>
   // Epoch-ms of activity.start/finish, parsed once when the link is built
   // (Viewport3D.tsx's Mode A resolution / AnnotationMarker.tsx's own

@@ -28,6 +28,8 @@ export interface SectionBox {
   updated_at: string
 }
 
+export type SiteSectionBox = Pick<SectionBox, 'id' | 'name' | 'active' | 'visible'> & SectionBoxBounds & SectionBoxRotation
+
 export interface SectionBoxBounds {
   min_x: number
   min_y: number

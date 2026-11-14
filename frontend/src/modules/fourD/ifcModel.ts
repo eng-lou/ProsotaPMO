@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import {
   IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
-  IFCPROJECT, IFCSTYLEDITEM, IFCCURTAINWALL,
+  IFCPROJECT, IFCSTYLEDITEM, IFCCURTAINWALL, IFCFACEBASEDSURFACEMODEL, IFCSHELLBASEDSURFACEMODEL,
 } from 'web-ifc'
 import { disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
@@ -128,12 +128,15 @@ export interface IfcModelHandle {
 // second project's own first file would silently reuse the first
 // project's completely unrelated site coordinates as its offset.
 let sharedRecenterOffset: THREE.Vector3 | null = null
+let sceneBuildQueue: Promise<void> = Promise.resolve()
+let coordinateEpoch = 0
 
 // Called by FourD.tsx right before restoring/importing models for a
 // newly-selected project (2026-07-19) — see sharedRecenterOffset's own
 // header for why a project switch specifically needs this, unlike normal
 // multi-file import within the same project.
 export function resetRecenterOffset(): void {
+  coordinateEpoch++
   sharedRecenterOffset = null
 }
 
@@ -144,8 +147,14 @@ export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
     // Keep the input buffer out of the scene-building scope: a large IFC's
     // bytes can be reclaimed once OpenModel has parsed the records.
     modelID = api.OpenModel(new Uint8Array(await file.arrayBuffer()))
-    const { object, batch, recenterOffset } = buildIfcScene(api, modelID, file.name, sharedRecenterOffset)
-    sharedRecenterOffset = recenterOffset
+    const epoch = coordinateEpoch
+    const build = sceneBuildQueue.then(async () => {
+      const result = await buildIfcScene(api, modelID!, file.name, epoch === coordinateEpoch ? sharedRecenterOffset : null)
+      if (epoch === coordinateEpoch) sharedRecenterOffset = result.recenterOffset
+      return result
+    })
+    sceneBuildQueue = build.then(() => {}, () => {})
+    const { object, batch } = await build
     return { api, modelID: nextAppModelId++, ifcModelID: modelID, object, batch }
   } catch (error) {
     // Geometry extraction can fail too; never leave its native engine alive.
@@ -174,6 +183,12 @@ export function getExpressIdFromGuid(handle: IfcModelHandle, guid: string): numb
   // guid key.
   const result = handle.api.GetExpressIdFromGuid(handle.ifcModelID, guid)
   return result === undefined ? undefined : Number(result)
+}
+
+// Older exclusions may contain the express ID when the IFC has no GlobalId.
+export function resolveUnloadedId(handle: IfcModelHandle, guid: string): number | undefined {
+  if (/^[1-9]\d{0,9}$/.test(guid)) return Number(guid)
+  return getExpressIdFromGuid(handle, guid)
 }
 
 // GlobalId for a given expressID — the exact reverse of getExpressIdFromGuid
@@ -944,6 +959,21 @@ export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticM
     }
   }
 
+  // web-ifc draws the individual connected face sets or shells. Revit
+  // commonly attaches their finish to the containing surface model.
+  for (const type of [IFCFACEBASEDSURFACEMODEL, IFCSHELLBASEDSURFACEMODEL]) {
+    const containers = api.GetLineIDsWithType(modelID, type)
+    for (let i = 0; i < containers.size(); i++) {
+      const id = containers.get(i)
+      const style = styleByItem.get(id)
+      if (!style) continue
+      const model = getLine(id)
+      for (const child of refList(model?.FbsmFaces ?? model?.SbsmBoundary)) {
+        if (!styleByItem.has(child)) styleByItem.set(child, style)
+      }
+    }
+  }
+
   // Element (or type object) -> material names, in layer order for a
   // layer set.
   const materialCache = new Map<number, { names: string[]; layered: boolean }>()
@@ -1001,6 +1031,7 @@ export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticM
       layered: material?.layered ?? false,
       ifcType: typeByExpressId.get(expressID) ?? '',
       transparent: alpha < 0.99,
+      sourceOpacity: alpha,
     })
   }
   if (handle.batch) {

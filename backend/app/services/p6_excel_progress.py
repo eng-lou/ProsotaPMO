@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
-import openpyxl
 from fastapi import HTTPException
 
 # P6's own "Export to Excel" TASK-sheet layout (2026-09-04, per Maro — a
@@ -56,6 +55,7 @@ def parse_p6_excel_progress(data: bytes) -> list[ParsedProgressRow]:
     rows — pure parsing, no DB access, same "fail cleanly before anything
     opens a transaction" discipline as p6_import_parse.py's own
     parse_pmxml."""
+    import openpyxl
     try:
         wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
     except Exception as exc:

@@ -1,6 +1,8 @@
 import * as THREE from 'three'
+import { bindAnimationShadows } from './animationRendering'
 import { computeAppliedAnimationStateAt, pickActiveLink, type ResolvedTimelineLink } from './timelinePlayback'
-export interface SiteMaterialOriginal { opacity: number; transparent: boolean; depthWrite: boolean; color?: THREE.Color; planes: THREE.Plane[] | null }
+export interface SiteMaterialOriginal { opacity: number; transparent: boolean; depthWrite: boolean; visible: boolean; color?: THREE.Color; planes: THREE.Plane[] | null }
+const animatedGroups = new WeakSet<THREE.Group>()
 export function applySiteAnimation(group: THREE.Group, base: THREE.Vector3, links: ResolvedTimelineLink[], hasLinks: boolean,
   now: Date | null, preview: boolean, legacyVisible: boolean, originals: WeakMap<THREE.Material, SiteMaterialOriginal>) {
     const link = !preview && now ? pickActiveLink(links, now) : null
@@ -15,8 +17,16 @@ export function applySiteAnimation(group: THREE.Group, base: THREE.Vector3, link
       group.rotation[link.profile.axis] = state.rotationOffsetDeg * Math.PI / 180
     }
     group.visible = preview || (hasLinks ? (!now || (!!state && state.opacity > .001)) : legacyVisible)
+    // Unlinked site context has no animation material state to reconcile.
+    // Restore once on unlink, then leave material ownership to the site renderer.
+    if (!hasLinks && !animatedGroups.has(group)) return
+    if (hasLinks) animatedGroups.add(group)
+    else animatedGroups.delete(group)
     let clip: THREE.Plane | null = null
-    if (state?.growProgress != null && link) {
+    // A fully removed group draws neither geometry nor shadows. Computing its
+    // entire scatter's bounds on every orbit frame cannot affect the result.
+    // Reverse scrubbing makes it visible and recomputes the cut immediately.
+    if (group.visible && state?.growProgress != null && state.growProgress < 1 && link) {
       group.updateWorldMatrix(true, true)
       const box = new THREE.Box3().setFromObject(group)
       if (!box.isEmpty()) {
@@ -29,11 +39,12 @@ export function applySiteAnimation(group: THREE.Group, base: THREE.Vector3, link
     }
     group.traverse(node => {
       if (!(node instanceof THREE.Mesh)) return
+      bindAnimationShadows(node)
       for (const mat of Array.isArray(node.material) ? node.material : [node.material]) {
         const colored = mat as THREE.MeshStandardMaterial
         let original = originals.get(mat)
         if (!original) {
-          original = { opacity: mat.opacity, transparent: mat.transparent, depthWrite: mat.depthWrite,
+          original = { opacity: mat.userData.siteSurfaceState?.opacity ?? mat.opacity, transparent: mat.userData.siteSurfaceState?.transparent ?? mat.transparent, depthWrite: mat.userData.siteSurfaceState?.depthWrite ?? mat.depthWrite, visible: mat.userData.siteSurfaceState?.visible ?? mat.visible,
             color: colored.color?.clone(), planes: mat.clippingPlanes }
           originals.set(mat, original)
         }
@@ -42,7 +53,11 @@ export function applySiteAnimation(group: THREE.Group, base: THREE.Vector3, link
         const planes = clip ? [...(original.planes || []), clip] : original.planes
         if (mat.transparent !== transparent || (mat.clippingPlanes?.length || 0) !== (planes?.length || 0)) mat.needsUpdate = true
         mat.opacity = opacity; mat.transparent = transparent; mat.depthWrite = transparent ? false : original.depthWrite
+        // A render-mode/material refresh can hide a faded material. Restore its
+        // authored visibility as well as alpha when the timeline runs backwards.
+        mat.visible = original.visible && opacity > .001
         mat.clippingPlanes = planes
+        mat.clipShadows = true
         if (original.color && colored.color) colored.color.copy(state?.color ? new THREE.Color(state.color) : original.color)
       }
     })

@@ -85,7 +85,7 @@ function CollectionNode({
   const excluded = descendantIds(allCollections, collection.id)
   excluded.add(collection.id)
   const moveTargets = allCollections.filter(c => !excluded.has(c.id))
-  const hasAnyMembers = collection.members.length > 0 || children.some(c => c.members.length > 0)
+  const hasAnyMembers = allCollections.some(c => excluded.has(c.id) && c.members.length > 0)
 
   return (
     <div>

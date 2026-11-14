@@ -477,17 +477,21 @@ export function TransformPanel({ pivotOnly = false, object, mode, onModeChange, 
         // are both plain linear scalars, so composing them in either order
         // round-trips correctly — display flips sign then converts unit;
         // onChange inverts the unit conversion then flips sign back.
-        const displayValue = toDisplayLength(sign * object.position[localAxis], lengthUnitToMetres, unitDisplay)
+        // IFC placement translations are already in scene metres. Only the
+        // pivot coordinates above are in the original geometry's local units.
+        const suffix = lengthUnitSuffix(lengthUnitToMetres, unitDisplay)
+        const metresPerUnit = suffix === 'ft' ? 0.3048 : 1
+        const displayValue = sign * object.position[localAxis] / metresPerUnit
         return (
           <Field
             key={`pos-${axis}`}
             axisLabel={axis.toUpperCase()}
             value={displayValue}
-            resetValue={toDisplayLength(sign * baseline.position[localAxis], lengthUnitToMetres, unitDisplay)}
-            suffix={lengthUnitSuffix(lengthUnitToMetres, unitDisplay)}
+            resetValue={sign * baseline.position[localAxis] / metresPerUnit}
+            suffix={suffix}
             locked={!!locked[`pos-${axis}`] || !!pathProgress}
             keyState={pathProgress ? 'disabled' : keyState(field)}
-            onChange={v => { object.position[localAxis] = sign * fromDisplayLength(v, lengthUnitToMetres, unitDisplay); onFieldChange() }}
+            onChange={v => { object.position[localAxis] = sign * v * metresPerUnit; onFieldChange() }}
             onToggleLock={() => toggleLocked(`pos-${axis}`)}
             onToggleKey={pathProgress ? null : toggleKey(field, displayValue)}
           />

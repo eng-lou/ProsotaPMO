@@ -15,6 +15,7 @@ export interface MeasurementHit {
   // Valid only when object is a real indexed-geometry Mesh — Area (face)
   // mode's own seed triangle for measurementGeometry.ts's measureFacePatch.
   faceIndex: number | null
+  instanceMatrix?: THREE.Matrix4
 }
 
 function isVisibleThroughAncestors(object: THREE.Object3D): boolean {
@@ -36,14 +37,25 @@ function isVisibleThroughAncestors(object: THREE.Object3D): boolean {
   return true
 }
 
+function worldMatrixForInstance(hit: THREE.Intersection) {
+  if (!(hit.object instanceof THREE.InstancedMesh) || hit.instanceId === undefined) return undefined
+  const matrix = new THREE.Matrix4()
+  hit.object.getMatrixAt(hit.instanceId, matrix)
+  return matrix.premultiply(hit.object.matrixWorld)
+}
+
 function raycastFromEvent(
-  event: PointerEvent, raycaster: THREE.Raycaster, camera: THREE.Camera, scene: THREE.Scene, domElement: HTMLElement,
+  event: PointerEvent, raycaster: THREE.Raycaster, camera: THREE.Camera, roots: THREE.Object3D[], domElement: HTMLElement,
 ) {
   const rect = domElement.getBoundingClientRect()
   const cursorPx = { x: event.clientX - rect.left, y: event.clientY - rect.top }
   const ndc = new THREE.Vector2((cursorPx.x / rect.width) * 2 - 1, -(cursorPx.y / rect.height) * 2 + 1)
   raycaster.setFromCamera(ndc, camera)
-  const hits = raycaster.intersectObjects(scene.children, true).filter(hit => isVisibleThroughAncestors(hit.object))
+  const hits = raycaster.intersectObjects(roots, true).filter(hit => {
+    if (!(hit.object instanceof THREE.Mesh) || !isVisibleThroughAncestors(hit.object)) return false
+    const material = Array.isArray(hit.object.material) ? hit.object.material[hit.face?.materialIndex ?? 0] : hit.object.material
+    return material?.visible && material.opacity > 0 && !material.clippingPlanes?.some((plane: THREE.Plane) => plane.distanceToPoint(hit.point) < 0)
+  })
   return { hits, cursorPx, rect }
 }
 
@@ -75,14 +87,15 @@ function raycastFromEvent(
 // preview; clicking still snaps correctly either way, since ensureMaterialized
 // only ever runs on an actual commit below.
 export function MeasurementCatcher({
-  active, upAxis, onHit, onHoverPoint,
+  objects, active, upAxis, onHit, onHoverPoint,
 }: {
+  objects: { object: THREE.Object3D; visible: boolean }[]
   active: boolean
   upAxis: 'y' | 'z'
   onHit: (hit: MeasurementHit) => void
   onHoverPoint: (point: MeasurementPoint | null) => void
 }) {
-  const { camera, scene, gl } = useThree()
+  const { camera, gl } = useThree()
 
   useEffect(() => {
     if (!active) {
@@ -90,6 +103,7 @@ export function MeasurementCatcher({
       return
     }
 
+    const roots = objects.filter(o => o.visible).map(o => o.object)
     const raycaster = new THREE.Raycaster()
     const groundPlane = upAxis === 'z'
       ? new THREE.Plane(new THREE.Vector3(0, 0, 1), 0)
@@ -98,7 +112,7 @@ export function MeasurementCatcher({
     const handlePointerDown = (event: PointerEvent) => {
       event.stopPropagation()
       event.preventDefault()
-      const { hits, cursorPx, rect } = raycastFromEvent(event, raycaster, camera, scene, gl.domElement)
+      const { hits, cursorPx, rect } = raycastFromEvent(event, raycaster, camera, roots, gl.domElement)
 
       if (hits.length > 0) {
         const hit = hits[0]
@@ -122,11 +136,11 @@ export function MeasurementCatcher({
 
         let point: MeasurementPoint = { x: hit.point.x, y: hit.point.y, z: hit.point.z }
         if (target instanceof THREE.Mesh) {
-          const snapped = findSnapPoint(target, camera, cursorPx, rect.width, rect.height)
+          const snapped = findSnapPoint(target, camera, cursorPx, rect.width, rect.height, worldMatrixForInstance(hit))
           if (snapped) point = snapped
         }
 
-        onHit({ point, object: target, faceIndex })
+        onHit({ point, object: target, faceIndex, instanceMatrix: worldMatrixForInstance(hit) })
         return
       }
       const groundHit = new THREE.Vector3()
@@ -136,7 +150,7 @@ export function MeasurementCatcher({
     }
 
     const handlePointerMove = (event: PointerEvent) => {
-      const { hits, cursorPx, rect } = raycastFromEvent(event, raycaster, camera, scene, gl.domElement)
+      const { hits, cursorPx, rect } = raycastFromEvent(event, raycaster, camera, roots, gl.domElement)
       if (hits.length === 0) { onHoverPoint(null); return }
       const hit = hits[0]
       // Batched hits are skipped here (read-only, no materialize) — see
@@ -146,7 +160,7 @@ export function MeasurementCatcher({
         onHoverPoint({ x: hit.point.x, y: hit.point.y, z: hit.point.z })
         return
       }
-      const snapped = findSnapPoint(hit.object, camera, cursorPx, rect.width, rect.height)
+      const snapped = findSnapPoint(hit.object, camera, cursorPx, rect.width, rect.height, worldMatrixForInstance(hit))
       onHoverPoint(snapped ?? { x: hit.point.x, y: hit.point.y, z: hit.point.z })
     }
 
@@ -162,7 +176,7 @@ export function MeasurementCatcher({
       el.removeEventListener('pointerdown', handlePointerDown, { capture: true })
       onHoverPoint(null)
     }
-  }, [active, upAxis, camera, scene, gl, onHit, onHoverPoint])
+  }, [active, upAxis, camera, objects, gl, onHit, onHoverPoint])
 
   return null
 }

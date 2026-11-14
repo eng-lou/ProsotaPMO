@@ -42,6 +42,7 @@ export interface ViewerSettings {
   showEdges: boolean
   showGrid: boolean
   showAxisIndicator: boolean
+  importedLights: boolean
   shadows: boolean
   // Sun azimuth/elevation, in degrees (2026-07-19, per Maro: "shadows
   // doesnt do much... make more distinct, able to control shadow/light
@@ -209,6 +210,7 @@ export const DEFAULT_VIEWER_SETTINGS: ViewerSettings = {
   showEdges: false,
   showGrid: true,
   showAxisIndicator: true,
+  importedLights: true,
   shadows: false,
   sunAzimuth: 45,
   sunElevation: 45,

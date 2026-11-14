@@ -4,35 +4,7 @@ import {
   decompressIfGzip, getOrDownloadFile, maybeCompress, pruneCachedFiles, putCachedFile, storedContentType,
 } from '@/lib/fileCache'
 
-// "Upload a HDR of mine" (2026-07-11, per Maro) — lets the viewport's
-// default environment map (see Viewport3D.tsx's own header on why one's
-// needed at all — GLTFLoader's default material is fully metallic and
-// needs reflected environment light to not look flat gray) be swapped for
-// a user-supplied .hdr/.exr instead of always fetching drei's CDN preset.
-// Saved per project since 2026-09-30 (per Maro — it used to be
-// session-only and had to be re-uploaded every visit): stored in R2 via
-// the environment-maps backend (one per project), cached locally and
-// gzipped when that pays off, same as models (see lib/fileCache.ts).
-//
-// drei's useEnvironment only recognises a file's HDR/EXR format from its
-// URL string (see @react-three/drei/core/useEnvironment.js's getLoader) —
-// a plain blob: URL has no extension and fails that check, so this reads
-// the file as a data: URL and rewrites its MIME prefix to application/hdr
-// or application/exr, the exact prefixes useEnvironment special-cases.
-export async function loadCustomEnvironment(file: File): Promise<{ name: string; url: string }> {
-  const ext = file.name.split('.').pop()?.toLowerCase()
-  const mime = ext === 'hdr' ? 'application/hdr' : ext === 'exr' ? 'application/exr' : null
-  if (!mime) throw new Error(`Unsupported environment file type: .${ext ?? '?'} — supported: .hdr, .exr`)
-
-  const raw = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as string)
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read file'))
-    reader.readAsDataURL(file)
-  })
-  const base64 = raw.slice(raw.indexOf(',') + 1)
-  return { name: file.name, url: `data:${mime};base64,${base64}` }
-}
+import { readEnvironmentTexture } from './environmentTexture'
 
 export interface SavedEnvironment {
   id: string
@@ -41,19 +13,19 @@ export interface SavedEnvironment {
   size_bytes: number
 }
 
-// The project's saved environment as a ready-to-use {name, url}, or null
-// when it has none. Cache-first, like models.
-export async function loadSavedEnvironment(
-  projectId: string,
-): Promise<{ saved: SavedEnvironment; env: { name: string; url: string } } | null> {
-  const { data: saved } = await api.get<SavedEnvironment | null>('/api/v1/environment-maps/', { params: { project_id: projectId } })
-  if (!saved) return null
+export async function getSavedEnvironment(projectId: string): Promise<SavedEnvironment | null> {
+  const { data } = await api.get<SavedEnvironment | null>('/api/v1/environment-maps/', { params: { project_id: projectId } })
+  return data
+}
+
+export async function restoreEnvironmentTexture(saved: SavedEnvironment) {
+  const projectId = saved.project_id
   const stored = await getOrDownloadFile(
     'environment', projectId, saved.id,
     () => downloadLargeBlob(`/api/v1/environment-maps/${saved.id}/download`), saved.size_bytes,
   )
   const file = new File([await decompressIfGzip(stored)], saved.name)
-  return { saved, env: await loadCustomEnvironment(file) }
+  return readEnvironmentTexture(file)
 }
 
 // Uploads straight to R2 (presign + PUT), replacing the project's previous

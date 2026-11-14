@@ -1,7 +1,8 @@
+import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {build} from 'esbuild'
-const {outputFiles}=await build({entryPoints:[new URL('../src/modules/fourD/towerDetection.ts',import.meta.url).pathname.replace(/^\/(\w:)/,'$1')],bundle:true,write:false,format:'esm',platform:'node'})
+const {outputFiles}=await build({entryPoints:[fileURLToPath(new URL('../src/modules/fourD/towerDetection.ts',import.meta.url))],bundle:true,write:false,format:'esm',platform:'node'})
 const {detectTowerGroups}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
 function fixture(axis=2){
  const box=(x,y,z)=>axis===2?[x,y,z]:[x,z,y]

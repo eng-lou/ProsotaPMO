@@ -1,5 +1,5 @@
 import { ToolVisualGuide } from './ToolVisualGuide'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ActivityPicker } from '@/modules/scheduling/ActivityPicker'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
@@ -36,6 +36,7 @@ interface Props {
   // passed through here (2026-07-11, per Maro: "rewire units").
   unitDisplay: IfcUnitDisplay
   onUnitDisplayChange: (value: IfcUnitDisplay) => void
+  selectedActivityIds: Set<string>
   activities: Activity[]
   modelElementLinks: ModelElementLink[]
   animationProfiles: AnimationProfile[]
@@ -68,12 +69,23 @@ export function DataPanel({
   open, onToggle, ifcHandles, activeObjectId, selectedExpressId, selectedExpressIds, onSelectExpressId, onSelectMany, onUnloadIfc,
   unloadedCountByModelId, onReloadIfc,
   selectedObjectIds, onSelectObject, unsavedObjectIds, unitDisplay, onUnitDisplayChange,
-  activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement,
+  selectedActivityIds, activities, modelElementLinks, animationProfiles, onLinkElement, onUnlinkElement,
   activityProfileMapper, onBulkLinkSelected, onBulkUnlinkSelected, onAssignProfile,
   selectedElementLinks, selectionLinksLoading, selectionLinksError, unlinkingSelection,
 }: Props) {
   const [bulkActivityId, setBulkActivityId] = useState('')
   const [bulkProfileId, setBulkProfileId] = useState('')
+  // A proposed link belongs to this selection, not the lifetime of the panel.
+  // Stable membership keys avoid clearing a draft on unrelated rerenders.
+  const linkSelectionKey = JSON.stringify([
+    [...selectedActivityIds].sort(), [...selectedObjectIds].sort(),
+    [...selectedExpressIds].sort((a, b) => a - b), activeObjectId,
+  ])
+  useEffect(() => {
+    setBulkActivityId('')
+    setBulkProfileId('')
+  }, [linkSelectionKey])
+
   const isBulkSelection = selectedExpressIds.size + selectedObjectIds.size > 1
   const linkedActivityCounts = new Map<string, number>()
   for (const link of selectedElementLinks) linkedActivityCounts.set(link.activity_id, (linkedActivityCounts.get(link.activity_id) ?? 0) + 1)
@@ -124,6 +136,7 @@ export function DataPanel({
               Bulk Activity Link ({selectedExpressIds.size + selectedObjectIds.size} selected)
             </div>
             <ActivityPicker
+              key={linkSelectionKey}
               activities={activities.filter(a => a.activity_type !== 'wbs_summary')}
               value={bulkActivityId}
               onChange={setBulkActivityId}

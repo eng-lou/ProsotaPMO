@@ -1,5 +1,6 @@
+import { updateInstanceVisibility, setMeshMovingHidden } from './viewportVisibility'
 import * as THREE from 'three'
-import type { BatchState } from './elementBatching'
+import { getMeshIndex, type BatchState } from './elementBatching'
 
 // "Simplify while orbiting" (2026-10-02, per Maro: "exactly, that's
 // brilliant", after measuring the five-file NBU Medical Clinic at ~6.0M
@@ -20,6 +21,7 @@ const MIN_RADIUS_PX = 5
 
 const _sphere = new THREE.Sphere()
 const _matrix = new THREE.Matrix4()
+const movingMeshes = new WeakMap<THREE.Object3D, THREE.Mesh[]>()
 
 function pixelsPerUnitAt(camera: THREE.Camera, point: THREE.Vector3, viewportHeightPx: number): number {
   if (camera instanceof THREE.OrthographicCamera) {
@@ -49,13 +51,37 @@ export function hideSmallWhileMoving(root: THREE.Object3D, camera: THREE.Camera,
     }
   }
   mesh.userData.movingHidden = hidden
-  return hidden.size
+  // Grow, selection and element edits materialize IFC pieces. Those pieces
+  // still need the same screen-size policy; otherwise linking a model can
+  // silently disable simplification for most of its draw calls.
+  const individuals: THREE.Mesh[] = []
+  for (const meshes of getMeshIndex(root).values()) for (const child of meshes) {
+    if (!child.visible || (child as THREE.SkinnedMesh).isSkinnedMesh || (child as THREE.InstancedMesh).isInstancedMesh) continue
+    child.updateWorldMatrix(true, false)
+    const geometry = child.geometry
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere()
+    if (!geometry.boundingSphere) continue
+    _sphere.copy(geometry.boundingSphere).applyMatrix4(child.matrixWorld)
+    if (_sphere.radius * pixelsPerUnitAt(camera, _sphere.center, viewportHeightPx) < MIN_RADIUS_PX) {
+      setMeshMovingHidden(child, true)
+      individuals.push(child)
+    }
+  }
+  movingMeshes.set(root, individuals)
+  return hidden.size + individuals.length
 }
 
 export function restoreAfterMoving(root: THREE.Object3D) {
+  const individuals = movingMeshes.get(root)
+  if (individuals) {
+    movingMeshes.delete(root)
+    for (const mesh of individuals) setMeshMovingHidden(mesh, false)
+  }
   const batch = root.userData.batch as BatchState | undefined
   const hidden = batch?.mesh.userData.movingHidden as Set<number> | undefined
   if (!batch || !hidden) return
-  for (const instanceId of hidden) batch.mesh.setVisibleAt(instanceId, true)
   delete batch.mesh.userData.movingHidden
+  for (const id of hidden) {
+    if (batch.expressIdByInstanceId.has(id)) updateInstanceVisibility(batch.mesh, id)
+  }
 }

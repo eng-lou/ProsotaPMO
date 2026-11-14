@@ -4,6 +4,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
+import { restoreLegacyCutFinish } from './legacyCutFinish'
 import { prepareCutoutRendering } from './cutoutRendering'
 import { extractAssetPart, type AssetPart } from './assetParts'
 
@@ -26,6 +27,7 @@ export async function parseAsset(bytes: ArrayBuffer) {
   prepareCutoutRendering(gltf.scene)
   const materialSlots=new Map<THREE.Material,number>()
   gltf.scene.traverse(node=>{if(node instanceof THREE.Mesh)for(const material of Array.isArray(node.material)?node.material:[node.material]){if(!materialSlots.has(material))materialSlots.set(material,materialSlots.size);material.userData.prosotaAssetSlot=materialSlots.get(material)}})
+  restoreLegacyCutFinish(gltf.scene, gltf.parser.json)
   const box = new THREE.Box3().setFromObject(gltf.scene), size = box.getSize(new THREE.Vector3())
   if (![size.x, size.y, size.z].every(Number.isFinite) || Math.max(size.x,size.y,size.z)<=.000001) throw Error('Asset needs visible geometry')
   // Flat OBJ surfaces still need a finite normalization scale.

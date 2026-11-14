@@ -1,3 +1,6 @@
+import logging
+from time import perf_counter
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -100,6 +103,20 @@ _auth = [Depends(get_current_user)]
 _auth_approved = [Depends(get_approved_user)]
 
 app = FastAPI(title="Prosota API", version="0.1.0")
+
+
+@app.middleware("http")
+async def request_timing(request, call_next):
+    started = perf_counter()
+    response = await call_next(request)
+    elapsed = (perf_counter() - started) * 1000
+    response.headers["Server-Timing"] = f"app;dur={elapsed:.1f}"
+    if elapsed >= 750 and request.url.path.startswith("/api/"):
+        # Route templates only: no project IDs, query strings, bodies or tokens.
+        route = getattr(request.scope.get("route"), "path", "unmatched")
+        logging.getLogger("prosota.performance").warning(
+            "Slow request %s %s %.0fms", request.method, route, elapsed)
+    return response
 
 app.add_middleware(
     CORSMiddleware,

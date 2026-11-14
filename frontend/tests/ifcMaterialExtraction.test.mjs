@@ -7,7 +7,7 @@ import { build } from 'esbuild'
 
 const require = createRequire(import.meta.url)
 const { IFCWALL, IFCSPACE, IFCANNOTATION, IFCCARTESIANPOINT, IFCSTYLEDITEM,
-  IFCRELASSOCIATESMATERIAL, IFCRELDEFINESBYTYPE } = require('web-ifc')
+  IFCFACEBASEDSURFACEMODEL, IFCRELASSOCIATESMATERIAL, IFCRELDEFINESBYTYPE } = require('web-ifc')
 const filename = fileURLToPath(new URL('./ifcMaterialExtraction.bundle.cjs', import.meta.url))
 const { outputFiles } = await build({
   stdin: {
@@ -74,8 +74,25 @@ function fixture() {
       [40, [{ userData: { ifcGeometryId: 104 } }]],
     ]) } },
   }
-  return { handle, scans, ids }
+  return { handle, scans, ids, lines }
 }
+
+test('a camera field of view inherits its wrapper style; a directly styled housing keeps its own finish', () => {
+  const {handle, ids, lines} = fixture()
+  ids.set(IFCFACEBASEDSURFACEMODEL, [120])
+  ids.set(IFCSTYLEDITEM, [1001, 1002])
+  lines.set(120, {FbsmFaces: [ref(101), ref(103)]})
+  lines.set(1002, {Item: ref(120), Styles: [ref(2010)]})
+  lines.set(2010, {Side: 'BOTH', Name: ref('Air - Vivotek - Field of View')})
+  handle.batch.byExpressId.get(30)[0].colorAlpha = 0.2
+  const info = extractRealisticMaterialInfo(handle)
+  const cone = info.entries.get(info.keyByPiece.get('30:103'))
+  const housing = info.entries.get(info.keyByPiece.get('10:101'))
+  assert.equal(cone.volumeGuide, true)
+  assert.equal(cone.sourceOpacity, 0.2)
+  assert.equal(housing.label, 'Glazing')
+  assert.equal(housing.volumeGuide, false)
+})
 
 test('type lookup indexes elements and rendered non-elements without enumerating geometry', () => {
   const { handle, scans } = fixture()

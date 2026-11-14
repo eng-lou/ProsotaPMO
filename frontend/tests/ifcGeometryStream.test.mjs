@@ -52,9 +52,9 @@ function fixture({ fail = false } = {}) {
   return { api, stats: () => ({ reads, deleted }) }
 }
 
-test('streamed multipart, repeated and mirrored elements retain geometry, identity and editable materials', () => {
+test('streamed multipart, repeated and mirrored elements retain geometry, identity and editable materials', async () => {
   const f = fixture()
-  const { object, batch, recenterOffset } = buildIfcScene(f.api, 0, 'test.ifc', null)
+  const { object, batch, recenterOffset } = await buildIfcScene(f.api, 0, 'test.ifc', null)
   assert.deepEqual(f.stats(), { reads: 2, deleted: 2 })
   assert.equal(batch.geometryByIfcId.size, 2)
   assert.equal(batch.byExpressId.get(10).length, 2)
@@ -79,19 +79,19 @@ test('streamed multipart, repeated and mirrored elements retain geometry, identi
   assert.equal(batch.byExpressId.has(10), false)
 })
 
-test('federated models reuse the shared coordinate origin', () => {
+test('federated models reuse the shared coordinate origin', async () => {
   const shared = new Vector3(500, 10, 20)
-  const { batch, recenterOffset } = buildIfcScene(fixture().api, 0, 'second.ifc', shared)
+  const { batch, recenterOffset } = await buildIfcScene(fixture().api, 0, 'second.ifc', shared)
   assert.equal(recenterOffset, shared)
   assert.deepEqual(batch.byExpressId.get(10)[0].matrix.elements.slice(12, 15), [500, 10, 10])
 })
 
-test('a failed stream disposes already extracted geometry and native handles', () => {
+test('a failed stream disposes already extracted geometry and native handles', async () => {
   const f = fixture({ fail: true })
   const original = BufferGeometry.prototype.dispose
   let disposed = 0
   BufferGeometry.prototype.dispose = function () { disposed++; original.call(this) }
-  try { assert.throws(() => buildIfcScene(f.api, 0, 'bad.ifc', null), /stream interrupted/) }
+  try { await assert.rejects(() => buildIfcScene(f.api, 0, 'bad.ifc', null), /stream interrupted/) }
   finally { BufferGeometry.prototype.dispose = original }
   assert.equal(disposed, 2)
   assert.deepEqual(f.stats(), { reads: 2, deleted: 2 })
@@ -118,7 +118,7 @@ test('real IFC streaming matches native geometry and leaves IFC properties reada
         } finally { geometry.delete() }
       }
     }
-    const { batch } = buildIfcScene(api, id, 'wall.ifc', new Vector3())
+    const { batch } = await buildIfcScene(api, id, 'wall.ifc', new Vector3())
     assert.ok(expected.length > 0)
     assert.equal(batch.expressIdByInstanceId.size, expected.length)
     for (const item of expected) {
@@ -129,4 +129,13 @@ test('real IFC streaming matches native geometry and leaves IFC properties reada
       assert.ok(api.GetLine(id, item.expressID).GlobalId.value)
     }
   } finally { api.CloseModel(id); api.Dispose() }
+})
+
+
+test('scene assembly yields to queued input before completing', async () => {
+  let inputHandled = false
+  const pending = buildIfcScene(fixture().api, 0, 'responsive.ifc', null)
+  setTimeout(() => { inputHandled = true }, 0)
+  await pending
+  assert.equal(inputHandled, true, 'input must run before the scene finishes building')
 })

@@ -9,14 +9,14 @@ export function PlannerReleases({ onSignIn }: { onSignIn: () => void }) {
       <article className="hp-release-card">
         <span className="hp-small">PREVIEW WEB</span>
         <h3>Latest development version</h3>
-        <p>Includes character transparency and pose fixes, plus separate FBX motion import.</p>
+        <p>Restore selected IFC elements and use site objects in collections, sections and measurements.</p>
         <div className="hp-release-actions"><button className="hp-button" onClick={onSignIn}>Open Preview Web <span aria-hidden="true">↗</span></button></div>
         <small>Version {plannerReleases.preview.web.version}</small>
       </article>
       <article className="hp-release-card">
         <span className="hp-small">PREVIEW DESKTOP</span>
         <h3>Latest Preview installer</h3>
-        <p>Includes the same character and motion-import improvements as Preview Web. Projects stay on your PC.</p>
+        <p>Includes the same IFC and site-object tools as Preview Web. Projects stay on your PC.</p>
         <div className="hp-release-actions"><a className="hp-button" href={plannerReleases.preview.desktop.url}>Download Preview for Windows <span aria-hidden="true">↓</span></a></div>
         <small>Version {plannerReleases.preview.desktop.version}</small>
       </article>

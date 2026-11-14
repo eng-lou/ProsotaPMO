@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import type { GanttStyle } from '@/lib/ganttLayout'
 import { ActivityPicker, nearestOtherActivityId } from './ActivityPicker'
@@ -73,6 +73,7 @@ function LinkTable({
   const [editType, setEditType] = useState<RelationshipType>('FS')
   const [editLagDays, setEditLagDays] = useState('0')
   const [saving, setSaving] = useState(false)
+  const pendingSave = useRef(false)
   const [error, setError] = useState<string | null>(null)
 
   const startEdit = (r: ActivityRelationship) => {
@@ -85,7 +86,8 @@ function LinkTable({
   const cancelEdit = () => { setEditingId(null); setError(null) }
 
   const saveEdit = async () => {
-    if (!editingId) return
+    if (!editingId || pendingSave.current) return
+    pendingSave.current = true
     setSaving(true)
     setError(null)
     try {
@@ -94,6 +96,7 @@ function LinkTable({
     } catch (err) {
       setError(apiErrorDetail(err) ?? 'Could not save that change.')
     } finally {
+      pendingSave.current = false
       setSaving(false)
     }
   }
@@ -195,13 +198,15 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
   const [relType, setRelType] = useState<RelationshipType>('FS')
   const [lagDays, setLagDays] = useState('0')
   const [addError, setAddError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const pending = useRef(false)
 
   const calendarLookup = useMemo(() => buildCalendarLookup(calendars), [calendars])
   const hoursPerDay = resolveHoursPerDay(activity, calendarLookup)
-  const activitiesById = new Map(activities.map(a => [a.id, a]))
-  const predecessors = relationships.filter(r => r.successor_id === activity.id)
-  const successors = relationships.filter(r => r.predecessor_id === activity.id)
-  const candidates = activities.filter(a => a.id !== activity.id)
+  const activitiesById = useMemo(() => new Map(activities.map(a => [a.id, a])), [activities])
+  const predecessors = useMemo(() => relationships.filter(r => r.successor_id === activity.id), [relationships, activity.id])
+  const successors = useMemo(() => relationships.filter(r => r.predecessor_id === activity.id), [relationships, activity.id])
+  const candidates = useMemo(() => activities.filter(a => a.id !== activity.id), [activities, activity.id])
   // Scrolls the picker to roughly the current activity's own position
   // rather than starting at the very top of a 100+ row project (2026-07-06,
   // per Maro: a predecessor/successor is usually nearby in the WBS, not at
@@ -222,20 +227,26 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
   }
 
   const handleAdd = async (mode: 'predecessor' | 'successor') => {
-    if (!candidateId) return
+    if (!candidateId || pending.current) return
+    pending.current = true
+    setBusy(true)
     setAddError(null)
     const lagHours = (Number(lagDays) || 0) * hoursPerDay
     const payload = mode === 'predecessor'
       ? { predecessor_id: candidateId, successor_id: activity.id, relationship_type: relType, lag_hours: lagHours }
       : { predecessor_id: activity.id, successor_id: candidateId, relationship_type: relType, lag_hours: lagHours }
+    let saved = false
     try {
       await api.post('/api/v1/activity-relationships/', payload)
+      saved = true
+      resetAddForm()
+      await onChange()
     } catch (err) {
-      setAddError(apiErrorDetail(err) ?? 'Could not create that relationship.')
-      return
+      setAddError(saved ? 'Relationship saved, but the schedule could not refresh. Refresh the schedule to see the latest dates.' : apiErrorDetail(err) ?? 'Could not create that relationship. Your entries are still here.')
+    } finally {
+      pending.current = false
+      setBusy(false)
     }
-    resetAddForm()
-    await onChange()
   }
 
   const handleUpdate = async (id: string, relationshipType: RelationshipType, lagHours: number) => {
@@ -244,11 +255,26 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
   }
 
   const handleDelete = async (id: string) => {
-    await api.delete(`/api/v1/activity-relationships/${id}`)
-    await onChange()
+    if (pending.current) return
+    pending.current = true
+    setBusy(true)
+    setAddError(null)
+    let saved = false
+    try {
+      await api.delete(`/api/v1/activity-relationships/${id}`)
+      saved = true
+      await onChange()
+    } catch (err) {
+      setAddError(saved ? 'Relationship removed, but the schedule could not refresh. Refresh the schedule to see the latest dates.' : apiErrorDetail(err) ?? 'Could not remove that relationship. Please try again.')
+    } finally {
+      pending.current = false
+      setBusy(false)
+    }
   }
 
-  const AddForm = ({ mode, onCancel }: { mode: 'predecessor' | 'successor'; onCancel: () => void }) => {
+  // Render the same form element on each update. A component declared inside
+  // this component remounted its inputs on every keystroke, losing focus.
+  const renderAddForm = ({ mode, onCancel }: { mode: 'predecessor' | 'successor'; onCancel: () => void }) => {
     // The successor for this link is always `activity` itself when adding a
     // predecessor (its milestone-ness, if any, is fixed); when adding a
     // successor instead, it's whichever candidate is currently picked, which
@@ -290,15 +316,17 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
         title="Lag (days) — positive = lag, negative = lead"
         className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-2 py-1 w-16"
       />
-      <button type="submit" className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80">Add</button>
+      <button type="submit" disabled={busy || !candidateId} className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 dark:bg-prosota-azure dark:hover:bg-prosota-azure/80 disabled:opacity-50">{busy ? 'Saving…' : 'Add'}</button>
       <button type="button" onClick={onCancel} className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper">Cancel</button>
-      {addError && <div className="text-[11px] text-red-600 dark:text-red-400 w-full">{addError}</div>}
     </form>
     )
   }
 
   return (
     <div className="grid grid-cols-2 gap-6 px-4 py-4 bg-gray-50 dark:bg-prosota-panel2 border-t border-gray-100 dark:border-prosota-line text-xs">
+      {(busy || addError) && <div className="col-span-2" role={addError ? 'alert' : 'status'}>
+        {addError || 'Saving relationship and updating the schedule…'}
+      </div>}
       <div>
         <LinkTable
           title="Predecessors"
@@ -314,7 +342,7 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
         {isParent ? (
           <div className="text-[11px] text-gray-400 dark:text-prosota-muted">Not applicable to a WBS/Project summary — link its individual tasks/milestones instead.</div>
         ) : addingPred ? (
-          <AddForm mode="predecessor" onCancel={resetAddForm} />
+          renderAddForm({ mode: 'predecessor', onCancel: resetAddForm })
         ) : (
           <button onClick={() => setAddingPred(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
             + Add Predecessor
@@ -336,7 +364,7 @@ export function ActivityLogic({ activity, activities, relationships, calendars, 
         {isParent ? (
           <div className="text-[11px] text-gray-400 dark:text-prosota-muted">Not applicable to a WBS/Project summary — link its individual tasks/milestones instead.</div>
         ) : addingSucc ? (
-          <AddForm mode="successor" onCancel={resetAddForm} />
+          renderAddForm({ mode: 'successor', onCancel: resetAddForm })
         ) : (
           <button onClick={() => setAddingSucc(true)} className="text-xs text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
             + Add Successor

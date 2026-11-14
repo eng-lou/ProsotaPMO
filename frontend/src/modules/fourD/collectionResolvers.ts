@@ -1,5 +1,5 @@
 import type { IfcModelHandle } from './ifcModel'
-import type { LinkableSceneObject } from './linkedElements'
+import { meshElementRef, type LinkableSceneObject } from './linkedElements'
 import { getSplitElementRef } from './splitElementRefs'
 
 export interface MemberRefDraft {
@@ -38,7 +38,7 @@ export async function resolveSelectionToMemberRefs(
 
   for (const objectId of selectedObjectIds) {
     const match = sceneObjects.find(o => o.id === objectId && o.kind === 'mesh')
-    if (match) drafts.push({ source_kind: 'mesh', element_ref: match.name, element_label: match.name })
+    if (match) drafts.push({ source_kind: 'mesh', element_ref: meshElementRef(match), element_label: match.name })
   }
 
   if (activeIfcHandle && selectedExpressIds.size > 0) {

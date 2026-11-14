@@ -16,18 +16,16 @@ import { useThree } from '@react-three/fiber'
 // heartbeat otherwise, so asynchronous changes nobody signals (a texture
 // finishing, a tile streaming in) still land within IDLE_INTERVAL_MS.
 // "Changing" is deliberately broad — any of:
-//   - input on any canvas (orbit, gizmo drags, hover highlights, the
-//     comparison panes' shared camera), a drag anywhere, a wheel or a key;
-//   - any re-render of the Canvas tree (every React-driven scene change —
-//     render mode, selection, visibility, capture settings — commits here);
+//   - pointer down/up on a canvas, a drag, a wheel or a key;
 //   - the timeline date moving (playback, scrubbing, video export all write
 //     timelineDateRef without a React commit);
 //   - the camera moving (OrbitControls damping, fly-to, camera keyframes);
 //   - markRenderActivity() from code that needs frames without any of the
 //     above (captures);
 //   - `continuous` (GLB animation mixers, video export).
-// ACTIVE_MS of full-rate rendering follows the last of these.
-const ACTIVE_MS = 1500
+// A short ACTIVE_MS settling tail follows the last change. Camera damping and
+// actual animation changes extend it themselves; hover does not keep it awake.
+const ACTIVE_MS = 120
 const IDLE_INTERVAL_MS = 1000
 
 // Not Matrix4.equals: OrbitControls.update re-derives the camera matrix
@@ -71,6 +69,7 @@ export function IdleRenderDriver({ dateRef, continuous }: {
   dateRef: React.MutableRefObject<Date | null>
   continuous: boolean
 }) {
+  const frameloop = useThree(s => s.frameloop)
   const invalidate = useThree(s => s.invalidate)
   const advance = useThree(s => s.advance)
   useEffect(() => {
@@ -79,37 +78,50 @@ export function IdleRenderDriver({ dateRef, continuous }: {
     return () => { viewRenderers.delete(render) }
   }, [advance])
   const camera = useThree(s => s.camera)
+  const canvas = useThree(s => s.gl.domElement)
   const lastActivityRef = useRef(performance.now())
   const continuousRef = useRef(continuous)
   continuousRef.current = continuous
 
-  // No deps on purpose: runs after every commit of the Canvas tree.
+  // A React commit needs one fresh frame for imperative scene effects, not a
+  // new continuous-render burst every time a menu or inspector re-renders.
+  // Camera motion and playback extend their own settling window below.
   useEffect(() => {
-    lastActivityRef.current = performance.now()
     invalidate()
   })
 
   useEffect(() => {
+    if (frameloop === 'never') return
     const bump = () => { lastActivityRef.current = performance.now() }
+    const pointers = new Set<number>()
     const onPointer = (e: PointerEvent) => {
-      if (e.target instanceof HTMLCanvasElement || e.buttons !== 0) bump()
+      // Hovering a static model is not scene motion. Real hover changes
+      // invalidate through their React/R3F updates; a pointer merely crossing
+      // the canvas must not restart 1.5 seconds of full-quality rendering.
+      if (e.type === 'pointerdown' && e.target === canvas) pointers.add(e.pointerId)
+      if (pointers.has(e.pointerId)) bump()
+      if (e.type === 'pointerup' || e.type === 'pointercancel') pointers.delete(e.pointerId)
     }
+    const onCanvasInput = (e: Event) => { if (e.target === canvas) bump() }
     const opts = { capture: true, passive: true }
     window.addEventListener('pointerdown', onPointer, opts)
     window.addEventListener('pointermove', onPointer, opts)
     window.addEventListener('pointerup', onPointer, opts)
-    window.addEventListener('wheel', bump, opts)
-    window.addEventListener('keydown', bump, opts)
+    window.addEventListener('pointercancel', onPointer, opts)
+    window.addEventListener('wheel', onCanvasInput, opts)
+    window.addEventListener('keydown', onCanvasInput, opts)
     return () => {
       window.removeEventListener('pointerdown', onPointer, opts)
       window.removeEventListener('pointermove', onPointer, opts)
       window.removeEventListener('pointerup', onPointer, opts)
-      window.removeEventListener('wheel', bump, opts)
-      window.removeEventListener('keydown', bump, opts)
+      window.removeEventListener('pointercancel', onPointer, opts)
+      window.removeEventListener('wheel', onCanvasInput, opts)
+      window.removeEventListener('keydown', onCanvasInput, opts)
     }
-  }, [])
+  }, [frameloop, canvas])
 
   useEffect(() => {
+    if (frameloop === 'never') return
     let raf = 0
     let lastDateMs: number | null = dateRef.current?.getTime() ?? null
     let lastIdleRenderAt = 0
@@ -139,7 +151,7 @@ export function IdleRenderDriver({ dateRef, continuous }: {
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [camera, dateRef, invalidate])
+  }, [camera, dateRef, invalidate, frameloop])
 
   return null
 }

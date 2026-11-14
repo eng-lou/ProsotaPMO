@@ -11,6 +11,11 @@ export interface LinkableSceneObject {
   name: string
 }
 
+// Site placements keep their identity through renames and asset replacements.
+export function meshElementRef(object: LinkableSceneObject): string {
+  return object.id.startsWith('site:') ? object.id : object.name
+}
+
 export interface ResolvedIsolationTarget {
   objectIds: Set<string>
   expressIds: Set<number>
@@ -134,7 +139,7 @@ export async function resolveElementRefsToTargets(
 
   for (const ref of refs) {
     if (ref.source_kind === 'mesh') {
-      const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === ref.element_ref)
+      const match = sceneObjects.find(o => o.kind === 'mesh' && meshElementRef(o) === ref.element_ref)
       if (match) objectIds.add(match.id)
     } else if (ref.source_kind === 'ifc_split') {
       // A level-slice — same resolution shape as the real-ifc branch below,
@@ -177,10 +182,10 @@ export async function resolveActivityLinksToIsolationTargets(
   // cast this used to have, which would have silently misrouted an
   // ifc_split link as a real ifc one (no compile error, since a cast
   // bypasses that check entirely).
-  const relevant = links.filter(
-    (l): l is ModelElementLink & { source_kind: 'ifc' | 'mesh' | 'ifc_split' } =>
-      activityIds.has(l.activity_id) && l.source_kind !== 'annotation',
-  )
+  const relevant = links.filter(l => activityIds.has(l.activity_id) && l.source_kind !== 'annotation')
+    .flatMap(l => l.source_kind === 'site'
+      ? [{ source_kind: 'mesh' as const, element_ref: 'site:' + l.element_ref }]
+      : l.source_kind === 'annotation' ? [] : [{ source_kind: l.source_kind, element_ref: l.element_ref }])
   return resolveElementRefsToTargets(
     relevant.map(l => ({ source_kind: l.source_kind, element_ref: l.element_ref })),
     sceneObjects, ifcHandles,
@@ -216,11 +221,15 @@ export async function resolveIsolationTargetsToActivityIds(
   const ifcModel = needsIfc ? await import('./ifcModel') : null
 
   for (const link of links) {
+    if (link.source_kind === 'site') {
+      if (isolatedObjectIds.has('site:' + link.element_ref)) activityIds.add(link.activity_id)
+      continue
+    }
     if (link.source_kind === 'mesh') {
       // mesh-kind element_ref is a filename, not a scene-object id — resolve
       // it the same way the forward direction does (LinkableSceneObject
       // lookup) before checking isolatedObjectIds.
-      const match = sceneObjects.find(o => o.kind === 'mesh' && o.name === link.element_ref)
+      const match = sceneObjects.find(o => o.kind === 'mesh' && meshElementRef(o) === link.element_ref)
       if (match && isolatedObjectIds.has(match.id)) activityIds.add(link.activity_id)
     } else if (link.source_kind === 'ifc_split') {
       for (const handle of ifcHandles) {

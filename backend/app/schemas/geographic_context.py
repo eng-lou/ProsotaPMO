@@ -5,11 +5,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Coordinate = Annotated[float, Field(ge=-10000, le=10000)]
 XY = tuple[Coordinate, Coordinate]
+GroundFinish = Literal['haul-road', 'settled-earth', 'compacted-gravel', 'crushed-stone', 'dusty-hardstand', 'ground-mats']
 
 class SurfaceFinish(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     color: str | None = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
-    finish: Literal['original', 'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water', 'moquette', 'grass-mown', 'grass-dry', 'green-roof', 'moquette-checkered'] = 'original'
+    finish: GroundFinish | Literal['original', 'concrete', 'glass', 'metal', 'grass', 'brick', 'timber', 'asphalt', 'stone', 'gravel', 'soil', 'tile', 'render', 'painted-metal', 'water', 'moquette', 'grass-mown', 'grass-dry', 'green-roof', 'moquette-checkered'] = 'original'
 
 class FeatureReplacement(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)

@@ -38,7 +38,7 @@ async def bulk_fetch_spreads(
     """One shared calendar-lookup build across every requested resource,
     instead of the Resources tab's old one-HTTP-request-per-resource pattern
     (2026-07-17 perf fix) — see get_spreads_for_resources' own header."""
-    results = await svc.get_spreads_for_resources(db, data.resource_ids, data.start, data.end)
+    results = await svc.get_spreads_for_resources(db, data.resource_ids, data.start, data.end, sparse=data.sparse)
     return {
         "spreads": {str(rid): {"days": days, "cells": cells} for rid, (days, cells) in results.items()},
     }

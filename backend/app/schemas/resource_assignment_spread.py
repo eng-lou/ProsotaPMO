@@ -37,6 +37,7 @@ class ResourceSpreadBulkFetch(BaseModel):
     Resources-tab load can easily have 20+ resources at once, which risks
     exceeding practical URL length limits as a query string."""
     resource_ids: list[uuid.UUID]
+    sparse: bool = False
     start: date
     end: date
 

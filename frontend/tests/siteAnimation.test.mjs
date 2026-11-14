@@ -51,11 +51,65 @@ test('explicit removal clips opaque site geometry and restores original state on
  const f=fixture(), config={...defaults,transform_kind:'grow',grow_mode:'remove',axis,direction,opacity_from:1,opacity_to:1,color_from:'#c53522',color_to:null}
  const resolved=resolve([links[0]],[{id:'fade',config}])
  at(f,'2026-09-30',resolved);assert.equal(f.root.visible,true);assert.equal(f.mat.color.getHexString(),'123456')
+ assert.equal(f.mat.clippingPlanes,null,'fully visible endpoint must not clip coplanar geometry')
  at(f,'2026-10-06',resolved);assert.equal(f.mat.opacity,1);assert.equal(f.mat.color.getHexString(),'c53522')
  const plane=f.mat.clippingPlanes[0], retained=f.base.clone(),removed=f.base.clone();retained[axis]-=direction*.25;removed[axis]+=direction*.25
+ assert.equal(f.mat.clipShadows,true,'removed geometry must also be removed from shadows')
  assert.ok(plane.distanceToPoint(retained)>0);assert.ok(plane.distanceToPoint(removed)<0)
  at(f,'2026-10-12',resolved);assert.equal(f.root.visible,false)
  at(f,'2026-09-30',resolved);assert.equal(f.root.visible,true);assert.equal(f.mat.color.getHexString(),'123456')
  at(f,null,[],false);assert.equal(f.mat.clippingPlanes,null);assert.equal(f.mat.opacity,1)
  }
+})
+
+test('scattered removal restores hidden and replaced materials without selection or reload',()=>{
+ const f=fixture(), child=new THREE.Group();
+ const mesh=f.root.children[0];f.root.remove(mesh);child.add(mesh);f.root.add(child)
+ const resolved=resolve([links[1]])
+ at(f,'2026-10-15',resolved)
+ at(f,'2026-11-01',resolved)
+ assert.equal(f.root.visible,false)
+ f.mat.visible=false
+ at(f,'2026-10-15',resolved)
+ assert.equal(f.root.visible,true);assert.equal(f.mat.visible,true);assert.equal(f.mat.opacity,1)
+ // A fresh display material created while removed must not capture zero as
+ // its authored opacity or false as its permanent visibility.
+ at(f,'2026-11-01',resolved)
+ const replacement=f.mat.clone()
+ replacement.userData.siteSurfaceState={opacity:1,transparent:false,depthWrite:true,visible:true}
+ mesh.material=replacement
+ at(f,'2026-10-15',resolved)
+ assert.equal(replacement.opacity,1);assert.equal(replacement.visible,true);assert.equal(replacement.depthWrite,true)
+ assert.equal(replacement.clippingPlanes,null)
+})
+
+
+test('unlinked site context avoids material traversal; unlink restores exactly once',()=>{
+ const f=fixture();let traversals=0;const traverse=f.root.traverse.bind(f.root)
+ f.root.traverse=callback=>{traversals++;traverse(callback)}
+ for(let i=0;i<120;i++)at(f,'2026-10-06',[],false)
+ assert.equal(traversals,0)
+ at(f,'2026-10-06');assert.equal(f.mat.opacity,.5)
+ at(f,'2026-10-06',[],false);assert.equal(f.mat.opacity,1)
+ const restored=traversals
+ for(let i=0;i<120;i++)at(f,'2026-10-06',[],false)
+ assert.equal(traversals,restored)
+})
+
+test('fully removed grow scatter avoids bounds work while reverse scrubbing restores its cut',()=>{
+ const f=fixture(),resolved=resolve([links[1]],[{id:'out',config:{...defaults,transform_kind:'grow',grow_mode:'remove',opacity_from:1,opacity_to:0}}])
+ let boundsWork=0
+ const update=f.root.updateWorldMatrix.bind(f.root)
+ f.root.updateWorldMatrix=(...args)=>{boundsWork++;return update(...args)}
+ for(let i=0;i<120;i++)at(f,'2026-11-01',resolved)
+ assert.equal(f.root.visible,false)
+ assert.equal(boundsWork,0)
+ at(f,'2026-10-26',resolved)
+ assert.equal(f.root.visible,true)
+ assert.ok(f.mat.clippingPlanes?.length)
+ assert.ok(boundsWork>0)
+ at(f,'2026-10-15',resolved)
+ assert.equal(f.root.visible,true)
+ assert.equal(f.mat.opacity,1)
+ assert.equal(f.mat.clippingPlanes,null)
 })

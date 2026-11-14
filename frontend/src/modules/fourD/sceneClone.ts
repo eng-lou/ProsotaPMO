@@ -1,3 +1,4 @@
+import { cloneImportedLight } from './importedLights'
 import * as THREE from 'three'
 import type { BatchState } from './elementBatching'
 
@@ -180,7 +181,7 @@ function buildClone(object: THREE.Object3D, batch: BatchState | null, cloned: { 
 
   const clone: THREE.Object3D = object instanceof THREE.Mesh
     ? new THREE.Mesh(object.geometry, (object.userData.standardMaterial as THREE.Material | THREE.Material[] | undefined) ?? object.material)
-    : new THREE.Group()
+    : object instanceof THREE.Light ? cloneImportedLight(object) : new THREE.Group()
 
   // Tag the clone's own real PBR material (2026-09-01, per Maro: "baseline
   // viewport isnt using the same render mode and effects settings") — a
@@ -193,13 +194,23 @@ function buildClone(object: THREE.Object3D, batch: BatchState | null, cloned: { 
   // reused rather than a pane-local name, since it means the exact same
   // thing here: "the real material, regardless of what render mode has
   // since put on screen."
-  if (clone instanceof THREE.Mesh) clone.userData.standardMaterial = clone.material
+  if (clone instanceof THREE.Mesh) {
+    if (object.userData.expressID !== undefined) {
+      // Playback and display opacity are pane-local. Keep texture and geometry
+      // references but leave behind the source material's live shader caches.
+      const own = (mat: THREE.Material) => mat.clone.call(Object.create(mat, {userData: {value: {}}}))
+      clone.material = Array.isArray(clone.material) ? clone.material.map(own) : own(clone.material)
+      clone.userData.originalMaterials = object.userData.originalMaterials
+    }
+    clone.userData.standardMaterial = clone.material
+  }
 
   clone.name = object.name
   clone.position.copy(object.position)
   clone.rotation.copy(object.rotation)
   clone.scale.copy(object.scale)
   clone.visible = object.visible
+  if (object.userData.ifcPlacementId !== undefined) clone.userData.ifcPlacementId = object.userData.ifcPlacementId
   if (object.userData.expressID !== undefined) clone.userData.expressID = object.userData.expressID
   // Per-piece identity + IFC transparency, for Realistic Materials mode's
   // per-piece classes and glass opacity (realisticMaterials.ts).
@@ -213,7 +224,7 @@ function buildClone(object: THREE.Object3D, batch: BatchState | null, cloned: { 
     // batch — Realistic mode's glass-only batch (realisticMaterials.ts) and
     // the batched Edges overlay (elementBatching.ts). The pane builds its
     // own from the cloned batch; cloning these would draw them twice.
-    if (child.userData.isRealisticGlassBatch || child.userData.isEdgesBatchMesh) continue
+    if (child.userData.isVolumeOutline || child.userData.isRealisticGlassBatch || child.userData.isEdgesBatchMesh) continue
     clone.add(buildClone(child, batch, cloned))
   }
   return clone

@@ -73,9 +73,11 @@ function trackDrag(el: HTMLElement, onMove: (x: number, y: number) => void) {
   const onPointerUp = () => {
     window.removeEventListener('pointermove', onPointerMove)
     window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
   }
   window.addEventListener('pointermove', onPointerMove)
   window.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('pointercancel', onPointerUp)
   return update
 }
 
@@ -117,25 +119,42 @@ export function ColorPickerPopover({ value, onChange, onClose, anchor, recentCol
   const hueRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  // Closes on an outside click — attaching the listener a tick late
-  // (setTimeout 0) rather than immediately in this effect. Confirmed by
-  // direct render logging (2026-07-05, per Maro) that attaching it
-  // immediately let it catch the very same click that opened the popover
-  // (the swatch's onClick and this effect both run as part of handling that
-  // one native click event, and the event is still bubbling/dispatching at
-  // that point) — so it closed on the same click that opened it, every
-  // time. Deferring to a new task guarantees the opening click has fully
-  // finished dispatching before this listener can see anything.
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) onClose()
+  const hexEdited = useRef(false)
+  const commitHexDraft = () => {
+    if (!hexEdited.current) return
+    hexEdited.current = false
+    const hex = normalizeHex(hexDraft)
+    if (hex && hex !== value) onChange(hex)
+    setHexDraft(hex ?? value)
+  }
+  const actions = useRef({ commitHexDraft, onClose })
+  useLayoutEffect(() => { actions.current = { commitHexDraft, onClose } })
+  useLayoutEffect(() => {
+    const trigger = anchor ?? (document.activeElement instanceof HTMLButtonElement ? document.activeElement : null)
+    const outside = (event: PointerEvent) => {
+      const path = event.composedPath()
+      if ((popoverRef.current && path.includes(popoverRef.current)) || (trigger && path.includes(trigger))) return
+      actions.current.commitHexDraft()
+      actions.current.onClose()
     }
-    const timer = setTimeout(() => document.addEventListener('click', onDocClick), 0)
+    const key = (event: KeyboardEvent) => {
+      if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (event.key === 'Enter') actions.current.commitHexDraft()
+      else hexEdited.current = false
+      actions.current.onClose()
+      if (trigger instanceof HTMLElement) trigger.focus({ preventScroll: true })
+    }
+    // The swatch opens on click. Capture the next pointerdown, even if the
+    // viewport consumes it or a panel rerenders on every colour change.
+    document.addEventListener('pointerdown', outside, true)
+    document.addEventListener('keydown', key, true)
     return () => {
-      clearTimeout(timer)
-      document.removeEventListener('click', onDocClick)
+      document.removeEventListener('pointerdown', outside, true)
+      document.removeEventListener('keydown', key, true)
     }
-  }, [onClose])
+  }, [anchor])
 
   const commit = (next: { h: number; s: number; v: number }) => {
     setHsv(next)
@@ -178,12 +197,6 @@ export function ColorPickerPopover({ value, onChange, onClose, anchor, recentCol
     }
   }, [anchor])
 
-  const commitHexDraft = () => {
-    const hex = normalizeHex(hexDraft)
-    if (hex) onChange(hex)
-    else setHexDraft(value)
-  }
-
   const pureHue = hsvToHex(hsv.h, 1, 1)
 
   const popover = (
@@ -221,9 +234,8 @@ export function ColorPickerPopover({ value, onChange, onClose, anchor, recentCol
         <span className="w-5 h-5 rounded border border-gray-300 dark:border-prosota-line shrink-0" style={{ backgroundColor: value }} />
         <input
           value={hexDraft}
-          onChange={e => setHexDraft(e.target.value)}
+          onChange={e => { hexEdited.current = true; setHexDraft(e.target.value) }}
           onBlur={commitHexDraft}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitHexDraft() } }}
           spellCheck={false}
           aria-label="Hex colour"
           className="flex-1 min-w-0 text-xs font-mono border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-0.5"

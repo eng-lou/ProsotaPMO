@@ -137,7 +137,7 @@ export function TextureFields({
   return (
     <div className="space-y-0.5">
       <div className="flex items-center gap-1.5 px-3 py-0.5">
-        <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">Opacity</span>
+        <span className="w-16 text-[11px] text-gray-400 dark:text-prosota-muted shrink-0">Object opacity</span>
         <input
           type="range"
           min={0}
