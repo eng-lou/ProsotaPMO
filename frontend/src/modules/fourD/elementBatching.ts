@@ -1,5 +1,6 @@
 import { updateInstanceVisibility } from './viewportVisibility'
 import * as THREE from 'three'
+import { bindBatchAnimationEdges } from './batchAnimationShader'
 import { batchContentKey } from './batchRevision'
 import { captureBaseline, getBaseline, captureOriginalGeometry, captureOriginalMaterial, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 
@@ -546,6 +547,7 @@ export function buildEdgesBatch(rootObject: THREE.Object3D): EdgesBatch {
     // shared local origin regardless of this fix.
     const edgesGeometry = new THREE.EdgesGeometry(sourceGeometry, EDGES_THRESHOLD_ANGLE)
     const mesh = new THREE.InstancedMesh(edgesGeometry, EDGES_LINE_MATERIAL, infos.length)
+    bindBatchAnimationEdges(batch.mesh, mesh, infos.map(info => info.instanceId))
     mesh.userData.isEdgesBatchMesh = true
     // Purely decorative — never a raycast target (2026-07-25) — a
     // LineSegments-shaped hit test racing the real shaded mesh underneath
@@ -582,7 +584,10 @@ export function buildEdgesBatch(rootObject: THREE.Object3D): EdgesBatch {
 // from the scene graph; the caller (Viewport3D.tsx) already has the object
 // references it added and is responsible for object.remove(entry.mesh) too.
 export function disposeEdgesBatch(edgesBatch: EdgesBatch): void {
-  for (const entry of edgesBatch.entries.values()) entry.mesh.geometry.dispose()
+  for (const entry of edgesBatch.entries.values()) {
+    entry.mesh.geometry.dispose()
+    ;(entry.mesh.material as THREE.Material).dispose()
+  }
 }
 
 // The O(1) swap-remove ensureMaterialized calls above for every instance it
@@ -601,6 +606,8 @@ function removeFromEdgesBatch(rootObject: THREE.Object3D, info: BatchInstanceInf
     const tempMatrix = new THREE.Matrix4()
     entry.mesh.getMatrixAt(lastIndex, tempMatrix)
     entry.mesh.setMatrixAt(localIndex, tempMatrix)
+    const slots = entry.mesh.geometry.getAttribute('prosotaAnimationSlot')
+    if (slots) { slots.setX(localIndex, lastInstanceId); slots.needsUpdate = true }
     entry.shown[localIndex] = entry.shown[lastIndex]
     entry.localIndexByInstanceId.set(lastInstanceId, localIndex)
     entry.instanceIdByLocalIndex.set(localIndex, lastInstanceId)

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { fullDetailGeometry } from './contextGeometry'
 
 /** Capture a static, independent source in GLB's Y-up coordinates. Never mutate the live scene. */
 export function arraySourceSnapshot(source: THREE.Object3D, upAxis: 'y'|'z', name: string, recenter = true) {
@@ -11,7 +12,7 @@ export function arraySourceSnapshot(source: THREE.Object3D, upAxis: 'y'|'z', nam
     const stored=mesh.userData.standardMaterial
     const original=(stored && (Array.isArray(stored)?stored.every(m=>m?.isMaterial):stored.isMaterial) ? stored : mesh.material) as THREE.Material|THREE.Material[]
     const make=(matrix:THREE.Matrix4, tint?:THREE.Color)=>{
-      const geometry=mesh.geometry.clone()
+      const geometry=fullDetailGeometry(mesh.geometry).clone()
       // A single material ignores groups at render time. Preserve that behaviour
       // when downstream operations build material arrays (extrusions use group 1).
       if(!Array.isArray(original))geometry.clearGroups()

@@ -1,4 +1,5 @@
 import { mergeClipPlanes } from './clipPlaneOwnership'
+import { batchPieceWorldBounds, clearBatchAnimation, setBatchAnimation } from './batchAnimationShader'
 import { scheduleBindingKey, updateResolvedSchedule } from './timelineScheduleUpdate'
 import { fitSunShadow } from './shadowFrustum'
 import { updateMeshVisibility, updateInstanceVisibility } from './viewportVisibility'
@@ -1087,8 +1088,8 @@ const _scratchTranslation = new THREE.Matrix4()
 // that on its own copy). Visibility/colour ('none') always could; a pure
 // translation ('translate'/'fall' — positionOffset only, see
 // computeAppliedAnimationStateAt) is now an instance-matrix offset. Rotation,
-// scale, grow and per-element opacity fades still need a real mesh.
-const BATCHABLE_TRANSFORM_KINDS: ReadonlySet<string> = new Set(['none', 'translate', 'fall'])
+// scale still need individual meshes. Grow and opacity use per-instance shader data.
+const BATCHABLE_TRANSFORM_KINDS: ReadonlySet<string> = new Set(['none', 'translate', 'fall', 'grow'])
 // Reused every frame by TimelinePlayback's own transform diff below
 // (2026-07-21 perf fix) — see that diff's own header for why.
 const _scratchPosition = new THREE.Vector3()
@@ -2841,7 +2842,8 @@ interface ResolvedBatchVisibilityTarget {
   // restMatrix/geometryId (2026-10-03): translate/fall profiles move the
   // instance in place (BATCHABLE_TRANSFORM_KINDS) — offset applied to the
   // element's own stored rest matrix, never to whatever it last showed.
-  instances: { instanceId: number; geometryId: number; originalColor: THREE.Color; restMatrix: THREE.Matrix4 }[]
+  instances: { instanceId: number; geometryId: number; originalColor: THREE.Color; restMatrix: THREE.Matrix4; worldBounds?: THREE.Box3 }[]
+  lastAnimationKey?: string
   // The model group the batch lives in — setBatchedInstanceMatrix also
   // moves the element's Edges instance, which hangs off this group.
   root: THREE.Object3D
@@ -3795,6 +3797,7 @@ export function TimelinePlayback({
           for (const { mesh } of old.materials) updateMeshVisibility(mesh, true)
         }
         for (const old of batchVisibilityTargetsRef.current) {
+          clearBatchAnimation(old.mesh, old.instances.filter(i => old.expressIdByInstanceId.get(i.instanceId) === old.expressID).map(i => i.instanceId))
           for (const { instanceId } of old.instances) {
             if (old.expressIdByInstanceId.get(instanceId) === old.expressID) updateInstanceVisibility(old.mesh, instanceId, true)
           }
@@ -4299,8 +4302,8 @@ export function TimelinePlayback({
     // (and, only for profiles that ask for it, a colour tint) directly on
     // the shared THREE.BatchedMesh — draw-call count for this element never
     // changes no matter how the schedule links it.
-    if (batchFrameGate.needsUpdate(batchVisibilityTargetsRef.current, dateChanged)) {
-      for (const bv of batchVisibilityTargetsRef.current) {
+    if (batchFrameGate.needsUpdate(batchVisibilityTargetsRef.current, dateChanged, nowMs)) {
+      for (const bv of batchFrameGate.targetsToUpdate()) {
         if (dateChanged) {
           bv.cachedActiveLink = pickActiveLink(bv.links, now)
           bv.cachedState = bv.cachedActiveLink
@@ -4316,6 +4319,25 @@ export function TimelinePlayback({
         }
         const state = bv.cachedState
         const scheduleVisible = state ? state.opacity > ANIMATION_VISIBILITY_EPSILON : false
+        const grow = state?.growProgress ?? null
+        const activeProfile = bv.cachedActiveLink?.profile
+        const animationKey = `${state?.opacity ?? 1}|${grow}|${activeProfile?.axis}|${activeProfile?.direction}`
+        if (bv.lastAnimationKey !== animationKey) {
+          for (const inst of bv.instances) {
+            if (bv.expressIdByInstanceId.get(inst.instanceId) !== bv.expressID) continue
+            let plane: THREE.Plane | null = null
+            if (grow !== null && grow < 1 && activeProfile) {
+              const bounds = inst.worldBounds ??= batchPieceWorldBounds(bv.mesh, inst.geometryId, inst.restMatrix)
+              const axis = growAxisWorldVector(activeProfile.axis, upAxis)
+              const lo = bounds.min.dot(axis), hi = bounds.max.dot(axis)
+              plane = activeProfile.direction === 1
+                ? new THREE.Plane(axis.clone().negate(), lo + (hi - lo) * grow)
+                : new THREE.Plane(axis, -(hi - (hi - lo) * grow))
+            }
+            setBatchAnimation(bv.mesh, inst.instanceId, state?.opacity ?? 1, plane)
+          }
+          bv.lastAnimationKey = animationKey
+        }
         // Composed with ModelObjects' own isolate/hide verdict, not just the
         // schedule's (2026-07-21 fix, per Maro: "still not isolating" — a
         // real, confirmed bug, not the theoretical "corrected next frame"
@@ -7562,7 +7584,7 @@ export function Viewport3D({
           <EquipmentVisualEditor transformMode={gizmoMode} transformSpace={gizmoSpace} state={equipmentVisual ?? null} objects={equipmentObjects ?? timelineSceneObjects} />
           <EquipmentPlayback siteScene={siteScene} paths={paths} daysPerSecond={timelineFormat?.speedDaysPerSecond??1} rendering={hidePathHelpers} visual={equipmentVisual} rigs={equipmentRigs} objects={equipmentObjects ?? timelineSceneObjects} dateRef={pathDateRef} preview={equipmentPreview} onError={onEquipmentError} />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
-          {siteScene && <><SiteSceneLayer state={{ ...siteScene, importedLights: settings.importedLights, paths, pathDateRef, daysPerSecond: timelineFormat?.speedDaysPerSecond ?? 1, boxSelecting: boxSelectMode }} links={timelineLinks} profiles={timelineProfiles} activities={timelineActivities} dateRef={timelineDateRef} rendering={hidePathHelpers} />
+          {siteScene && <><SiteSceneLayer state={{ ...siteScene, adaptiveDetail: settings.simplifyWhileOrbiting, captureDetail: captureDprMultiplier !== null, importedLights: settings.importedLights, paths, pathDateRef, daysPerSecond: timelineFormat?.speedDaysPerSecond ?? 1, boxSelecting: boxSelectMode }} links={timelineLinks} profiles={timelineProfiles} activities={timelineActivities} dateRef={timelineDateRef} rendering={hidePathHelpers} />
             <SitePlacementCatcher active={!!siteScene.placing && !hidePathHelpers} upAxis={settings.upAxis}
               elevation={siteScene.preview?.kind === 'light' ? 0 : siteScene.preview?.position[settings.upAxis] || 0}
               onMove={point => siteScene.onMove?.(point)} onPlace={point => siteScene.onPlace?.(point)} />

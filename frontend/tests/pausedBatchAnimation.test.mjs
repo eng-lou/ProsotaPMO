@@ -14,23 +14,26 @@ export { DEFAULT_ANIMATION_CONFIG } from './src/modules/fourD/animationDefaults'
 import { pickActiveLink, computeAppliedAnimationStateAt } from './src/modules/fourD/timelinePlayback';
 import { updateInstanceVisibility } from './src/modules/fourD/viewportVisibility';
 export { updateInstanceVisibility };
+export { ensureBatchAnimation } from './src/modules/fourD/batchAnimationShader';
+import { batchPieceWorldBounds, setBatchAnimation } from './src/modules/fourD/batchAnimationShader';
 import { createBatchAnimationGate } from './src/modules/fourD/batchAnimationGate';
 import { setBatchedInstanceMatrix, syncEdgesBatch } from './src/modules/fourD/elementBatching';
 export function make(dateRef, batchVisibilityTargetsRef, baseline=false) {
  const gate=createBatchAnimationGate();
- const batchFrameGate=baseline?{needsUpdate:()=>true,applied:()=>{}}:gate;
- const individualFrameGate={needsUpdate:()=>true,applied:()=>{}};
+ const batchFrameGate=baseline?{needsUpdate:()=>true,targetsToUpdate:()=>batchVisibilityTargetsRef.current,applied:()=>{}}:gate;
+ const individualFrameGate={needsUpdate:()=>true,targetsToUpdate:()=>batchVisibilityTargetsRef.current,applied:()=>{}};
  const targetsRef={current:[]},pathTargetsRef={current:[]},sceneObjects=[],activeObjectId=null,upAxis='y';
  const lastAppliedDateMs={current:null};
  const varianceByElementKey=new Map(),clashByElementKey=new Map();
  const showClashColors=false,showVarianceColors=false,renderMode='gouraud';
  const _scratchColor=new THREE.Color(),_scratchMatrix=new THREE.Matrix4(),_scratchTranslation=new THREE.Matrix4();
  const ANIMATION_VISIBILITY_EPSILON=.001;
+ const growAxisWorldVector=(axis)=>new THREE.Vector3(...(axis==='x'?[1,0,0]:axis==='y'?[0,1,0]:[0,0,1]));
  const resolveVarianceTint=()=>({magnitude:0,isLate:false});
  const timingRenderer={},beginViewportWork=()=>null,endViewportWork=()=>{};
  return {frame:()=>{${body}},invalidate:()=>gate.invalidate()};
 }`, resolveDir: process.cwd(), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
-const m = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
+const m = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text+'\n//# sourceURL=batch-frame-test.js').toString('base64'))
 const { THREE } = m
 
 function fixture(count = 3) {
@@ -91,4 +94,33 @@ test('55,000 linked elements: unchanged orbit work does not scale with element c
  assert.equal(f.reads(),after)
  assert.equal(f.mesh.getVisibleAt(0),true)
  t.diagnostic(JSON.stringify({elements:55000,frames:60,beforeMs:+oldMs.toFixed(2),afterMs:+newMs.toFixed(2)}))
+})
+
+
+test('165 Grow products with 37,000 representation pieces stay batched through removal and reverse scrub',t=>{
+ const f=fixture(37000),all=f.ref.current,grouped=[]
+ const profile={...m.DEFAULT_ANIMATION_CONFIG,trigger:'over_duration',transform_kind:'grow',grow_mode:'remove',axis:'y',direction:-1,opacity_from:1,opacity_to:0,color_from:null,color_to:null}
+ for(let at=0;at<all.length;at+=225){
+  const target=all[at],instances=all.slice(at,at+225).flatMap(t=>t.instances)
+  for(const piece of instances)target.expressIdByInstanceId.set(piece.instanceId,target.expressID)
+  target.instances=instances;target.links=target.links.map(link=>({...link,profile}));grouped.push(target)
+ }
+ f.ref.current=grouped
+ const runtime=m.make(f.date,f.ref);runtime.frame()
+ const state=m.ensureBatchAnimation(f.mesh)
+ f.date.current=new Date('2026-10-06');runtime.frame()
+ assert.equal(state.texture.image.data[4],.5)
+ assert.equal(state.texture.image.data[37000*8-4],.5)
+ const started=performance.now()
+ for(let i=0;i<10;i++){f.date.current=new Date(Date.parse('2026-10-06')+i*3600000);runtime.frame()}
+ const activeMs=(performance.now()-started)/10
+ f.date.current=new Date('2026-10-12');runtime.frame();assert.equal(f.mesh.getVisibleAt(36999),false)
+ f.date.current=new Date('2026-09-30');runtime.frame();assert.equal(f.mesh.getVisibleAt(36999),true)
+ assert.equal(state.texture.image.data[37000*8-4],1)
+ assert.equal(f.mesh.parent.children.length,1,'no individual geometry nodes were created')
+ const revision=state.revision
+ const idleStart=performance.now();for(let i=0;i<120;i++)runtime.frame()
+ assert.equal(state.revision,revision,'paused frames do not rewrite GPU animation data')
+ t.diagnostic(JSON.stringify({pieces:37000,products:grouped.length,activeFrameMs:activeMs,paused120FramesMs:performance.now()-idleStart}))
+ f.mesh.dispose()
 })

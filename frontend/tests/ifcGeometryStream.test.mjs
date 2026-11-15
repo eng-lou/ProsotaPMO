@@ -86,14 +86,14 @@ test('federated models reuse the shared coordinate origin', async () => {
   assert.deepEqual(batch.byExpressId.get(10)[0].matrix.elements.slice(12, 15), [500, 10, 10])
 })
 
-test('a failed stream disposes already extracted geometry and native handles', async () => {
+test('a failed extraction releases native handles before allocating render geometry', async () => {
   const f = fixture({ fail: true })
   const original = BufferGeometry.prototype.dispose
   let disposed = 0
   BufferGeometry.prototype.dispose = function () { disposed++; original.call(this) }
   try { await assert.rejects(() => buildIfcScene(f.api, 0, 'bad.ifc', null), /stream interrupted/) }
   finally { BufferGeometry.prototype.dispose = original }
-  assert.equal(disposed, 2)
+  assert.equal(disposed, 0)
   assert.deepEqual(f.stats(), { reads: 2, deleted: 2 })
 })
 

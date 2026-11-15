@@ -3,14 +3,7 @@ import type { IfcAPI } from 'web-ifc'
 import { captureBaseline, disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { buildElementMaterial, finalizeIndividualMesh, type BatchState } from './elementBatching'
 
-const NON_PRODUCT_IFC_TYPES = new Set(['IFCSTYLEDITEM', 'IFCSURFACESTYLE', 'IFCSURFACESTYLERENDERING', 'IFCTRIMMEDCURVE', 'IFCVECTOR'])
-
-interface Placement {
-  expressID: number
-  geometryExpressID: number
-  matrix: number[]
-  color: { x: number; y: number; z: number; w: number }
-}
+import { extractIfcGeometry, type IfcGeometryData, type IfcPlacement } from './ifcGeometryData'
 
 function buildGeometry(vertexData: Float32Array, indexData: Uint32Array): THREE.BufferGeometry {
   const vertexCount = vertexData.length / 6
@@ -40,11 +33,11 @@ function buildGeometry(vertexData: Float32Array, indexData: Uint32Array): THREE.
  * StreamAllMeshes clears that cache between elements. Only owned Three buffers
  * and plain placement records survive the callback; properties stay in the API.
  */
-export async function buildIfcScene(api: IfcAPI, modelID: number, name: string, sharedOffset: THREE.Vector3 | null) {
+export async function buildIfcScene(api: IfcAPI, modelID: number, name: string, sharedOffset: THREE.Vector3 | null, prepared?: IfcGeometryData) {
   const group = new THREE.Group()
   group.name = name
   const geometries = new Map<number, THREE.BufferGeometry>()
-  const placements: Placement[] = []
+  const placements: IfcPlacement[] = []
   const offsetSum = new THREE.Vector3()
   let totalVertices = 0, totalIndices = 0
   let batch: BatchState | null = null
@@ -54,30 +47,16 @@ export async function buildIfcScene(api: IfcAPI, modelID: number, name: string, 
   const yieldToInput = async () => { await new Promise<void>(resolve => setTimeout(resolve, 0)); sliceStart = performance.now() }
   try {
     await yieldToInput()
-    api.StreamAllMeshes(modelID, flatMesh => {
-      if (NON_PRODUCT_IFC_TYPES.has(api.GetNameFromTypeCode(api.GetLineType(modelID, flatMesh.expressID)))) return
-      for (let j = 0; j < flatMesh.geometries.size(); j++) {
-        const placed = flatMesh.geometries.get(j)
-        const id = placed.geometryExpressID
-        if (!geometries.has(id)) {
-          const nativeGeometry = api.GetGeometry(modelID, id)
-          try {
-            // web-ifc returns owned copies, not views into its growing WASM heap.
-            const vertices = api.GetVertexArray(nativeGeometry.GetVertexData(), nativeGeometry.GetVertexDataSize())
-            const indices = api.GetIndexArray(nativeGeometry.GetIndexData(), nativeGeometry.GetIndexDataSize())
-            geometries.set(id, buildGeometry(vertices, indices))
-            totalVertices += vertices.length / 6
-            totalIndices += indices.length
-          } finally { nativeGeometry.delete() }
-        }
-        const matrix = Array.from(placed.flatTransformation)
-        const color = { x: placed.color.x, y: placed.color.y, z: placed.color.z, w: placed.color.w }
-        placements.push({ expressID: flatMesh.expressID, geometryExpressID: id, matrix, color })
-        if (!sharedOffset) {
-          offsetSum.x += matrix[12]; offsetSum.y += matrix[13]; offsetSum.z += matrix[14]
-        }
-      }
-    })
+    const data = prepared ?? extractIfcGeometry(api, modelID)
+    for (const shape of data.geometries) {
+      if (performance.now() - sliceStart > 8) await yieldToInput()
+      geometries.set(shape.id, buildGeometry(shape.vertices, shape.indices))
+      totalVertices += shape.vertices.length / 6; totalIndices += shape.indices.length
+    }
+    for (const placed of data.placements) {
+      placements.push(placed)
+      if (!sharedOffset) { offsetSum.x += placed.matrix[12]; offsetSum.y += placed.matrix[13]; offsetSum.z += placed.matrix[14] }
+    }
 
     await yieldToInput()
 

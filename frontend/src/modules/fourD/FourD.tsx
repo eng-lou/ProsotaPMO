@@ -4115,6 +4115,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // real fix, only repeat noise for the same still-broken one.
   const brokenModelObjectIdsRef = useRef<Set<string>>(new Set())
   const [importing, setImporting] = useState(false)
+  const [geometryPhase, setGeometryPhase] = useState('')
   // "Show a percentage save" (2026-07-28, per Maro) — a real byte-count
   // percentage per in-flight upload (persistModelFile's own onProgress
   // callback, model3dFiles.ts's uploadModel3DFile), keyed by scene object
@@ -4342,6 +4343,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       addImportError(err instanceof Error ? err.message : 'Failed to import point cloud')
     } finally {
       setImporting(false)
+      setGeometryPhase('')
     }
   }
 
@@ -4355,7 +4357,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     try {
       await unloadExistingNamesake(name, 'ifc')
       const { loadIfcModel } = await import('./ifcModel')
-      const handle = await loadIfcModel(file)
+      const handle = await loadIfcModel(file, setGeometryPhase)
       const id = `ifc-${handle.modelID}`
       handle.object.name = name
       handle.object.userData.sceneObjectId = id
@@ -4370,6 +4372,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       console.error(err)
     } finally {
       setImporting(false)
+      setGeometryPhase('')
     }
   }
 
@@ -4508,6 +4511,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     // project id is still what the ref holds, so every check below keeps
     // passing) while still correctly stopping stale work the moment a
     // genuinely different project's own restore effect claims the ref.
+    setGeometryPhase('')
     const projectIdForThisRestore = selectedProject.id
     const stale = () => restoreStartedForProjectIdRef.current !== projectIdForThisRestore
     ;(async () => {
@@ -4611,7 +4615,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       // Every restore failure gets its own entry in importErrors instead of
       // overwriting the last one (silently losing files was impossible to
       // diagnose because only the LAST failure ever survived).
-      const reportRestoreFailure = addImportError
+      const reportRestoreFailure = (message: string) => { if (!stale()) { setGeometryPhase(''); addImportError(message) } }
 
       for (const download of downloads) {
         if (stale()) return
@@ -4627,7 +4631,8 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           const wholeFileTransform = transforms.find(t => t.model3d_file_id === file.id && t.element_ref === null)
           if (file.kind === 'ifc') {
             const { loadIfcModel } = await import('./ifcModel')
-            const handle = await loadIfcModel(restoredFile)
+            const handle = await loadIfcModel(restoredFile, phase => { if (!stale()) setGeometryPhase(phase) })
+            if (!stale()) setGeometryPhase('')
             if (stale()) { const { disposeIfcModel } = await import('./ifcModel'); disposeIfcModel(handle); return }
             applyTransform(handle.object, wholeFileTransform)
             // Element-scoped transforms (2026-07-11) — a specific IFC
@@ -8393,7 +8398,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           project={selectedProject} schedulePeriodId={period.id} costPeriodId={costPeriod.id}
           onClose={() => setIntegratedIfcExportOpen(false)}
         />}
-        {importing && uploadProgress.size === 0 && <span className="text-xs text-gray-400 dark:text-prosota-muted">Importing…</span>}
+        {(importing || geometryPhase) && uploadProgress.size === 0 && <span role="status" className="text-xs text-gray-400 dark:text-prosota-muted">{geometryPhase || 'Importing…'}</span>}
         {/* Visible counterpart to the beforeunload guard above (2026-07-17,
             per Maro: "force a save and recall ifc after every refresh") —
             the browser prompt only ever fires at the moment of an actual

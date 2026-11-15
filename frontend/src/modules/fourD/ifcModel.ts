@@ -6,6 +6,7 @@ import {
 import { disposeMeshGeometries, disposeMeshMaterials } from './elementBaseline'
 import { disposeEdgesBatch, type BatchState, type EdgesBatch } from './elementBatching'
 
+import { cancelIfcGeometryPreparations, prepareIfcGeometry } from './ifcGeometryLoader'
 import { buildIfcScene } from './ifcGeometryStream'
 
 /** Explicit IFC assembly identity, used only by the opt-in tower recipe. */
@@ -136,20 +137,26 @@ let coordinateEpoch = 0
 // header for why a project switch specifically needs this, unlike normal
 // multi-file import within the same project.
 export function resetRecenterOffset(): void {
+  cancelIfcGeometryPreparations()
   coordinateEpoch++
   sharedRecenterOffset = null
 }
 
-export async function loadIfcModel(file: File): Promise<IfcModelHandle> {
+export async function loadIfcModel(file: File, progress?: (phase: string) => void): Promise<IfcModelHandle> {
+  const epoch = coordinateEpoch
+  const prepared = await prepareIfcGeometry(file, progress)
+  if (epoch !== coordinateEpoch) throw new DOMException('Model loading cancelled', 'AbortError')
+  progress?.('Opening model properties…')
+  await new Promise<void>(resolve => setTimeout(resolve, 0))
   const api = await createApi()
   let modelID: number | undefined
   try {
     // Keep the input buffer out of the scene-building scope: a large IFC's
     // bytes can be reclaimed once OpenModel has parsed the records.
     modelID = api.OpenModel(new Uint8Array(await file.arrayBuffer()))
-    const epoch = coordinateEpoch
     const build = sceneBuildQueue.then(async () => {
-      const result = await buildIfcScene(api, modelID!, file.name, epoch === coordinateEpoch ? sharedRecenterOffset : null)
+      progress?.('Building the view…')
+      const result = await buildIfcScene(api, modelID!, file.name, epoch === coordinateEpoch ? sharedRecenterOffset : null, prepared)
       if (epoch === coordinateEpoch) sharedRecenterOffset = result.recenterOffset
       return result
     })

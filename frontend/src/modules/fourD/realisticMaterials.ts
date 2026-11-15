@@ -6,6 +6,7 @@ import { ensureMaterialized } from './elementBatching'
 import { makeVolumeOutline, disposeVolumeOutline, isVolumeStyle } from './ifcVolumeGuides'
 import { waterTime, waterOptions, waterColour } from './WaterSurface'
 import * as THREE from 'three'
+import { bindBatchAnimationMirror } from './batchAnimationShader'
 import { batchContentKey } from './batchRevision'
 import type { BatchInstanceInfo, BatchState } from './elementBatching'
 import { BATCH_ALPHA_VERTEX_PATCH } from './renderModeMaterials'
@@ -1522,6 +1523,7 @@ function buildSurfaceBatch(batch: BatchState, pieces: BatchInstanceInfo[], trans
     localIds[i] = localId
   })
   mesh.position.copy(batch.mesh.position)
+  bindBatchAnimationMirror(batch.mesh, mesh, mainIds)
   mesh.quaternion.copy(batch.mesh.quaternion)
   mesh.scale.copy(batch.mesh.scale)
   batch.mesh.parent?.add(mesh)

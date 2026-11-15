@@ -302,12 +302,12 @@ export function PropertiesPanel({
           />
         </Row>
       )}
-      <Row label="Simplify while orbiting">
+      <Row label="Adaptive detail">
         <input
           type="checkbox"
           checked={settings.simplifyWhileOrbiting}
           onChange={e => set('simplifyWhileOrbiting', e.target.checked)}
-          title="While you drag to orbit, hide elements too small to see (mostly MEP fittings) so the view stays smooth — everything comes back the moment you let go"
+          title="Reduce small details during navigation and use simpler distant scattered assets. Close views, selection and exports retain full detail."
         />
       </Row>
       <Row label="Ambient Occlusion">
