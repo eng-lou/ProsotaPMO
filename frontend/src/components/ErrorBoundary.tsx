@@ -14,27 +14,6 @@ interface State {
   componentStack: string | null
 }
 
-// One-click version of "clear site data in DevTools" (2026-09-25, per Maro:
-// a render loop right after generating a schedule from an IFC only went away
-// after clearing browser storage by hand, which "most users won't be able to
-// do or will give up"). Removes only this app's own saved UI state (every
-// key is prefixed "prosota"). The Auth0 session cache is left alone, so the
-// user stays signed in. prosota_theme is kept because it can't cause a
-// render loop and losing it would be a pointless visible change.
-function resetSavedViewSettings() {
-  for (const storage of [localStorage, sessionStorage]) {
-    try {
-      const keys: string[] = []
-      for (let i = 0; i < storage.length; i++) {
-        const key = storage.key(i)
-        if (key && key.startsWith('prosota') && key !== 'prosota_theme') keys.push(key)
-      }
-      keys.forEach(key => storage.removeItem(key))
-    } catch { /* storage unavailable: nothing to reset */ }
-  }
-  window.location.reload()
-}
-
 // This app previously had no error boundary anywhere — any uncaught error
 // during rendering (not just a failed API call) unmounted the entire React
 // tree, leaving a blank white page with no indication of what happened
@@ -69,8 +48,8 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="max-w-lg w-full bg-white dark:bg-prosota-panel border border-red-200 dark:border-red-500/30 rounded-lg shadow-sm p-6">
             <h1 className="text-lg font-bold text-red-700 dark:text-red-400 mb-2">Something went wrong</h1>
             <p className="text-sm text-gray-600 dark:text-prosota-muted mb-4">
-              This screen hit an unexpected error and couldn't continue. Try Reload first. If it keeps happening,
-              use Reset saved view settings (you'll stay signed in), and please screenshot the details below.
+              This screen hit an unexpected error and couldn't continue. Reload to retry. If it keeps happening,
+              please share the details below. Reload does not clear your saved project or material settings.
             </p>
             <pre className="text-xs bg-gray-50 dark:bg-prosota-panel2 border border-gray-200 dark:border-prosota-line dark:text-prosota-paper rounded p-3 overflow-auto max-h-48 mb-4 whitespace-pre-wrap">
               {this.state.error.message}
@@ -83,13 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
               >
                 Reload
               </button>
-              <button
-                onClick={resetSavedViewSettings}
-                title="Clears saved layouts, column choices, filters and panel positions on this device. You stay signed in."
-                className="text-sm px-4 py-1.5 rounded-md border border-gray-300 dark:border-prosota-line text-gray-700 dark:text-prosota-paper hover:bg-gray-50 dark:hover:bg-prosota-panel2"
-              >
-                Reset saved view settings and reload
-              </button>
+
             </div>
           </div>
         </div>

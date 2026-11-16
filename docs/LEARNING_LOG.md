@@ -1,5 +1,21 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-16 - Destructive error recovery removed; material recovery
+
+The error screen's "Reset saved view settings" deleted every Prosota-prefixed
+localStorage/sessionStorage key. Material mappings are stored under
+prosota_4d_realistic_material_map_<projectId>; this was destructive project
+appearance loss, not just a layout reset. User confirmed using that button.
+Removed the option and its deletion function completely. Reload remains.
+Added a regression guard against browser-data deletion in error recovery.
+Read-only examination of local Chromium LevelDB recovered the pre-deletion
+web material values and separate Preview values. Recovery copies are outside
+the repository; no personal mappings are committed. The restore script writes
+only missing/empty original project mapping keys and retains newer mappings.
+The user subsequently confirmed the IFC loaded after a delay. Do not equate
+an empty IFC panel during restoration with deleted source or link records.
+Materials require Realistic Materials mode; reset had selected Rendered PBR.
+
 ## 2026-11-16 - WebGL startup recovery
 
 User confirmed `Error creating WebGL context` after reload. The matching
