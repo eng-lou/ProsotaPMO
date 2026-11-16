@@ -2,7 +2,7 @@ import { ToolVisualGuide } from './ToolVisualGuide'
 
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { Canvas } from '@react-three/fiber'
+import { SafeCanvas as Canvas } from './SafeCanvas'
 import { Bounds, OrbitControls } from '@react-three/drei'
 import { computeShapeBoolean, disposeBooleanResults, type BooleanResult, type ShapeOperation } from './shapeBoolean'
 import { importSiteAsset } from './siteAssets'

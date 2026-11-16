@@ -1,5 +1,26 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-16 - WebGL startup recovery
+
+User confirmed `Error creating WebGL context` after reload. The matching
+production stack points to R3F Canvas. The browser/driver reason is unknown;
+this is a context allocation failure, not proof of a model/animation defect.
+All six R3F entry points now try default GPU preference without antialiasing
+if the normal high-performance context request fails. Section stencil,
+capture drawing buffers and logarithmic depth are preserved. A local error
+boundary leaves the surrounding workspace available and offers fresh-canvas
+retry. Other code failures still propagate to diagnostic error handling.
+No project data or saved settings are cleared. Existing R3F renderer disposal
+is retained. This cannot force a blocked or failed browser GPU to recover.
+
+Validation: 396 unit tests passed, two optional skips; TypeScript/production
+build passed; Chromium batch, import and context suites passed. The new test
+mounts real React/R3F, denies contexts, verifies local containment and then
+allows only the compatibility request and verifies successful retry and
+required buffers. These are controlled recovery tests, not a claim that the
+user's GPU failure was reproduced physically. Git staging was blocked by
+read-only index access in this session; prepared publish-web-context-fix.ps1.
+
 ## 2026-11-11 - User export confirms excavation source geometry
 
 Read C:/Users/Maro/Downloads/Excavation _ result.glb. All 70 triangles match

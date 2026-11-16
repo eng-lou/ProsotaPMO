@@ -1,5 +1,6 @@
+import { SafeCanvas as Canvas } from './SafeCanvas'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Canvas, useThree, addAfterEffect } from '@react-three/fiber'
+import { useThree, addAfterEffect } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
 import type { ClashSnapshotElement } from './clashGeometry'

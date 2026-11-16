@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useRef, useState } from 'react'
-import { Canvas } from '@react-three/fiber'
+import { SafeCanvas as Canvas } from './SafeCanvas'
 import { Bounds, OrbitControls } from '@react-three/drei'
 import { api } from '@/lib/api'
 import { SITE_ASSET_CATEGORIES, importSiteAsset, type useSiteAssetInventory, type SiteAsset } from './siteAssets'

@@ -1,7 +1,7 @@
 <!doctype html><html><head><title>Prosota web regression fixture</title></head><body><pre id="result">Running isolated fixture…</pre><script type="module">
 const suite=new URLSearchParams(location.search).get('suite')||'batch';
 try {
-  const fixture=suite==='import'?await import('./import.fixture.ts'):await import('./batchAnimation.fixture.ts');
+  const fixture=suite==='context'?await import('./context.fixture.tsx'):suite==='import'?await import('./import.fixture.ts'):await import('./batchAnimation.fixture.ts');
   window.testResult=await fixture.run();
 } catch(error) {window.testResult={passed:false,error:error.stack||String(error)}}
 document.getElementById('result').textContent=JSON.stringify(window.testResult);
