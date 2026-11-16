@@ -1,5 +1,13 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-16 - Temporary equipment appearance and lifetime
+
+Activity-fitted path objects were still receiving the linked construction profile's tint, opacity and cut-away transforms. Treat these objects as temporary equipment: apply the activity start/finish as a visibility window while preserving authored material appearance. Switching from a previously applied profile restores its original colour, opacity, clipping and pose through the existing restoration path. Subsequent idle frames avoid the material traversal. Source assets, material mappings and activity assignments are unchanged.
+
+Activity-fitted movement and visibility now both use the construction date reference. Independent camera actor/presentation clocks continue to control manual routes only. The visibility window is start-inclusive and finish-exclusive, so equipment disappears at finish and reappears correctly on reverse scrubbing. Simulator-owned poses retain their override. Scope: objects whose Journey timing is fitted to an activity; ordinary linked construction objects retain their profile effects.
+
+Validation: 404 frontend tests passed, 2 skipped. Added regression for restoration from a faded/tinted profile, start/finish boundaries, reverse scrubbing, missing activity dates and returning to ordinary profile animation. Live loader playback still requires verification after deployment.
+
 ## 2026-11-16 - Activity-timed equipment paths
 
 An object/activity assignment did not control its separate route clock. A 134-second route could therefore outlast a short scheduled vegetation activity. Added explicit Journey timing selection using the object's assigned activities. Activity-fit maps route progress (including existing pause/reverse keys) to the current activity start/finish and hides the outer motion group before start and at/after finish. Reverse scrubbing restores it. Manual routes retain their stored timing, and switching back preserves original keys/speed/start. Embedded distance-driven clips follow the fitted travel; independently authored rig keys are not retimed by this option.

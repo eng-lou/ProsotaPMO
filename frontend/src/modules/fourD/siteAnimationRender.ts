@@ -1,10 +1,17 @@
 import * as THREE from 'three'
 import { bindAnimationShadows } from './animationRendering'
 import { computeAppliedAnimationStateAt, pickActiveLink, type ResolvedTimelineLink } from './timelinePlayback'
+export interface TemporaryEquipmentWindow { startMs: number; finishMs: number }
 export interface SiteMaterialOriginal { opacity: number; transparent: boolean; depthWrite: boolean; visible: boolean; color?: THREE.Color; planes: THREE.Plane[] | null }
 const animatedGroups = new WeakSet<THREE.Group>()
 export function applySiteAnimation(group: THREE.Group, base: THREE.Vector3, links: ResolvedTimelineLink[], hasLinks: boolean,
-  now: Date | null, preview: boolean, legacyVisible: boolean, originals: WeakMap<THREE.Material, SiteMaterialOriginal>) {
+  now: Date | null, preview: boolean, legacyVisible: boolean, originals: WeakMap<THREE.Material, SiteMaterialOriginal>, temporaryWindow?: TemporaryEquipmentWindow | null) {
+    // Equipment uses the assignment as a work window, not as a material effect.
+    // Reuse the unlink restoration once when switching from an animated profile.
+    if (temporaryWindow !== undefined) {
+      links = []; hasLinks = false
+      legacyVisible = !!temporaryWindow && (!now || (now.getTime() >= temporaryWindow.startMs && now.getTime() < temporaryWindow.finishMs))
+    }
     const link = !preview && now ? pickActiveLink(links, now) : null
     // The outer site group lives in world coordinates (no source-axis wrapper).
     // Request world-axis offsets; the model's Y/Z conversion is its child.

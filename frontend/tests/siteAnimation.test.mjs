@@ -113,3 +113,22 @@ test('fully removed grow scatter avoids bounds work while reverse scrubbing rest
  assert.equal(f.mat.opacity,1)
  assert.equal(f.mat.clippingPlanes,null)
 })
+
+test('temporary equipment restores its materials and disappears exactly at finish including reverse scrubbing',()=>{
+ const f=fixture(), resolved=resolve(), window={startMs:Date.parse('2026-10-21'),finishMs:Date.parse('2026-10-31')}
+ at(f,'2026-10-26') // The existing removal profile has already faded/tinted it.
+ assert.equal(f.mat.opacity,.5)
+ for(const [date,visible] of [['2026-10-20',false],['2026-10-21',true],['2026-10-26',true],['2026-10-31',false],['2026-11-02',false],['2026-10-25',true]]){
+   applySiteAnimation(f.root,f.base,resolved,true,new Date(date),false,true,f.originals,window)
+   assert.equal(f.root.visible,visible)
+   assert.equal(f.mat.opacity,1)
+   assert.equal(f.mat.color.getHexString(),'123456')
+   assert.equal(f.mat.transparent,false)
+   assert.equal(f.mat.clippingPlanes,null)
+   assert.deepEqual(f.root.position.toArray(),f.base.toArray())
+ }
+ applySiteAnimation(f.root,f.base,resolved,true,new Date('2026-10-26'),false,true,f.originals,null)
+ assert.equal(f.root.visible,false)
+ // Switching out of equipment mode still restores normal construction effects.
+ at(f,'2026-10-26');assert.equal(f.mat.opacity,.5)
+})

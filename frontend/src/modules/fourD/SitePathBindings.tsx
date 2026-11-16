@@ -42,7 +42,7 @@ function Binding({item,path,activities,links,busy,dateRef,format,onSeek,onChange
       <option value="">Manual start and travel speed</option>
       {candidates.map(a=><option key={a.id} value={a.id}>Fit to {a.code}: {a.task_name}</option>)}
     </select></label>
-    {!!motion.activity_id && <p>{fitted ? 'Journey fits the activity start and finish, including any timed stops. Equipment is hidden before the activity starts and when it finishes. Schedule edits update the journey automatically.' : 'This activity needs valid start and finish dates. Equipment stays hidden until they are available.'}</p>}
+    {!!motion.activity_id && <p>{fitted ? 'Journey fits the activity start and finish, including any timed stops. Temporary equipment keeps its own materials without activity colours, fading or cut-away effects. It is hidden before the activity starts and at its finish. Schedule edits update the journey automatically.' : 'This activity needs valid start and finish dates. Equipment stays hidden until they are available.'}</p>}
     {!candidates.length && <p>Assign this object to an activity to enable activity timing.</p>}
     {!motion.activity_id && !keys.length&&<><NumberField label="Travel speed (m/s)" value={motion.speed} onChange={v=>change({speed:v})}/>
       {format&&<label className="block">Journey starts<TimelinePointInput value={new Date(motion.start)} format={format} placeholder="Start" dayEdge="start" onChange={d=>{if(d)change({start:d.toISOString()})}}/></label>}

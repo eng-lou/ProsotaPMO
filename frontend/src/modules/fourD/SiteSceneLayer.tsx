@@ -106,13 +106,16 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const curve = useMemo(() => sourcePath ? buildPathCurve(sourcePath.points, sourcePath.closed, sourcePath.curve_mode) : null, [sourcePath])
   const pathActivity = activities.find(a => a.id === item.path_motion?.activity_id)
   const fittedMotion = useMemo(() => item.path_motion ? fitSitePathToActivity(item.path_motion, pathActivity) : null, [item.path_motion, pathActivity?.start, pathActivity?.finish])
+  const equipmentWindow = useMemo(() => !item.path_motion?.activity_id ? undefined : fittedMotion
+    ? {startMs: Date.parse(pathActivity!.start!), finishMs: Date.parse(pathActivity!.finish!)} : null,
+    [item.path_motion?.activity_id, fittedMotion, pathActivity?.start, pathActivity?.finish])
   useFrame(() => {
     const parent = motionRoot.current
     if (!parent) return
     if (selectable.current?.userData.simulatorOwnsPose) { parent.visible = true; return }
-    parent.visible = preview || instance || !item.path_motion?.activity_id || (!!fittedMotion && sitePathActivityVisible(fittedMotion, (state.pathDateRef || dateRef).current))
+    parent.visible = preview || instance || !item.path_motion?.activity_id || (!!fittedMotion && sitePathActivityVisible(fittedMotion, dateRef.current))
     if (!preview && !instance && curve && fittedMotion) {
-      const pathDate = (state.pathDateRef || dateRef).current
+      const pathDate = (item.path_motion?.activity_id ? dateRef : state.pathDateRef || dateRef).current
       const seconds = pathDate ? (pathDate.getTime() - Date.parse(fittedMotion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
       motionTime.current = applySitePath(parent, curve, fittedMotion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
     } else { parent.position.set(0,0,0); parent.quaternion.identity(); parent.scale.setScalar(1); motionTime.current=null }
@@ -136,7 +139,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const resolved = useMemo(() => resolveSiteLinks(item.id, links, activities, profiles, state.items), [item.id, links, activities, profiles, state.items])
   const animationBase = useMemo(() => new THREE.Vector3(), [])
   useSiteAnimation(root, animationBase, resolved, links.some(l => l.source_kind === 'site' && l.element_ref === item.id), dateRef, preview,
-    () => !item.activity_id || presentAt(activity, dateRef.current), instance)
+    () => !item.activity_id || presentAt(activity, dateRef.current), instance, equipmentWindow)
   const rotation = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), item.up_axis === 'z' ? Math.PI / 2 : 0)
     .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), item.yaw * Math.PI / 180)), [item.up_axis, item.yaw])
   const colour = !preview && state.selected === item.id ? '#38bdf8' : item.color
