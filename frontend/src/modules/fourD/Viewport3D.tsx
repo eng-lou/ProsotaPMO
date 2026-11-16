@@ -3292,6 +3292,7 @@ export function TimelinePlayback({
   const batchFrameGate = useMemo(() => createBatchAnimationGate<ResolvedBatchVisibilityTarget>(), [])
   const individualFrameGate = useMemo(() => createIndividualAnimationGate<ResolvedTimelineTarget>(), [])
   const timingRenderer = useThree(s => s.gl)
+  const invalidateTimeline = useThree(s => s.invalidate)
   // Opening a panel or pressing an unrelated button is not an animation edit.
   // Preserve reconciliation for selection/material/isolation and timeline data,
   // without discarding every paused target's cache on every UI commit.
@@ -3806,6 +3807,11 @@ export function TimelinePlayback({
         resolvedInputsRef.current = inputs
         targetsRef.current = [...byObject.values()]
         batchVisibilityTargetsRef.current = [...batchVisibilityByKey.values()]
+        // Async binding resolution can finish after a demand canvas has gone idle.
+        // Wake one frame so fresh links apply without a click or timeline change.
+        batchFrameGate.invalidate()
+        individualFrameGate.invalidate()
+        invalidateTimeline()
         // Selection materializes batch instances without rebuilding the schedule.
         // Publish the migration index together with the targets, not while resolving.
         expressIdToBatchTargetRef.current.clear()

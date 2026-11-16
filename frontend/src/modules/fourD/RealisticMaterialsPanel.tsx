@@ -241,6 +241,15 @@ export function RealisticMaterialsPanel({
                 <span>{mixedOpacity ? 'Mixed' : Math.round((opacity ?? 1) * 100) + '%'}</span>
                 {hasOpacityEdit && <button title="Restore inherited surface opacity" className="underline" onClick={() => edit({[opacityKey]: null}, true)}>Reset</button>}
               </div>}
+              {entry.key.startsWith('site|') && <label className="flex items-center gap-2 text-[11px] py-1">
+                Texture transparency
+                <select aria-label={'Texture transparency for ' + entry.label} value={current['cutout:' + entry.key] || ''}
+                  className="rounded border px-1 py-0.5 dark:bg-prosota-panel2"
+                  onChange={e => edit({['cutout:' + entry.key]: e.target.value || null})}>
+                  <option value="">Original</option><option value="texture">Use texture alpha</option><option value="background">Remove plain background</option>
+                </select>
+                {String(current['cutout:' + entry.key]) === 'background' && <span title="Removes a plain border-connected background from the texture; keeps the leaf opaque.">Leaf cutout</span>}
+              </label>}
               {!!targetsByKey && targets.length>0 && <SurfaceWearControls wear={wear} guides={wearGuides} recentColours={recentColours}
                 mixed={targets.some(t=>wearFor(mappingAtTarget(mapping,t)).mode!==wear.mode)}
                 update={patch=>edit(local=>({[wearField]:JSON.stringify({...wearFor(local),...patch})}))}/>}

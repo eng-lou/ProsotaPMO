@@ -18,7 +18,7 @@ import { applyCustomMaterial, captureMaterialChannels, hasCustomTextures } from 
 import type { CustomTextureSet } from './customTextures'
 import { loadSiteAsset } from './siteAssets'
 import type { AssetPart } from './assetParts'
-import { applySiteSurfaceOpacity, siteMaterialSlots, siteMaterialLook } from './siteAssetMaterials'
+import { applySiteTextureCutout, applySiteSurfaceOpacity, siteMaterialSlots, siteMaterialLook } from './siteAssetMaterials'
 import { disposeRealisticVariant, type RealisticMaterialMap } from './realisticMaterials'
 
 export function SiteAssetModel({ adaptiveDetail = false, captureDetail = false, id, part, preview = false, selected = false, fit = false, mapping, importedLights = true, transmission = false, onLoaded, textures, opacity, playing=true, clip=0, speed=1, motionTime, pathBound=false, actions=[], actionDateRef, daysPerSecond=1 }: { adaptiveDetail?: boolean; captureDetail?: boolean; actions?:WorkerAction[]; actionDateRef?:React.MutableRefObject<Date|null>; daysPerSecond?:number; part?: AssetPart | null; pathBound?: boolean; motionTime?: React.MutableRefObject<number|null>; playing?:boolean; clip?:number; speed?:number; textures?:CustomTextureSet; opacity?:number; id: string; preview?: boolean; selected?: boolean; fit?: boolean; mapping?: RealisticMaterialMap; importedLights?: boolean; transmission?: boolean; onLoaded?(): void }) {
@@ -85,6 +85,7 @@ export function SiteAssetModel({ adaptiveDetail = false, captureDetail = false, 
           const finish = mapping && Number.isInteger(baseSlot) ? inheritCutFinish(mapping, key, `site|${id}|${baseSlot}`) : mapping
           const mat = source.clone(); materials.push(mat)
           if(mat instanceof THREE.MeshStandardMaterial){captureMaterialChannels(mat);applyCustomMaterial(mat,textures);applySiteSurfaceOpacity(mat,key,finish ?? {},opacity ?? 1)}
+          if (mat instanceof THREE.MeshStandardMaterial) applySiteTextureCutout(mat, key, finish ?? {})
           if (preview) { mat.transparent = true; mat.opacity *= .65; mat.depthWrite = false }
           if(mat instanceof THREE.MeshStandardMaterial){mat.userData.exportEmissive=mat.emissive.getHex();mat.userData.exportEmissiveIntensity=mat.emissiveIntensity}
           if (selected && mat instanceof THREE.MeshStandardMaterial) { mat.emissive.set('#0c4a6e'); mat.emissiveIntensity = .4 }

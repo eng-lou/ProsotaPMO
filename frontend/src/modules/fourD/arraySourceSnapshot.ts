@@ -33,6 +33,13 @@ export function arraySourceSnapshot(source: THREE.Object3D, upAxis: 'y'|'z', nam
         if(result.color && mat.userData.exportColour)result.color.set(mat.userData.exportColour)
         if(result.emissive && mat.userData.exportEmissive!==undefined){result.emissive.setHex(mat.userData.exportEmissive);result.emissiveIntensity=mat.userData.exportEmissiveIntensity}
         if(result.color && tint)result.color.multiply(mat.userData.exportInstanceColour?new THREE.Color(mat.userData.exportInstanceColour):tint)
+        // glTF has MASK/BLEND but no Three alphaHash flag. Encode the cutout
+        // before export so array sources do not become opaque leaf rectangles.
+        if (result.alphaHash && (result.map || result.alphaMap)) {
+          result.alphaTest = mat.userData.prosotaCutoutThreshold ?? 0.5
+          result.alphaHash = false
+          result.transparent = false
+        }
         result.userData={};return result
       }
       const copy=new THREE.Mesh(geometry,Array.isArray(original)?original.map(material):material(original));copy.name=node.name;group.add(copy)

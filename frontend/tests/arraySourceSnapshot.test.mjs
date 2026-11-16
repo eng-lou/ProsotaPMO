@@ -38,3 +38,16 @@ test('serialized material metadata does not replace the live material',()=>{
  assert.equal(copy.children[0].material.color.getHexString(),'ff0000')
  disposeArraySnapshot(copy)
 })
+
+test('hashed foliage exports as glTF-compatible cutouts without mutating the source',()=>{
+ const map=new THREE.Texture(),material=new THREE.MeshStandardMaterial({map,alphaHash:true})
+ material.userData.prosotaCutoutThreshold=.37
+ const mesh=new THREE.Mesh(new THREE.PlaneGeometry(),material)
+ const snapshot=arraySourceSnapshot(mesh,'y','Beech array')
+ assert.equal(snapshot.children[0].material.alphaTest,.37)
+ assert.equal(snapshot.children[0].material.alphaHash,false)
+ assert.equal(snapshot.children[0].material.transparent,false)
+ assert.equal(snapshot.children[0].material.map,map)
+ assert.equal(material.alphaHash,true);assert.equal(material.alphaTest,0)
+ disposeArraySnapshot(snapshot)
+})

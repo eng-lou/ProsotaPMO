@@ -1,5 +1,15 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-16 - Leaf background cutouts and initial linked visibility
+
+The reported opacity problem is the rectangle surrounding the leaf, not whole-leaf opacity. The saved American beech GLB has an OPAQUE leaf material and fully opaque texture alpha. Existing texture alpha alone cannot repair that asset. Added an explicit material option, Remove plain background, that removes near-uniform border-connected colour and retains enclosed leaf pixels. The derived texture is cached per source, uses a separate Three Source, and leaves the original image/material data untouched. Select the array and edit its leaf material to inherit the setting across instances; Original reverses it. This is intended for plain backgrounds, not arbitrary photographs.
+
+Separately, alphaHash is not represented by GLTFExporter. Array snapshots now encode hashed cutouts as glTF MASK and preserve the authored cutoff. Browser render tests cover export/reload, existing alpha repair, opaque-background repair, and original texture isolation.
+
+Async timeline bindings could publish after the demand canvas became idle. Both animation gates now invalidate and request a frame when targets are committed, so linked visibility need not wait for selection. No per-frame model scan was introduced. Regression coverage checks this completion path; the user's live fence has not been directly reproduced.
+
+Validation: 401 unit tests passed, 2 skipped; browser batch, import, context recovery and foliage fixtures passed. Foliage pixels: opaque card 3364, repaired 847, leaf opacity 1. User project storage and assignments were not reset or edited. Do not claim recovery of the user's previously lost materials: the attempted recovery did not restore their desired appearance.
+
 ## 2026-11-16 - Destructive error recovery removed; material recovery
 
 The error screen's "Reset saved view settings" deleted every Prosota-prefixed

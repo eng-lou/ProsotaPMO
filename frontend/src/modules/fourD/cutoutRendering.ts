@@ -14,6 +14,7 @@ export function prepareCutoutRendering(root: THREE.Object3D) {
       // mask pixels sparkle across otherwise solid surfaces.
       if (material.userData.prosotaOpacityMode === 'cutout') continue
       if (material.alphaTest > 0 && !material.transparent) {
+        material.userData.prosotaCutoutThreshold = material.alphaTest
         material.alphaTest = 0
         material.alphaHash = true
         material.needsUpdate = true
