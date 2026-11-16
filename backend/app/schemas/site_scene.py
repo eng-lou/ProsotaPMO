@@ -40,6 +40,7 @@ class SitePathKey(BaseModel):
 
 
 class PathMotion(BaseModel):
+    activity_id: UUID | None = None
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     path_id: UUID
     bind_origin: Point | None = None

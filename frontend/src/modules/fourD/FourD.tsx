@@ -9,7 +9,7 @@ import type { Scenario as SimulationScenario } from '../simulator/types'
 import { equipmentNodes as simulationEquipmentNodes } from './equipmentRig'
 import { geographicMaterialInfo } from './geographicSelection'
 import { SitePathBindings } from './SitePathBindings'
-import { sitePathRange } from './sitePathMotion'
+import { sitePathRange, fitSitePathToActivity } from './sitePathMotion'
 import { buildPathCurve, appendPathPoint, materializePathSegments, setPathSegmentMode } from './pathCurve'
 import type { PathDrawOptions } from './pathDrawing'
 import { motionDuration, type CameraMotion } from './cameraMotion'
@@ -2071,7 +2071,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         if (!motion || !path) continue
         const curve=buildPathCurve(path.points,path.closed,path.curve_mode)
         if (!curve) continue
-        base=unionRanges(base,sitePathRange(motion,curve.getLength(),speedDaysPerSecond))
+        base=unionRanges(base,sitePathRange(fitSitePathToActivity(motion, simulationActivities.find(a=>a.id===motion.activity_id)) || motion,curve.getLength(),speedDaysPerSecond))
       }
       const motions = cameras.filter(c => c.motion?.shots.length)
       if (!motions.length) return padDegenerateRange(base)
@@ -7124,7 +7124,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
               const tracks=(item.motion_actions||[]).map(a=>({id:item.id+':'+a.id,name:item.name+' · '+a.name,kind:'Action',start:a.start,duration:(Date.parse(a.end)-Date.parse(a.start))/(86400000*speedDaysPerSecond)}))
               if(item.attachment)tracks.push({id:item.id+':attachment',name:item.name,kind:'Attachment',start:item.attachment.start,duration:(Date.parse(item.attachment.end)-Date.parse(item.attachment.start))/(86400000*speedDaysPerSecond)})
               const motion=item.path_motion,path=paths.find(p=>p.id===motion?.path_id),curve=path?buildPathCurve(path.points,path.closed,path.curve_mode):null
-              if(motion&&curve){const range=sitePathRange(motion,curve.getLength(),speedDaysPerSecond);tracks.unshift({id:item.id,name:item.name,kind:'Follow path',start:range.start.toISOString(),duration:(range.end.getTime()-range.start.getTime())/(86400000*speedDaysPerSecond)})}
+              if(motion&&curve){const range=sitePathRange(fitSitePathToActivity(motion, simulationActivities.find(a=>a.id===motion.activity_id)) || motion,curve.getLength(),speedDaysPerSecond);tracks.unshift({id:item.id,name:item.name,kind:'Follow path',start:range.start.toISOString(),duration:(range.end.getTime()-range.start.getTime())/(86400000*speedDaysPerSecond)})}
               return tracks
             })}
             equipmentTracks={<EquipmentTracks rigs={equipment.rigs} start={timelineRange?.start ?? null} end={timelineRange?.end ?? null} onSeek={handleSeekTimelineTo} onSave={equipment.save} disabled={equipment.busy || equipmentEditing} />}
@@ -7533,7 +7533,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onDrawOptions={(id, options) => setPathDrawOptions(prev=>({...prev,[id]:options}))}
           onSegmentMode={handlePathSegmentMode}
           upAxis={settings.upAxis}
-          siteBindings={path => <SitePathBindings path={path} items={siteScene.scene.items} busy={siteScene.busy} dateRef={timelineDateRef} format={timelineRange?{scheduleStart:timelineRange.start,timeDisplayMode,speedDaysPerSecond,fps}:null} onSeek={handleSeekTimelineTo} onChange={(id,motion) => { void siteScene.save(siteScene.scene.items.map(item=>item.id===id?{...item,path_motion:motion}:item),'Change path motion').catch(error=>setPathError(pathErrorMessage(error,'Failed to update path motion'))) }} />}
+          siteBindings={path => <SitePathBindings activities={activities} links={modelElementLinks} path={path} items={siteScene.scene.items} busy={siteScene.busy} dateRef={timelineDateRef} format={timelineRange?{scheduleStart:timelineRange.start,timeDisplayMode,speedDaysPerSecond,fps}:null} onSeek={handleSeekTimelineTo} onChange={(id,motion) => { void siteScene.save(siteScene.scene.items.map(item=>item.id===id?{...item,path_motion:motion}:item),'Change path motion').catch(error=>setPathError(pathErrorMessage(error,'Failed to update path motion'))) }} />}
           bindTarget={pathBindTarget}
           followers={pathFollowers}
           onCreate={handleCreatePath}

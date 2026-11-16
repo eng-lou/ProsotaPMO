@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 const {outputFiles}=await build({stdin:{contents:"export * from './src/modules/fourD/sitePathMotion';export * from './src/modules/fourD/pathCurve';export * as T from 'three'",resolveDir:process.cwd()},bundle:true,write:false,format:'esm'})
-const {sampleSitePath,applySitePath,buildPathCurve,sitePathRange,T}=await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'))
+const {fitSitePathToActivity,sitePathActivityVisible,sampleSitePath,applySitePath,buildPathCurve,sitePathRange,T}=await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'))
 const motion={path_id:'route',start:'2026-10-23T00:00:00Z',speed:1.4,animation_reference_speed:1.4,orient:true,heading:0,loop:false}
 const near=(a,b)=>assert.ok(Math.abs(a-b)<1e-6,`${a} != ${b}`)
 test('travel has physical speed, stops at end and scrubs deterministically',()=>{
@@ -67,4 +67,32 @@ test('saved raised-surface correction survives frames, turns and reload',()=>{
   near(object.getWorldPosition(new T.Vector3())[axis],3)
  }
  }
+})
+
+test('activity-fit route completes within the schedule at every playback speed and reverses on scrub',()=>{
+ const curve=buildPathCurve([{x:0,y:0,z:0},{x:140,y:0,z:0}],false,'straight')
+ const activity={start:'2026-11-23T08:00:00Z',finish:'2026-11-23T16:00:00Z'}
+ const authored={...motion,activity_id:'vegetation'}
+ const fitted=fitSitePathToActivity(authored,activity)
+ const start=Date.parse(activity.start),finish=Date.parse(activity.finish)
+ for(const speed of [1,7,30])for(const [fraction,expected] of [[0,0],[.5,70],[1,140],[.25,35]]){
+   const seconds=(finish-start)*fraction/(86400000*speed)
+   near(sampleSitePath(curve,fitted,seconds,'z',speed).point.x,expected)
+ }
+ assert.equal(sitePathActivityVisible(fitted,new Date(start-1)),false)
+ assert.equal(sitePathActivityVisible(fitted,new Date(start)),true)
+ assert.equal(sitePathActivityVisible(fitted,new Date(finish)),false)
+ assert.equal(sitePathActivityVisible(fitted,new Date(start+1)),true)
+ assert.equal(authored.progress_keys,undefined)
+ assert.equal(fitSitePathToActivity(authored,{...activity,finish:activity.start}),null)
+ const changed=fitSitePathToActivity(authored,{...activity,finish:'2026-11-24T16:00:00Z'})
+ assert.equal(changed.progress_keys[1].date,'2026-11-24T16:00:00.000Z')
+})
+test('activity fit preserves stop proportions without changing authored keys or manual motion',()=>{
+ const keys=[{date:'2026-01-01T00:00:00Z',progress:0,interpolation:'linear'}, {date:'2026-01-02T00:00:00Z',progress:50,interpolation:'hold'}, {date:'2026-01-03T00:00:00Z',progress:100,interpolation:'linear'}]
+ const fitted=fitSitePathToActivity({...motion,activity_id:'a',progress_keys:keys},{start:'2026-11-23T08:00:00Z',finish:'2026-11-23T16:00:00Z'})
+ assert.equal(fitted.progress_keys[1].date,'2026-11-23T12:00:00.000Z')
+ assert.equal(fitted.progress_keys[1].interpolation,'hold')
+ assert.equal(keys[1].date,'2026-01-02T00:00:00Z')
+ assert.equal(fitSitePathToActivity(motion),motion)
 })

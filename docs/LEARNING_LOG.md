@@ -1,5 +1,13 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-16 - Activity-timed equipment paths
+
+An object/activity assignment did not control its separate route clock. A 134-second route could therefore outlast a short scheduled vegetation activity. Added explicit Journey timing selection using the object's assigned activities. Activity-fit maps route progress (including existing pause/reverse keys) to the current activity start/finish and hides the outer motion group before start and at/after finish. Reverse scrubbing restores it. Manual routes retain their stored timing, and switching back preserves original keys/speed/start. Embedded distance-driven clips follow the fitted travel; independently authored rig keys are not retimed by this option.
+
+The activity ID is persisted in PathMotion; missing/invalid dates hide fitted equipment rather than silently falling back to a long manual journey. Range/tracks use fitted dates. Runtime fitted keys are memoized per motion/dates. Simulator pose ownership retains its own visibility. Requires both backend schema and frontend deployment. No user project assignments or materials were modified.
+
+Validation: 403 frontend tests passed, 2 skipped; new tests exercise playback speeds, start/finish boundaries, reverse scrubbing, rescheduling and proportional pause keys. Schema checks verified legacy/manual compatibility, activity ID serialization and malformed UUID rejection. Live project interaction remains unverified.
+
 ## 2026-11-16 - Add children and move directly between WBS groups
 
 Add Activity now uses the single checked row (or open detail row when none is checked) as parent, expands that parent and opens/selects the new child. The existing hierarchy service promotes a task with children to WBS while retaining its ID and attachments; summary dates roll up from children. Multiple checked rows require choosing one parent. Duplicate clicks are blocked during creation.

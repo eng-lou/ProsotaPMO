@@ -53,3 +53,22 @@ export function applySitePath(parent: THREE.Object3D, curve: THREE.Curve<THREE.V
   parent.updateMatrixWorld(true)
   return sample
 }
+
+// Activity-fit mode uses schedule dates, never playback speed, as its clock.
+// Keep authored keys untouched; map pauses/reversals proportionally at runtime.
+export function fitSitePathToActivity(motion: PathMotion, activity?: {start: string | null; finish: string | null}): PathMotion | null {
+  if (!motion.activity_id) return motion
+  const start = Date.parse(activity?.start || ''), finish = Date.parse(activity?.finish || '')
+  if (!Number.isFinite(start) || !Number.isFinite(finish) || finish <= start) return null
+  const keys = [...(motion.progress_keys || [])].sort((a,b)=>Date.parse(a.date)-Date.parse(b.date))
+  const first = keys.length ? Date.parse(keys[0].date) : 0
+  const span = keys.length > 1 ? Date.parse(keys[keys.length-1].date)-first : 0
+  return {...motion, start:new Date(start).toISOString(), loop:false, progress_keys:span>0
+    ? keys.map(key=>({...key,date:new Date(start+(Date.parse(key.date)-first)/span*(finish-start)).toISOString()}))
+    : [{date:new Date(start).toISOString(),progress:0,interpolation:'linear'}, {date:new Date(finish).toISOString(),progress:100,interpolation:'linear'}]}
+}
+export function sitePathActivityVisible(motion: PathMotion | null, now: Date | null) {
+  if (!motion?.activity_id || !now) return true
+  const keys = motion.progress_keys || []
+  return now.getTime() >= Date.parse(motion.start) && now.getTime() < Date.parse(keys[keys.length-1]?.date || '')
+}

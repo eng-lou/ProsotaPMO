@@ -12,7 +12,7 @@ export interface SiteObjectState {
   base_content_position: PathPoint|null; base_content_rotation: PathPoint|null
 }
 export interface SitePathKey { date: string; progress: number; interpolation: 'linear' | 'smooth' | 'hold' }
-export interface PathMotion { bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
+export interface PathMotion { activity_id?: string | null; bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
 export interface SiteItem {
   section_boxes?: SiteSectionBox[]
   illumination?: SiteIllumination | null

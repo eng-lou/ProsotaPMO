@@ -1,9 +1,11 @@
+import type { Activity } from '@/modules/scheduling/types'
+import type { ModelElementLink } from './modelElementLinks'
 import { useState, type MutableRefObject } from 'react'
 import { ToolVisualGuide } from './ToolVisualGuide'
 import type { Path } from './paths'
 import type { SiteItem, PathMotion, SitePathKey } from './siteScene'
 import { buildPathCurve } from './pathCurve'
-import { sampleSitePath, sitePathRange } from './sitePathMotion'
+import { sampleSitePath, sitePathRange, fitSitePathToActivity } from './sitePathMotion'
 import { TimelinePointInput, type TimelineFormat } from './TimelinePointInput'
 
 function NumberField({label,value,min=0.01,max=100,onChange}:{label:string;value:number;min?:number;max?:number;onChange(value:number):void}) {
@@ -11,14 +13,17 @@ function NumberField({label,value,min=0.01,max=100,onChange}:{label:string;value
     className="w-full rounded border p-1 dark:bg-prosota-panel2" onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur()}}
     onBlur={e=>{const n=e.currentTarget.valueAsNumber;if(Number.isFinite(n)&&n>=min&&n<=max&&n!==value)onChange(n);else e.currentTarget.value=String(value)}}/></label>
 }
-type Props={path:Path;items:SiteItem[];busy:boolean;dateRef?:MutableRefObject<Date|null>;format?:TimelineFormat|null;onSeek?:(d:Date)=>void;onChange(id:string,motion:PathMotion|null):void}
-function Binding({item,path,busy,dateRef,format,onSeek,onChange}:Omit<Props,'items'>&{item:SiteItem}) {
+type Props={activities:Activity[];links:ModelElementLink[];path:Path;items:SiteItem[];busy:boolean;dateRef?:MutableRefObject<Date|null>;format?:TimelineFormat|null;onSeek?:(d:Date)=>void;onChange(id:string,motion:PathMotion|null):void}
+function Binding({item,path,activities,links,busy,dateRef,format,onSeek,onChange}:Omit<Props,'items'>&{item:SiteItem}) {
   const [notice,setNotice]=useState(''), [pause,setPause]=useState(2)
   const motion=item.path_motion!, curve=buildPathCurve(path.points,path.closed,path.curve_mode)
   if(!curve)return null
   const change=(patch:Partial<PathMotion>)=>onChange(item.id,{...motion,...patch})
   const keys=[...(motion.progress_keys||[])].sort((a,b)=>Date.parse(a.date)-Date.parse(b.date))
-  const speed=format?.speedDaysPerSecond||1, range=sitePathRange(motion,curve.getLength(),speed)
+  const assigned = new Set([item.activity_id,...links.filter(l=>l.source_kind==='site'&&l.element_ref===item.id).map(l=>l.activity_id)])
+  const candidates = activities.filter(a=>assigned.has(a.id) || a.id===motion.activity_id)
+  const fitted = fitSitePathToActivity(motion,activities.find(a=>a.id===motion.activity_id))
+  const speed=format?.speedDaysPerSecond||1, range=sitePathRange(fitted || motion,curve.getLength(),speed)
   const saveKeys=(next:SitePathKey[])=>{
     if(new Set(next.map(k=>Date.parse(k.date))).size!==next.length){setNotice('Two route keys cannot share a time. Choose a later time for the pause.');return}
     if(next.length>200){setNotice('This route supports up to 200 keys.');return}
@@ -33,11 +38,17 @@ function Binding({item,path,busy,dateRef,format,onSeek,onChange}:Omit<Props,'ite
     <legend>Following: {item.name}</legend>
     <ToolVisualGuide topic="path" mode={motion.orient?'orient':'fixed'} heading={motion.heading}/>
     <p>{((range.end.getTime()-range.start.getTime())/(86400000*speed)).toFixed(1)} seconds · Play or scrub the animation timeline.</p>
-    {!keys.length&&<><NumberField label="Travel speed (m/s)" value={motion.speed} onChange={v=>change({speed:v})}/>
+    <label className="block">Journey timing<select className="w-full border rounded p-1 dark:bg-prosota-panel2" value={motion.activity_id || ''} onChange={e=>change({activity_id:e.target.value||null})}>
+      <option value="">Manual start and travel speed</option>
+      {candidates.map(a=><option key={a.id} value={a.id}>Fit to {a.code}: {a.task_name}</option>)}
+    </select></label>
+    {!!motion.activity_id && <p>{fitted ? 'Journey fits the activity start and finish, including any timed stops. Equipment is hidden before the activity starts and when it finishes. Schedule edits update the journey automatically.' : 'This activity needs valid start and finish dates. Equipment stays hidden until they are available.'}</p>}
+    {!candidates.length && <p>Assign this object to an activity to enable activity timing.</p>}
+    {!motion.activity_id && !keys.length&&<><NumberField label="Travel speed (m/s)" value={motion.speed} onChange={v=>change({speed:v})}/>
       {format&&<label className="block">Journey starts<TimelinePointInput value={new Date(motion.start)} format={format} placeholder="Start" dayEdge="start" onChange={d=>{if(d)change({start:d.toISOString()})}}/></label>}
       <label className="flex gap-2"><input type="checkbox" checked={motion.loop} onChange={e=>change({loop:e.target.checked})}/>Loop journey</label>
       <button onClick={()=>saveKeys([{date:motion.start,progress:0,interpolation:'linear'},{date:range.end.toISOString(),progress:100,interpolation:'linear'}])}>Add timed stops</button></>}
-    {!!keys.length&&<details open><summary>Timed route · travel and pauses</summary>
+    {!motion.activity_id && !!keys.length&&<details open><summary>Timed route · travel and pauses</summary>
       <p>0% is the start; 100% is the end. Repeat a position at a later time to wait there. Lower progress reverses along the same route. Equipment controls still animate during a pause.</p>
       {keys.map((k,index)=><div className="border-t space-y-1 py-2" key={k.date}>
         <label className="block">Route key {index+1}{format?<TimelinePointInput value={new Date(k.date)} format={format} placeholder="Key time" dayEdge="start" onChange={d=>{if(d)saveKeys(keys.map(x=>x===k?{...x,date:d.toISOString()}:x))}}/>:<span>{k.date}</span>}</label>

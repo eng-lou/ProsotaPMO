@@ -4,7 +4,7 @@ import { HAUL_ROAD_CLASS, footprintEdgesForKey } from './realisticMaterials'
 import { materialScope } from './materialScope'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { type ThreeEvent, useFrame } from '@react-three/fiber'
-import { applySitePath } from './sitePathMotion'
+import { applySitePath, fitSitePathToActivity, sitePathActivityVisible } from './sitePathMotion'
 import { buildPathCurve } from './pathCurve'
 import type { Path } from './paths'
 import * as THREE from 'three'
@@ -104,13 +104,17 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const motionTime = useRef<number | null>(null)
   const sourcePath = state.paths?.find(p => p.id === item.path_motion?.path_id)
   const curve = useMemo(() => sourcePath ? buildPathCurve(sourcePath.points, sourcePath.closed, sourcePath.curve_mode) : null, [sourcePath])
+  const pathActivity = activities.find(a => a.id === item.path_motion?.activity_id)
+  const fittedMotion = useMemo(() => item.path_motion ? fitSitePathToActivity(item.path_motion, pathActivity) : null, [item.path_motion, pathActivity?.start, pathActivity?.finish])
   useFrame(() => {
     const parent = motionRoot.current
-    if (!parent || selectable.current?.userData.simulatorOwnsPose) return
-    if (!preview && !instance && curve && item.path_motion) {
+    if (!parent) return
+    if (selectable.current?.userData.simulatorOwnsPose) { parent.visible = true; return }
+    parent.visible = preview || instance || !item.path_motion?.activity_id || (!!fittedMotion && sitePathActivityVisible(fittedMotion, (state.pathDateRef || dateRef).current))
+    if (!preview && !instance && curve && fittedMotion) {
       const pathDate = (state.pathDateRef || dateRef).current
-      const seconds = pathDate ? (pathDate.getTime() - Date.parse(item.path_motion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
-      motionTime.current = applySitePath(parent, curve, item.path_motion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
+      const seconds = pathDate ? (pathDate.getTime() - Date.parse(fittedMotion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
+      motionTime.current = applySitePath(parent, curve, fittedMotion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
     } else { parent.position.set(0,0,0); parent.quaternion.identity(); parent.scale.setScalar(1); motionTime.current=null }
   }, -1)
   const root = useRef<THREE.Group>(null)
