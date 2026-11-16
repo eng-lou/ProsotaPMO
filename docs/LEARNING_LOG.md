@@ -1,5 +1,13 @@
 # Prosota — Learning Log (Plain English)
 
+## 2026-11-16 - Add children and move directly between WBS groups
+
+Add Activity now uses the single checked row (or open detail row when none is checked) as parent, expands that parent and opens/selects the new child. The existing hierarchy service promotes a task with children to WBS while retaining its ID and attachments; summary dates roll up from children. Multiple checked rows require choosing one parent. Duplicate clicks are blocked during creation.
+
+Dragging onto the middle half of a WBS inserts inside it; row edges insert before/after and inherit that row's parent. The server validates period, archive status and ancestor cycles before mutation. Entire subtrees retain IDs and child relationships. CPM recalculates only for changed parentage; sibling reordering keeps its cheaper path. This requires frontend and backend deployment together.
+
+Validation: production frontend build and 401 frontend tests passed (2 skipped). Full activity suite stopped at a variance-days assertion outside the changed move path. All 13 focused hierarchy/move/create tests passed against a separate disposable PostgreSQL database. The user's live project has not been directly operated.
+
 ## 2026-11-16 - Leaf background cutouts and initial linked visibility
 
 The reported opacity problem is the rectangle surrounding the leaf, not whole-leaf opacity. The saved American beech GLB has an OPAQUE leaf material and fully opaque texture alpha. Existing texture alpha alone cannot repair that asset. Added an explicit material option, Remove plain background, that removes near-uniform border-connected colour and retains enclosed leaf pixels. The derived texture is cached per source, uses a separate Three Source, and leaves the original image/material data untouched. Select the array and edit its leaf material to inherit the setting across instances; Original reverses it. This is intended for plain backgrounds, not arbitrary photographs.

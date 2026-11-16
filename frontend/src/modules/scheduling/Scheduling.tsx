@@ -1769,7 +1769,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // track a native scroll gesture smoothly (2026-07-05, per Maro).
   const leftPaneRef = useRef<HTMLDivElement>(null)
   const [draggedRow, setDraggedRow] = useState<Activity | null>(null)
-  const [rowDrop, setRowDrop] = useState<{ id: string; direction: 'before' | 'after' } | null>(null)
+  const [rowDrop, setRowDrop] = useState<{ id: string; direction: 'before' | 'after' | 'inside' } | null>(null)
   const [movingRow, setMovingRow] = useState(false)
   const dragPointerY = useRef<number | null>(null)
   useEffect(() => {
@@ -2244,19 +2244,32 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // Just adds a blank row (2026-07-03, per Maro) — the old modal form was
   // redundant since clicking any row already opens the same fields via the
   // unified detail panel below the grid; this jumps straight there.
+  const [addingActivity, setAddingActivity] = useState(false)
+  const addingActivityRef = useRef(false)
   const handleQuickAdd = async () => {
-    if (!period) return
-    // duration_hours defaults to one nominal working day, not left blank —
-    // a zero/null-duration task is a degenerate zero-length span, which
-    // (since it starts and finishes at the very same instant as today's
-    // data date) reads as 100% "Schedule % Complete" the moment it's
-    // created, rather than 0% at the start of its first working day
-    // (2026-07-03, per Maro).
-    const { data } = await api.post<Activity>('/api/v1/activities/', {
-      task_name: 'New Activity', project_id: selectedProject.id, schedule_period_id: period.id, duration_hours: 8,
-    })
-    await refreshActivityEdit()
-    setExpandedId(data.id)
+    if (!period || addingActivityRef.current) return
+    if (selectedIds.size > 1) { window.alert('Select one parent row to add inside.'); return }
+    const parent = selectedIds.size === 1 ? activities.find(a => selectedIds.has(a.id)) : activities.find(a => a.id === expandedId)
+    if (parent?.is_archived || parent?.is_archive_container) { window.alert('Choose a live activity or WBS.'); return }
+    addingActivityRef.current = true
+    setAddingActivity(true)
+    try {
+      // duration_hours defaults to one nominal working day, not left blank —
+      // a zero/null-duration task is a degenerate zero-length span, which
+      // (since it starts and finishes at the very same instant as today's
+      // data date) reads as 100% "Schedule % Complete" the moment it's
+      // created, rather than 0% at the start of its first working day
+      // (2026-07-03, per Maro).
+      const { data } = await api.post<Activity>('/api/v1/activities/', {
+        task_name: 'New Activity', project_id: selectedProject.id, schedule_period_id: period.id, duration_hours: 8, parent_id: parent?.id ?? null,
+      })
+      await refreshActivityEdit()
+      if (parent) setCollapsedIds(prev => { const next = new Set(prev); next.delete(parent.id); persistCollapsed(next); return next })
+      setSelectedIds(new Set([data.id]))
+      setExpandedId(data.id)
+    } catch (err) {
+      window.alert(axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string' ? err.response.data.detail : 'Could not add the activity. Please retry.')
+    } finally { addingActivityRef.current = false; setAddingActivity(false) }
   }
 
   const handleUpdate = async (
@@ -2368,17 +2381,19 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     await refreshActivityEdit()
   }
 
-  const dropActivityRow = async (target: Activity, direction: 'before' | 'after') => {
+  const dropActivityRow = async (target: Activity, direction: 'before' | 'after' | 'inside') => {
     const source = draggedRow
     setDraggedRow(null)
     setRowDrop(null)
     dragPointerY.current = null
-    if (!source || movingRow || source.id === target.id || source.parent_id !== target.parent_id) return
+    if (!source || movingRow || source.id === target.id) return
     setMovingRow(true)
     try {
       await api.post(`/api/v1/activities/${source.id}/move`, { direction, target_id: target.id })
       setSortColumn(null)
-      await refresh()
+      const parentId = direction === 'inside' ? target.id : target.parent_id
+      if (parentId) setCollapsedIds(prev => { const next = new Set(prev); next.delete(parentId); persistCollapsed(next); return next })
+      await refreshActivityEdit()
     } catch (err) {
       window.alert(axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string'
         ? err.response.data.detail : 'Could not move this row. Please retry.')
@@ -3244,8 +3259,8 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
       )}
 
       <div className="mb-4 flex items-center gap-3 no-print">
-          <button onClick={handleQuickAdd} className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
-            + Add Activity
+          <button disabled={addingActivity} onClick={handleQuickAdd} className="text-sm text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan font-medium">
+            {addingActivity ? 'Adding…' : '+ Add Activity'}
           </button>
           <button
             onClick={() => setScheduleVariantWidgetOpen(o => !o)}
@@ -3865,14 +3880,15 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                   onDragOver={event => {
                     if (!draggedRow || movingRow) return
                     dragPointerY.current = event.clientY
-                    if (draggedRow.id === a.id || draggedRow.parent_id !== a.parent_id) {
+                    if (draggedRow.id === a.id || a.is_archived || a.is_archive_container) {
                       setRowDrop(null)
                       return
                     }
                     event.preventDefault()
                     event.dataTransfer.dropEffect = 'move'
                     const rect = event.currentTarget.getBoundingClientRect()
-                    setRowDrop({ id: a.id, direction: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after' })
+                    const ratio = (event.clientY - rect.top) / rect.height
+                    setRowDrop({ id: a.id, direction: a.activity_type === 'wbs_summary' && ratio > .25 && ratio < .75 ? 'inside' : ratio < .5 ? 'before' : 'after' })
                   }}
                   onDrop={event => {
                     if (!rowDrop || rowDrop.id !== a.id) return
@@ -3880,7 +3896,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                     void dropActivityRow(a, rowDrop.direction)
                   }}
                   style={{
-                    outline: rowDrop?.id === a.id ? '2px solid #2E7DF7' : undefined,
+                    outline: rowDrop?.id === a.id && rowDrop.direction === 'inside' ? '2px solid #2E7DF7' : undefined,
                     outlineOffset: -2,
                     height: GANTT_ROW_HEIGHT, backgroundColor: expandedId === a.id ? undefined : rowBackground(a),
                     // box-shadow, not a real border-bottom — SchedulingPrintView.tsx
@@ -3894,7 +3910,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                     // "the gantt and activity table in the onscreen are misaligning
                     // again" — worse the deeper into a long schedule you scroll,
                     // matching accumulated drift rather than a one-off offset).
-                    boxShadow: rowDrop?.id === a.id
+                    boxShadow: rowDrop?.id === a.id && rowDrop.direction !== 'inside'
                       ? `inset 0 ${rowDrop.direction === 'before' ? 3 : -3}px 0 #3DD6EE`
                       : rowIndex === visibleActivities.length - 1 ? undefined : 'inset 0 -1px 0 #f3f4f6',
                   }}
@@ -3906,8 +3922,8 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                       <button
                         type="button" draggable={!movingRow && !editingCell}
                         disabled={movingRow || !!editingCell}
-                        aria-label={`Drag to reorder ${a.task_name}`}
-                        title="Drag above or below another row under the same parent. Restores manual order."
+                        aria-label={`Drag to move ${a.task_name}`}
+                        title="Drop on the middle of a WBS to move inside it, or at a row edge to move before or after it. Restores manual order."
                         className="inline-flex h-5 w-4 shrink-0 items-center justify-center rounded cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-600 dark:text-prosota-muted dark:hover:text-prosota-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500 disabled:opacity-30"
                         onClick={event => event.stopPropagation()}
                         onDragStart={event => {

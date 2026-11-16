@@ -817,50 +817,50 @@ async def _next_sibling_sort_order_after(
     return insert_at
 
 
-async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Literal["up", "down", "before", "after"], target_id: uuid.UUID | None = None) -> Activity:
-    """Reorder an activity among its current siblings — display order and WBS
-    numbering only, never hierarchy level (that's indent/outdent, a parent_id
-    change) and never CPM dates/float (sort_order doesn't feed the CPM engine
-    at all). Per Maro: indent/outdent alone left him "stuck depending on the
-    sequence of activity creation" — a newly-created activity always lands
-    last among its siblings (_next_sibling_sort_order), with no way to
-    reposition it afterward without deleting and recreating in the right
-    order. A no-op (not an error) at either end of the sibling list — same
-    "boundary just does nothing" convention as indent (index 0) and outdent
-    (no parent) in the frontend.
+async def move_activity(db: AsyncSession, activity_id: uuid.UUID, direction: Literal["up", "down", "before", "after", "inside"], target_id: uuid.UUID | None = None) -> Activity:
+    """Move before/after a row or inside a WBS, preserving IDs and subtrees.
 
-    Normalises every sibling's sort_order to sequential 0..n-1 positions on
-    every call, self-healing any legacy null/duplicate values (the
-    tie-break-by-created_at fallback elsewhere in this file) rather than
-    needing a one-off backfill migration."""
+    Validate the destination and cycles before writing. Recompute CPM only
+    when the parent changes; ordinary sibling ordering does not affect dates.
+    """
     activity = await get_activity(db, activity_id)
     await _require_live_schedule_period(db, activity.schedule_period_id)
 
-    result = await db.execute(
-        select(Activity).where(
-            Activity.schedule_period_id == activity.schedule_period_id, _parent_filter(activity.parent_id)
-        )
-    )
-    siblings = list(result.scalars().all())
+    if activity.is_archived or activity.is_archive_container:
+        raise HTTPException(status_code=422, detail="Archived rows cannot be moved here.")
+    result = await db.execute(select(Activity).where(Activity.schedule_period_id == activity.schedule_period_id))
+    rows = list(result.scalars().all())
+    by_id = {row.id: row for row in rows}
+    old_parent = activity.parent_id
+    target = None
+    if direction in ("before", "after", "inside"):
+        target = by_id.get(target_id)
+        if target is None or target.id == activity.id or target.is_archived or target.is_archive_container:
+            raise HTTPException(status_code=422, detail="Choose another live row in this schedule.")
+        new_parent = target.id if direction == "inside" else target.parent_id
+        if new_parent is not None:
+            _validate_no_cycle(by_id, activity.id, new_parent)
+        activity.parent_id = new_parent
+    siblings = [row for row in rows if row.parent_id == activity.parent_id and row.id != activity.id]
     siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
-    if direction in ("before", "after"):
-        target = next((s for s in siblings if s.id == target_id), None)
-        if target is None:
-            raise HTTPException(status_code=422, detail="Drop onto a row under the same parent in this schedule.")
-        if target.id != activity.id:
-            siblings.remove(activity)
-            target_index = siblings.index(target) + (1 if direction == "after" else 0)
-            siblings.insert(target_index, activity)
+    if direction == "inside":
+        siblings.append(activity)
+    elif direction in ("before", "after"):
+        siblings.insert(siblings.index(target) + (1 if direction == "after" else 0), activity)
     else:
-        current_index = next(i for i, s in enumerate(siblings) if s.id == activity.id)
+        siblings.append(activity)
+        siblings.sort(key=lambda a: (a.sort_order if a.sort_order is not None else 1_000_000, a.created_at))
+        current_index = siblings.index(activity)
         target_index = current_index - 1 if direction == "up" else current_index + 1
         if 0 <= target_index < len(siblings):
             siblings[current_index], siblings[target_index] = siblings[target_index], siblings[current_index]
     for index, sibling in enumerate(siblings):
         sibling.sort_order = index
-
     await db.commit()
     await _recompute_hierarchy(db, activity.schedule_period_id)
+    if old_parent != activity.parent_id:
+        await scheduling_cpm.recompute_schedule(db, activity.schedule_period_id)
+        await _recompute_hierarchy(db, activity.schedule_period_id)
     await _attach_evm_fields(db, [activity])
     return activity
 

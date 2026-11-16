@@ -106,9 +106,7 @@ async def move_activity(
     data: ActivityMoveRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Moves an activity up or down among its current siblings (display order/
-    WBS numbering only — indent/outdent, a parent_id change, is the separate
-    lever for hierarchy level)."""
+    """Move an activity before, after, or inside a schedule row."""
     return await svc.move_activity(db, activity_id, data.direction, data.target_id)
 
 

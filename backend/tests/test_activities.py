@@ -667,6 +667,24 @@ async def test_move_target_rejects_other_parent_and_missing_target(client, proje
     a = await _create(client, project, live_schedule_period, task_name='A')
     child = await _create(client, project, live_schedule_period, task_name='Child', parent_id=a['id'])
     b = await _create(client, project, live_schedule_period, task_name='B')
-    for body in ({'direction': 'before', 'target_id': child['id']}, {'direction': 'after'}, {'direction': 'up', 'target_id': a['id']}):
+    for body in ({'direction': 'before', 'target_id': str(uuid.uuid4())}, {'direction': 'after'}, {'direction': 'up', 'target_id': a['id']}):
         response = await client.post(f"/api/v1/activities/{b['id']}/move", json=body)
         assert response.status_code == 422, response.text
+
+async def test_drag_between_wbs_and_reject_descendant(client, project, live_schedule_period):
+    a = await _create(client, project, live_schedule_period, task_name='A')
+    b = await _create(client, project, live_schedule_period, task_name='B')
+    child = await _create(client, project, live_schedule_period, task_name='Child', parent_id=a['id'])
+    grandchild = await _create(client, project, live_schedule_period, task_name='Grandchild', parent_id=child['id'])
+    response = await client.post(f"/api/v1/activities/{child['id']}/move", json={'direction':'inside','target_id':b['id']})
+    assert response.status_code == 200, response.text
+    assert response.json()['parent_id'] == b['id']
+    response = await client.get(f"/api/v1/activities/{grandchild['id']}")
+    assert response.json()['parent_id'] == child['id']
+    response = await client.get(f"/api/v1/activities/{b['id']}")
+    assert response.json()['activity_type'] == 'wbs_summary'
+    response = await client.post(f"/api/v1/activities/{b['id']}/move", json={'direction':'inside','target_id':grandchild['id']})
+    assert response.status_code == 422
+    response = await client.post(f"/api/v1/activities/{child['id']}/move", json={'direction':'after','target_id':a['id']})
+    assert response.status_code == 200, response.text
+    assert response.json()['parent_id'] is None
