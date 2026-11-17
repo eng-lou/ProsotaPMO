@@ -212,8 +212,9 @@ function sliceRevealTuples(points: [number, number, number][], progress: number)
   return sliced.length >= 2 ? sliced : null
 }
 function PathGizmo({
-  path, upAxis, hideHandles, timelineDateRef, animationStart, animationEnd, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
+  presentationVisible, path, upAxis, hideHandles, timelineDateRef, animationStart, animationEnd, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
 }: {
+  presentationVisible?: (id: string) => boolean | undefined
   path: Path
   // Needed only for the arrow's own flat-lie-and-yaw orientation below
   // (2026-07-29) — the line/handles/label have never needed to know which
@@ -255,6 +256,8 @@ function PathGizmo({
   onDragEnd: (pathId: string, points: PathPoint[]) => void
 }) {
   const { camera, scene } = useThree()
+  const cueGroup = useRef<THREE.Group>(null)
+  const cueLabel = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{
     index: number
     plane: THREE.Plane
@@ -313,6 +316,9 @@ function PathGizmo({
   // it did to thousands of keyframed actors, so this never triggers a
   // React re-render at all while playing.
   useFrame(() => {
+    const cue = presentationVisible?.('path:' + path.id)
+    if (cueGroup.current) cueGroup.current.visible = cue !== false
+    if (cueLabel.current) cueLabel.current.style.display = cue === false ? 'none' : ''
     // Capture/Export Video text visibility (2026-07-30, per Maro: "the
     // text boxes and texts dont show up in the captured renders") — see
     // exportLabels.ts's own header. Points are already world-space (this
@@ -324,7 +330,7 @@ function PathGizmo({
       exportLabelsRef.current.set(`${path.id}-label`, {
         kind: 'path-label',
         opacity: path.opacity ?? 1,
-        visible: true,
+        visible: cue !== false,
         worldPos: new THREE.Vector3(p.x, p.y, p.z),
         text: path.name,
         backgroundColor: 'rgba(255,255,255,0.85)',
@@ -340,7 +346,7 @@ function PathGizmo({
       exportLabelsRef.current.delete(`${path.id}-label`)
     }
 
-    if (!path.animate) {
+    if (!path.animate || cue === true) {
       if (wasAnimatingRef.current) {
         wasAnimatingRef.current = false
         if (lineRef.current && curvePositions) {
@@ -444,7 +450,7 @@ function PathGizmo({
   }
 
   return (
-    <group userData={{ isPathGizmo: true }}>
+    <group ref={cueGroup} userData={{ isPathGizmo: true }}>
       {curvePositions && (
         <Line
           ref={lineRef}
@@ -477,7 +483,7 @@ function PathGizmo({
       )}
       {path.show_label && path.name && path.points.length > 0 && (
         <Html center distanceFactor={12} position={[path.points[0].x, path.points[0].y, path.points[0].z]} style={{ pointerEvents: 'none' }}>
-          <div style={{
+          <div ref={cueLabel} style={{
             fontWeight: 700, fontSize: 13, color: path.color, whiteSpace: 'nowrap', opacity: path.opacity ?? 1,
             background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: 4,
             border: `1.5px solid ${path.color}`, transform: 'translateY(-140%)',
@@ -508,8 +514,9 @@ function PathGizmo({
 // sibling of ModelObjects, not nested under any imported model, since a
 // Path is project-scoped rather than attached to one target.
 export function PathGizmos({
-  paths, upAxis, hideHandles, timelineDateRef, animWindows, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
+  presentationVisible, paths, upAxis, hideHandles, timelineDateRef, animWindows, exportLabelsRef, onDragStart, onDragMove, onDragEnd,
 }: {
+  presentationVisible?: (id: string) => boolean | undefined
   paths: Path[]
   upAxis: UpAxis
   hideHandles: boolean
@@ -530,6 +537,7 @@ export function PathGizmos({
           <PathGizmo
             key={path.id}
             path={path}
+            presentationVisible={presentationVisible}
             upAxis={upAxis}
             hideHandles={hideHandles}
             timelineDateRef={timelineDateRef}

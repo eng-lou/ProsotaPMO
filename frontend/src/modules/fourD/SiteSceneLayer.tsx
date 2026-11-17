@@ -46,6 +46,7 @@ function ShapeMaterial({ item, mapping, transmission, preview, colour, textures,
 }
 
 export interface SiteLayerState {
+  presentationVisible?: (id: string) => boolean | undefined
   adaptiveDetail?: boolean; captureDetail?: boolean
   hideLightHandles?: boolean
   detailSelection?: {itemId:string;featureId?:string;surface?:string;instanceIndex?:number}|null
@@ -112,6 +113,8 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   useFrame(() => {
     const parent = motionRoot.current
     if (!parent) return
+    const cue = state.presentationVisible?.('site:' + item.id)
+    if (cue === false) { parent.visible = false; return }
     if (selectable.current?.userData.simulatorOwnsPose) { parent.visible = true; return }
     parent.visible = preview || instance || !item.path_motion?.activity_id || (!!fittedMotion && sitePathActivityVisible(fittedMotion, dateRef.current))
     if (!preview && !instance && curve && fittedMotion) {

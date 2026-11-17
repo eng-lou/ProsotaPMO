@@ -39,7 +39,18 @@ class MotionTracking(StrictMotion):
     rotation: tuple[float, float, float, float]
 
 
+class MotionPause(StrictMotion):
+    id: str = Field(min_length=1, max_length=100)
+    phase: Literal['shot', 'transition'] = 'shot'
+    at: float = Field(ge=0, le=300)
+    duration: float = Field(ge=0.1, le=300)
+    details: list[str] = Field(default_factory=list, max_length=500)
+    onlyLinked: bool = False
+    actors: Literal['freeze', 'continue'] = 'continue'
+
+
 class MotionShot(StrictMotion):
+    pauses: list[MotionPause] = Field(default_factory=list, max_length=50)
     tracking: MotionTracking | None = None
     followMode: Literal['fixed', 'aim', 'translate', 'aligned'] = 'fixed'
     actorClock: Literal['presentation', 'construction'] = 'presentation'

@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import type { OrbitControls } from 'three-stdlib'
 import { focalLengthFromFov, fovFromFocalLength, type CameraPose } from './cameras'
-import { motionDuration, posePosition, poseTarget, sampleShot, sampleSequence, type MotionShot, type TargetResolver } from './cameraMotion'
+import { sequencePosition, motionDuration, posePosition, poseTarget, sampleShot, sampleSequence, type MotionShot, type TargetResolver } from './cameraMotion'
 import { markRenderActivity } from './IdleRenderDriver'
 
 export function useCameraMotion(cameraRef: React.MutableRefObject<THREE.Camera | null>, controlsRef: React.MutableRefObject<OrbitControls | null>, dateOverride: React.MutableRefObject<Date | null>, resolveTarget?: TargetResolver) {
   const [active, setActive] = useState(false), [playing, setPlaying] = useState(false), [seconds, setSeconds] = useState(0)
-  const state = useRef({ active: false, playing: false, reverse: false, seconds: 0, shots: [] as MotionShot[] })
+  const state = useRef({ active: false, playing: false, reverse: false, seconds: 0, shots: [] as MotionShot[], presentation: null as ReturnType<typeof sequencePosition>|null, detailIds: new Set<string>() })
   const resolver = useRef(resolveTarget); resolver.current = resolveTarget
   const original = useRef<{ pose: CameraPose; zoom: number } | null>(null)
   const readPose = (): CameraPose | null => {
@@ -27,9 +27,19 @@ export function useCameraMotion(cameraRef: React.MutableRefObject<THREE.Camera |
     const damping = controls.enableDamping; controls.enableDamping = false; controls.update(); controls.enableDamping = damping
     camera.updateMatrixWorld(); markRenderActivity()
   }
+  const heldPose = useRef<{key:string;pose:CameraPose}|null>(null)
   const applyAt = (time: number) => {
     const result = sampleSequence(state.current.shots, time, resolver.current)
-    if (result) { dateOverride.current = result.date; applyPose(result.pose) }
+    state.current.presentation=sequencePosition(state.current.shots,time)
+    if (result) {
+      const position=state.current.presentation
+      if (position.pause) {
+        const key=`${position.shotIndex}:${position.pause.id}:${position.baseSeconds}`
+        if (heldPose.current?.key!==key) heldPose.current={key,pose:result.pose}
+        result.pose=heldPose.current.pose
+      } else heldPose.current=null
+      dateOverride.current = result.date; applyPose(result.pose)
+    }
     return result?.date ?? null
   }
   const pause = () => { state.current.playing = false; setPlaying(false) }
@@ -37,7 +47,8 @@ export function useCameraMotion(cameraRef: React.MutableRefObject<THREE.Camera |
   const activate = (shots: MotionShot[]) => {
     if (!shots.length) return
     if (!original.current) { const pose = readPose(); if (pose) original.current = { pose, zoom: cameraRef.current instanceof THREE.OrthographicCamera ? cameraRef.current.zoom : 1 } }
-    state.current.shots = shots; state.current.active = true; setActive(true); pause(); seek(0)
+    heldPose.current=null
+    state.current.shots = shots; state.current.detailIds=new Set(shots.flatMap((s,i)=>(s.pauses||[]).filter(p=>p.phase==='shot'||i>0&&s.blend>0).flatMap(p=>p.details))); state.current.active = true; setActive(true); pause(); seek(0)
   }
   const beginFraming = (shot: MotionShot) => {
     activate([shot]); pause()

@@ -1,3 +1,4 @@
+import { linkedDetailVisible } from './cameraMotion'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { Html } from '@react-three/drei'
@@ -129,12 +130,13 @@ export interface AnnotationDragPoint {
 // box and dot are gated as a flat visible/hidden pair with everything
 // else, same as `shown` itself (see annotation.py's own matching header).
 export function AnnotationMarker({
-  annotation, dateRef, activities, modelElementLinks, animationProfiles, elementKeyframes, upAxis,
+  presentationVisible, annotation, dateRef, activities, modelElementLinks, animationProfiles, elementKeyframes, upAxis,
   animationStart, animationEnd, timelineStart = null, timelineDaysPerSecond = 1,
   leaderTargetObject, selected, onSelect, onDragStart, onDragMove, onDragEnd,
   onLeaderDragStart, onLeaderDragMove, onLeaderDragEnd,
   exportLabelsRef,
 }: {
+  presentationVisible?: (id: string) => boolean | undefined
   annotation: Annotation
   dateRef: React.MutableRefObject<Date | null>
   activities: Activity[]
@@ -341,6 +343,7 @@ export function AnnotationMarker({
           opacity = state.opacity
         }
       }
+      if (!positionTracks.vis.length && links.length) visible = linkedDetailVisible(links, now.getTime())
       if (positionTracks.vis.length > 0) {
         const vv = interpolateKeyframeTrack(positionTracks.vis, now)
         visible = vv !== null ? vv >= 0.5 : annotation.visible
@@ -362,6 +365,8 @@ export function AnnotationMarker({
       (annotation.hide_closer_than === null || distance >= annotation.hide_closer_than) &&
       (annotation.hide_farther_than === null || distance <= annotation.hide_farther_than)
 
+    const cue = presentationVisible?.('annotation:' + annotation.id)
+    if (cue !== undefined) { visible = cue; opacity = 1 }
     const shown = annotation.visible && visible && opacity > 0.01 && withinDistance
     if (meshRef.current) { meshRef.current.scale.setScalar(selected ? 1.4 : 1); meshRef.current.visible = !isBox || annotation.leader_visible || selected }
     if (materialRef.current) materialRef.current.opacity = opacity
@@ -409,7 +414,7 @@ export function AnnotationMarker({
 
       let leaderPoints: THREE.Vector3[] = [targetLocal, elbowLocal, calloutLocal]
       let leaderVisible = shown
-      if (annotation.animate) {
+      if (annotation.animate && cue === undefined) {
         const revealNow = now ?? new Date()
         const progress = computeRevealProgress(revealNow, animationStart, animationEnd, annotation.animation_loop)
         revealOpacity *= Math.max(0, Math.min(1, progress))
@@ -429,6 +434,7 @@ export function AnnotationMarker({
       }
     }
 
+    if (cue !== undefined) { revealShown = shown; revealOpacity = opacity }
     groupRef.current.visible = revealShown
     if (htmlRef.current) { htmlRef.current.style.display = revealShown ? 'flex' : 'none'; htmlRef.current.style.opacity = String(revealOpacity) }
 

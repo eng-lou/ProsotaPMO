@@ -9,7 +9,12 @@ export interface MotionSettings {
   easing: 'linear' | 'smooth'; shotSize: 'wide' | 'medium' | 'close'
   alignment: 'center' | 'left' | 'right'; lookAt: boolean; startView: 'current' | 'auto'
 }
+export interface MotionPause {
+  id: string; phase: 'shot' | 'transition'; at: number; duration: number
+  details: string[]; onlyLinked?: boolean; actors?: 'freeze' | 'continue'
+}
 export interface MotionShot {
+  pauses?: MotionPause[]
   tracking?: { objectId: string; position: Vec3; rotation: [number, number, number, number] } | null
   followMode?: 'fixed' | 'aim' | 'translate' | 'aligned'
   actorClock?: 'presentation' | 'construction'
@@ -76,7 +81,30 @@ export function sampleShot(shot: MotionShot, seconds: number): { pose: CameraPos
   const start = Date.parse(shot.dateStart), end = shot.stage === 'progress' ? Date.parse(shot.dateEnd) : start
   return { pose: withPose({ ...shot.start, base_focal_length: lens }, pos, aim), date: new Date(start + (end - start) * raw) }
 }
-export function motionDuration(shots: MotionShot[]) { return shots.reduce((sum, s, i) => sum + s.settings.duration + (i ? s.blend : 0), 0) }
+export function motionDuration(shots: MotionShot[]) {
+  return shots.reduce((sum,s,i)=>sum+s.settings.duration+(i?s.blend:0)+(s.pauses||[]).filter(p=>p.phase==='shot'||i>0&&s.blend>0).reduce((n,p)=>n+p.duration,0),0)
+}
+/** Maps presentation seconds to the original movement clock, including reverse seeks. */
+export function sequencePosition(shots: MotionShot[], seconds: number) {
+  seconds=Math.max(0,Math.min(seconds,motionDuration(shots)))
+  let remaining=seconds,base=0,frozen=0
+  for(let i=0;i<shots.length;i++)for(const phase of ['transition','shot'] as const){
+    const shot=shots[i],length=phase==='shot'?shot.settings.duration:i?shot.blend:0
+    if(!length)continue
+    let consumed=0
+    const pauses=(shot.pauses||[]).filter(p=>p.phase===phase).map(p=>({...p,at:Math.max(0,Math.min(length,p.at))})).sort((a,b)=>a.at-b.at)
+    for(const pause of pauses){
+      const travel=pause.at-consumed
+      if(remaining<travel)return {localSeconds:consumed+remaining,baseSeconds:base+consumed+remaining,actorSeconds:seconds-frozen,shotIndex:i,phase,pause:null as MotionPause|null,pauseElapsed:0}
+      remaining-=travel;consumed=pause.at
+      if(remaining<pause.duration)return {localSeconds:consumed,baseSeconds:base+consumed,actorSeconds:seconds-frozen-(pause.actors==='freeze'?remaining:0),shotIndex:i,phase,pause,pauseElapsed:remaining}
+      remaining-=pause.duration;if(pause.actors==='freeze')frozen+=pause.duration
+    }
+    if(remaining<length-consumed)return {localSeconds:consumed+remaining,baseSeconds:base+consumed+remaining,actorSeconds:seconds-frozen,shotIndex:i,phase,pause:null as MotionPause|null,pauseElapsed:0}
+    remaining-=length-consumed;base+=length
+  }
+  return {localSeconds:shots[shots.length-1]?.settings.duration || 0,baseSeconds:base,actorSeconds:seconds-frozen,shotIndex:Math.max(0,shots.length-1),phase:'shot' as const,pause:null as MotionPause|null,pauseElapsed:0}
+}
 export type TargetResolver = (id: string) => { position: THREE.Vector3; rotation: THREE.Quaternion } | null
 export function trackPose(shot: MotionShot, pose: CameraPose, resolve?: TargetResolver): CameraPose {
   if (!shot.tracking || !shot.followMode || shot.followMode === 'fixed') return pose
@@ -92,6 +120,10 @@ export function trackPose(shot: MotionShot, pose: CameraPose, resolve?: TargetRe
   return withPose(pose, move(posePosition(pose)), move(poseTarget(pose)))
 }
 export function sampleSequence(shots: MotionShot[], seconds: number, resolve?: TargetResolver) {
+  const position=sequencePosition(shots,seconds)
+  return sampleSequenceBase(shots,position.baseSeconds,resolve)
+}
+function sampleSequenceBase(shots: MotionShot[], seconds: number, resolve?: TargetResolver) {
   if (!shots.length) return null
   const sample = (shot: MotionShot, time: number) => { const result = sampleShot(shot, time); return { ...result, pose: trackPose(shot, result.pose, resolve) } }
   let remaining = Math.max(0, seconds)
@@ -109,4 +141,14 @@ export function sampleSequence(shots: MotionShot[], seconds: number, resolve?: T
     remaining -= shot.settings.duration
   }
   return null
+}
+
+/** Undefined leaves existing animation/keyframes in charge. */
+export function pauseDetailVisibility(id: string, active: boolean, controlled: Set<string>, pause: MotionPause | null | undefined, windows: readonly [number, number][], date: number | undefined): boolean | undefined {
+  if (!active || !controlled.has(id)) return undefined
+  if (!pause?.details.includes(id)) return false
+  return !pause.onlyLinked || (date !== undefined && windows.some(([start,end]) => date >= start && date < end))
+}
+export function linkedDetailVisible(windows: readonly {startMs:number;finishMs:number}[], date: number): boolean {
+  return windows.some(link => date >= link.startMs && date < link.finishMs)
 }

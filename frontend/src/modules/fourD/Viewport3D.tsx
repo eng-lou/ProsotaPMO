@@ -17,7 +17,7 @@ import { createPortal } from 'react-dom'
 import { CameraPresetsPanel } from './CameraPresetsPanel'
 import { useCameraMotion } from './useCameraMotion'
 import { CameraMotionDriver, CameraMotionHelpers } from './CameraMotionHelpers'
-import { motionDuration, type CameraMotion, type MotionShot, type Vec3 } from './cameraMotion'
+import { pauseDetailVisibility, motionDuration, type CameraMotion, type MotionShot, type Vec3 } from './cameraMotion'
 import { flattenCollectionMemberRefs, type Collection } from './collections'
 import { EquipmentVisualEditor, type EquipmentVisualState } from './EquipmentVisualEditor'
 import { EquipmentPlayback } from './EquipmentPlayback'
@@ -5760,16 +5760,33 @@ export function Viewport3D({
   const pathDateRef = useMemo<React.MutableRefObject<Date | null>>(() => ({
     get current() {
       if (cameraMotion.state.current.active && timelineFormat) {
-        let remaining = cameraMotion.state.current.seconds
-        const shots = cameraMotion.state.current.shots
-        const shot = shots.find((s, i) => { const length = s.settings.duration + (i ? s.blend : 0); if (remaining < length) return true; remaining -= length; return false }) || shots[shots.length - 1]
+        const presentation = cameraMotion.state.current.presentation
+        const shot = cameraMotion.state.current.shots[presentation?.shotIndex ?? 0]
         if (shot?.actorClock === 'construction') return motionDateOverrideRef.current
-        return new Date(timelineFormat.scheduleStart.getTime() + cameraMotion.state.current.seconds * 86400000 * timelineFormat.speedDaysPerSecond)
+        return new Date(timelineFormat.scheduleStart.getTime() + (presentation?.actorSeconds ?? cameraMotion.state.current.seconds) * 86400000 * timelineFormat.speedDaysPerSecond)
       }
       return captureDateOverrideRef.current ?? timelineDateRefProp.current
     },
     set current(value: Date | null) { timelineDateRefProp.current = value },
   }), [timelineDateRefProp, timelineFormat?.scheduleStart, timelineFormat?.speedDaysPerSecond])
+
+  const detailActivityWindows = useMemo(() => {
+    const activities = new Map(timelineActivities.map(a => [a.id, a]))
+    const windows = new Map<string, [number, number][]>()
+    for (const link of timelineLinks) {
+      const activity = activities.get(link.activity_id)
+      if (!activity?.start || !activity.finish) continue
+      const key = `${link.source_kind}:${link.element_ref}`
+      const values = windows.get(key) || []
+      values.push([Date.parse(activity.start), Date.parse(activity.finish)])
+      windows.set(key, values)
+    }
+    return windows
+  }, [timelineActivities, timelineLinks])
+  const presentationVisible = (id: string): boolean | undefined => {
+    const current = cameraMotion.state.current
+    return pauseDetailVisibility(id,current.active,current.detailIds,current.presentation?.pause,detailActivityWindows.get(id) || [],motionDateOverrideRef.current?.getTime())
+  }
 
   const [localCameraPresets, setLocalCameraPresets] = useState(false)
   const showCameraPresets = cameraPresetsVisible ?? localCameraPresets
@@ -7072,7 +7089,7 @@ export function Viewport3D({
         }
       }}
     >
-      {showCameraPresets && cameraPanel(<CameraPresetsPanel embedded={!!cameraPresetsHost} key={`${cameraProjectId}:${activeCameraId ?? "draft"}`} savedCamera={activeCamera} onOpenCamera={id => { if (id === activeCameraId && activeCamera?.motion) cameraMotion.activate(activeCamera.motion.shots); else onOpenMotionCamera?.(id) }} controller={cameraMotion} shot={motionShot} onChange={setMotionShot}
+      {showCameraPresets && cameraPanel(<CameraPresetsPanel embedded={!!cameraPresetsHost} key={`${cameraProjectId}:${activeCameraId ?? "draft"}`} savedCamera={activeCamera} onOpenCamera={id => { if (id === activeCameraId && activeCamera?.motion) cameraMotion.activate(activeCamera.motion.shots); else onOpenMotionCamera?.(id) }} detailTargets={[...annotations.map(a => ({id:'annotation:'+a.id,name:'Callout: '+a.text})),...paths.map(p => ({id:'path:'+p.id,name:'Path: '+p.name})),...(siteScene?.items || []).map(item => ({id:'site:'+item.id,name:'Object: '+item.name}))]} controller={cameraMotion} shot={motionShot} onChange={setMotionShot}
         targets={[{ id: 'all', name: 'Whole model' }, { id: 'selection', name: 'Current selection' }, ...importedObjects.map(o => ({ id: o.id, name: o.name })), ...cameraCollections.map(c => ({ id: 'collection:' + c.id, name: 'Collection: ' + c.name }))]}
         format={timelineFormat} resolveTarget={resolveMotionTarget} upAxis={settings.upAxis} aspect={cameraRef.current instanceof THREE.PerspectiveCamera ? cameraRef.current.aspect : 1.6}
         date={timelineDateRefProp.current || new Date()} views={cameraViews} cameras={cameras} onSave={onSaveMotionCamera}
@@ -7591,14 +7608,14 @@ export function Viewport3D({
           <EquipmentVisualEditor transformMode={gizmoMode} transformSpace={gizmoSpace} state={equipmentVisual ?? null} objects={equipmentObjects ?? timelineSceneObjects} />
           <EquipmentPlayback siteScene={siteScene} paths={paths} daysPerSecond={timelineFormat?.speedDaysPerSecond??1} rendering={hidePathHelpers} visual={equipmentVisual} rigs={equipmentRigs} objects={equipmentObjects ?? timelineSceneObjects} dateRef={pathDateRef} preview={equipmentPreview} onError={onEquipmentError} />
           <EmbeddedAnimationLoop objects={importedObjects} animWindows={meshAnimWindows} timelineDateRef={timelineDateRef} />
-          {siteScene && <><SiteSceneLayer state={{ ...siteScene, adaptiveDetail: settings.simplifyWhileOrbiting, captureDetail: captureDprMultiplier !== null, importedLights: settings.importedLights, paths, pathDateRef, daysPerSecond: timelineFormat?.speedDaysPerSecond ?? 1, boxSelecting: boxSelectMode }} links={timelineLinks} profiles={timelineProfiles} activities={timelineActivities} dateRef={timelineDateRef} rendering={hidePathHelpers} />
+          {siteScene && <><SiteSceneLayer state={{ ...siteScene, presentationVisible, adaptiveDetail: settings.simplifyWhileOrbiting, captureDetail: captureDprMultiplier !== null, importedLights: settings.importedLights, paths, pathDateRef, daysPerSecond: timelineFormat?.speedDaysPerSecond ?? 1, boxSelecting: boxSelectMode }} links={timelineLinks} profiles={timelineProfiles} activities={timelineActivities} dateRef={timelineDateRef} rendering={hidePathHelpers} />
             <SitePlacementCatcher active={!!siteScene.placing && !hidePathHelpers} upAxis={settings.upAxis}
               elevation={siteScene.preview?.kind === 'light' ? 0 : siteScene.preview?.position[settings.upAxis] || 0}
               onMove={point => siteScene.onMove?.(point)} onPlace={point => siteScene.onPlace?.(point)} />
           </>}
           {simulationScenario && <SimulationPlayback items={siteScene?.items} scenario={simulationScenario} siteObjects={siteScene?.objects} objects={equipmentObjects ?? timelineSceneObjects} ifcHandles={ifcHandles} dateRef={timelineDateRef} onError={reportSimulationError} onReady={reportSimulationReady} />}
           <PathGizmos
-            paths={overlays.paths ? paths : []}
+            paths={overlays.paths ? paths : []} presentationVisible={presentationVisible}
             upAxis={settings.upAxis}
             hideHandles={!overlays.helpers}
             timelineDateRef={timelineDateRef}
@@ -7642,6 +7659,7 @@ export function Viewport3D({
             <AnnotationMarker
               key={annotation.id}
               annotation={annotation}
+              presentationVisible={presentationVisible}
               dateRef={timelineDateRef}
               activities={timelineActivities}
               modelElementLinks={timelineLinks}
