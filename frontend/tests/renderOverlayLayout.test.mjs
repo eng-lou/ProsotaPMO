@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict'
+import {test} from 'node:test'
+import {build} from 'esbuild'
+const {outputFiles}=await build({stdin:{contents:"export {computeExportLayout,drawGanttStrip,composeExportFrame} from './src/modules/fourD/exportOverlays'",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm'})
+const {computeExportLayout,drawGanttStrip,composeExportFrame}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
+function context(){
+ const fills=[],texts=[]
+ const ctx=new Proxy({fills,texts,measureText(t){return {width:t.length*7}},fillRect(...r){fills.push({r,color:this.fillStyle})},fillText(t,...p){texts.push({t,p})}}, {get(o,k){return k in o?o[k]:()=>{}}})
+ return ctx
+}
+test('render bands preserve 65% model height at every export resolution',()=>{
+ for(const h of [720,1080,2160]){
+  const l=computeExportLayout(h*16/9,h,h/1080,{includeGanttChart:true,includeActivityTable:false,comparisonPaneCount:0,includeCostProfile:true,exportTitle:'',exportNarrative:''})
+  assert(Math.abs(l.mainViewRect.height/h-.65)<.002)
+  assert.equal(l.mainViewRect.y,l.ganttRect.height)
+  assert.equal(l.costRect.y+l.costRect.height,h)
+ }
+})
+test('Gantt keeps bars out of activity labels and enlarges short work within long projects',()=>{
+ const ctx=context()
+ drawGanttStrip(ctx,{x:0,y:0,width:1920,height:216},[{id:'a',activity_type:'task',task_name:'Clear vegetation',start:'2026-12-01',finish:'2026-12-20'}],new Date('2026-11-01'),new Date('2031-06-01'),new Date('2026-12-10'),1)
+ const bars=ctx.fills.filter(f=>f.color==='#1683ef')
+ assert.equal(bars.length,1);assert(bars[0].r[0]>=480);assert(bars[0].r[2]>100)
+ assert(ctx.texts.some(t=>t.t==='Clear vegetation'))
+})
+test('timeline export fits its view regardless of authored pixel width or horizontal offset',()=>{
+ for(const width of [640,1920]){
+  const ctx=context(),rect={x:100,y:50,width,height:500}
+  composeExportFrame(ctx,{totalWidth:width+100,totalHeight:550,mainViewRect:rect,comparisonViewRects:[]},{mainCanvas:{width,height:500},scale:1,mainViewTitle:'',includeTimelineStrip:true,timelineStrips:[{strip:{viewport_slot:null,position_x_pct:80,position_y_pct:20,width_px:3000,height_px:40,background_color:'#123456',band_border_color:'#fff',text_color:'#fff',font_size:12},cells:[],yearGroups:[],playheadIndex:-1}]})
+  const strip=ctx.fills.find(f=>f.color==='#123456')
+  assert.deepEqual(strip.r,[110,150,width-20,40])
+ }
+})

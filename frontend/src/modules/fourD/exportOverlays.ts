@@ -57,13 +57,13 @@ export interface ExportLayout {
 // handleCaptureImage/handleExportVideo) everywhere below, so overlay
 // text/line weights stay proportionate to the requested output resolution
 // instead of becoming illegibly tiny at 4K or oversized at 720p.
-const GANTT_BAND_HEIGHT = 130
+const GANTT_BAND_HEIGHT = 172
 // Time-interval ruler along the top of the Gantt strip (2026-07-25, per
 // Maro: "time interval at the top would be useful") — a separate reserved
 // header row above the bars themselves, tall enough for month/year tick
 // labels; see drawGanttStrip's own header for how the tick interval is
 // chosen.
-const TIME_AXIS_HEIGHT = 22
+const TIME_AXIS_HEIGHT = 44
 const TABLE_COLUMN_WIDTH = 420
 // Full-width footer band (2026-07-25, per Maro: "include... the cost
 // profile over time at the bottom") — see drawCostProfileChart's own
@@ -74,7 +74,7 @@ const TABLE_COLUMN_WIDTH = 420
 // without it spilling down into the month-label row below (2026-07-25 fix
 // — the original 150 was sized only for the bars/labels, before the
 // resources box existed).
-const COST_BAND_HEIGHT = 180
+const COST_BAND_HEIGHT = 162
 // Reserved strip for the Active Resources box, to the right of the bars
 // (2026-07-25 fix, per Maro: "good touch with the active resources, but
 // its overlapping with the bars a bit" — anchoring the box to a fixed
@@ -263,78 +263,52 @@ export function drawGanttStrip(
   scale: number,
 ): void {
   ctx.save()
-  ctx.fillStyle = '#f9fafb'
-  ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-  ctx.strokeStyle = '#d1d5db'
-  ctx.lineWidth = Math.max(1, scale)
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
-
-  if (!scheduleStart || !scheduleEnd) { ctx.restore(); return }
-  const totalMs = scheduleEnd.getTime() - scheduleStart.getTime()
-  if (totalMs <= 0) { ctx.restore(); return }
-
-  const padding = OVERLAY_PADDING * scale
+  ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.width, rect.height); ctx.clip()
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+  if (!scheduleStart || !scheduleEnd || scheduleEnd <= scheduleStart) { ctx.restore(); return }
+  const padding = 10 * scale
   const axisHeight = TIME_AXIS_HEIGHT * scale
-  const rowHeight = ROW_HEIGHT * scale
-  const innerWidth = rect.width - padding * 2
-  const barsTop = rect.y + axisHeight
-  const maxRows = Math.max(1, Math.floor((rect.height - axisHeight - padding * 2) / rowHeight))
-  const rows = selectExportActivities(activities, now, maxRows)
-
-  const xFor = (d: Date) => rect.x + padding + Math.min(1, Math.max(0, (d.getTime() - scheduleStart.getTime()) / totalMs)) * innerWidth
-
-  // Time-interval ruler — a separate header band above the bars, ticked at
-  // whatever interval pickTickIntervalMonths picks for this schedule's own
-  // total span, using the exact same xFor mapping the bars/now-line use
-  // below so everything lines up on one shared date axis.
-  ctx.fillStyle = '#eef2f7'
-  ctx.fillRect(rect.x, rect.y, rect.width, axisHeight)
-  ctx.strokeStyle = '#d1d5db'
-  ctx.lineWidth = Math.max(1, scale)
-  ctx.beginPath()
-  ctx.moveTo(rect.x, rect.y + axisHeight)
-  ctx.lineTo(rect.x + rect.width, rect.y + axisHeight)
-  ctx.stroke()
-
-  const intervalMonths = pickTickIntervalMonths(totalMs / 86_400_000)
-  ctx.font = `${Math.round(9 * scale)}px system-ui, sans-serif`
-  ctx.textBaseline = 'middle'
-  ctx.fillStyle = '#4b5563'
-  ctx.strokeStyle = '#c7d0dc'
-  let tick = new Date(scheduleStart.getFullYear(), scheduleStart.getMonth(), 1)
-  while (tick.getTime() <= scheduleEnd.getTime()) {
-    if (tick.getTime() >= scheduleStart.getTime()) {
-      const x = xFor(tick)
-      ctx.beginPath()
-      ctx.moveTo(x, rect.y + axisHeight * 0.4)
-      ctx.lineTo(x, rect.y + axisHeight)
-      ctx.stroke()
-      drawTruncatedText(ctx, tick.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }), x + 3 * scale, rect.y + axisHeight * 0.6, 65 * scale)
-    }
-    tick = addMonths(tick, intervalMonths)
+  const rowHeight = 32 * scale
+  const rows = selectExportActivities(activities, now, Math.max(1, Math.floor((rect.height - axisHeight) / rowHeight)))
+  // Focus on the displayed activities, not five years of unrelated work.
+  const starts = rows.map(a => new Date(a.start!).getTime())
+  const ends = rows.map(a => new Date(a.finish!).getTime())
+  const focus = now ?? scheduleStart
+  const start = new Date(Math.min(focus.getTime(), ...starts))
+  const end = new Date(Math.max(focus.getTime(), ...ends))
+  const domainStart = new Date(start.getFullYear(), start.getMonth() - 1, 1)
+  const domainEnd = new Date(end.getFullYear(), end.getMonth() + 2, 1)
+  const labelWidth = Math.min(rect.width * .38, 480 * scale)
+  const chartX = rect.x + labelWidth
+  const chartWidth = Math.max(1, rect.width - labelWidth)
+  const xFor = (d: Date) => chartX + Math.max(0, Math.min(1, (d.getTime() - domainStart.getTime()) / (domainEnd.getTime() - domainStart.getTime()))) * chartWidth
+  ctx.fillStyle = '#102d4a'; ctx.fillRect(rect.x, rect.y, rect.width, axisHeight)
+  ctx.font = `bold ${Math.round(15 * scale)}px system-ui, sans-serif`
+  ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'
+  drawTruncatedText(ctx, 'Activity', rect.x + padding, rect.y + axisHeight / 2, labelWidth - padding * 2)
+  const months = Math.max(1, (domainEnd.getFullYear() - domainStart.getFullYear()) * 12 + domainEnd.getMonth() - domainStart.getMonth())
+  const step = Math.max(pickTickIntervalMonths((domainEnd.getTime() - domainStart.getTime()) / 86400000), Math.ceil(months * 90 * scale / chartWidth))
+  for (let tick = domainStart; tick < domainEnd; tick = addMonths(tick, step)) {
+    const x = xFor(tick), nextX = xFor(addMonths(tick, step))
+    ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = Math.max(1, scale)
+    ctx.beginPath(); ctx.moveTo(x, rect.y); ctx.lineTo(x, rect.y + rect.height); ctx.stroke()
+    ctx.fillStyle = '#ffffff'; ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`
+    drawTruncatedText(ctx, tick.toLocaleDateString('en-GB', {month:'short', year:'numeric'}), x + padding / 2, rect.y + axisHeight / 2, nextX - x - padding)
   }
-
-  ctx.font = `${Math.round(10 * scale)}px system-ui, sans-serif`
-  rows.forEach((a, i) => {
-    const y = barsTop + padding + i * rowHeight
-    const barStart = xFor(new Date(a.start!))
-    const barEnd = Math.max(barStart + scale, xFor(new Date(a.finish!)))
-    ctx.fillStyle = a.is_critical ? '#ef4444' : '#60a5fa'
-    ctx.fillRect(barStart, y + rowHeight * 0.2, barEnd - barStart, rowHeight * 0.6)
-    ctx.fillStyle = '#374151'
-    drawTruncatedText(ctx, a.task_name, rect.x + padding, y + rowHeight / 2, innerWidth * 0.4)
+  rows.forEach((activity, i) => {
+    const y = rect.y + axisHeight + i * rowHeight
+    ctx.fillStyle = i % 2 ? '#f1f5f9' : '#ffffff'
+    ctx.fillRect(rect.x, y, labelWidth, rowHeight)
+    ctx.strokeStyle = '#dbe2ea'; ctx.beginPath(); ctx.moveTo(rect.x,y + rowHeight); ctx.lineTo(rect.x + rect.width,y + rowHeight); ctx.stroke()
+    ctx.font = `600 ${Math.round(14 * scale)}px system-ui, sans-serif`; ctx.fillStyle = '#102d4a'
+    drawTruncatedText(ctx, activity.task_name, rect.x + padding, y + rowHeight / 2, labelWidth - 2 * padding)
+    const x = xFor(new Date(activity.start!)), finish = xFor(new Date(activity.finish!))
+    ctx.fillStyle = activity.is_critical ? '#ef4444' : '#1683ef'
+    ctx.fillRect(x, y + 7 * scale, Math.max(scale, finish - x), rowHeight - 14 * scale)
   })
-
-  if (now) {
-    const nowX = xFor(now)
-    ctx.strokeStyle = '#f59e0b'
-    ctx.lineWidth = Math.max(1, 1.5 * scale)
-    ctx.setLineDash([4 * scale, 3 * scale])
-    ctx.beginPath()
-    ctx.moveTo(nowX, barsTop)
-    ctx.lineTo(nowX, rect.y + rect.height - padding * 0.5)
-    ctx.stroke()
-    ctx.setLineDash([])
+  if (now && now >= domainStart && now <= domainEnd) {
+    ctx.strokeStyle = '#f16b58'; ctx.lineWidth = Math.max(1, 2 * scale)
+    ctx.beginPath(); ctx.moveTo(xFor(now),rect.y + axisHeight); ctx.lineTo(xFor(now),rect.y + rect.height); ctx.stroke()
   }
   ctx.restore()
 }
@@ -448,7 +422,7 @@ export function drawCostProfileChart(
   resourceBreakdown: { name: string; values: number[] }[], scale: number,
 ): void {
   ctx.save()
-  ctx.fillStyle = '#f9fafb'
+  ctx.fillStyle = '#ffffff'
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
   ctx.strokeStyle = '#d1d5db'
   ctx.lineWidth = Math.max(1, scale)
@@ -492,20 +466,20 @@ export function drawCostProfileChart(
 
   // Legend — distinguishes the bars from the S-Curve line, since both
   // now share the chart and only differ by colour/axis.
-  ctx.font = `${Math.round(9 * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(13 * scale)}px system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   ctx.fillStyle = '#eab308'
   ctx.fillRect(chartX, rect.y + padding + legendHeight / 2 - 4 * scale, 8 * scale, 8 * scale)
-  ctx.fillStyle = '#6b7280'
+  ctx.fillStyle = '#334155'
   ctx.fillText('Period Cost', chartX + 11 * scale, rect.y + padding + legendHeight / 2)
-  const sCurveLegendX = chartX + 90 * scale
+  const sCurveLegendX = chartX + 125 * scale
   ctx.strokeStyle = '#2563eb'
-  ctx.lineWidth = Math.max(1, 2 * scale)
+  ctx.lineWidth = Math.max(1, 3 * scale)
   ctx.beginPath()
   ctx.moveTo(sCurveLegendX, rect.y + padding + legendHeight / 2)
   ctx.lineTo(sCurveLegendX + 14 * scale, rect.y + padding + legendHeight / 2)
   ctx.stroke()
-  ctx.fillStyle = '#6b7280'
+  ctx.fillStyle = '#334155'
   ctx.fillText('S-Curve (cumulative)', sCurveLegendX + 18 * scale, rect.y + padding + legendHeight / 2)
 
   // Gridlines + dual £ axis labels — left is per-period (same abbreviate-
@@ -526,7 +500,7 @@ export function drawCostProfileChart(
     ctx.moveTo(chartX, y)
     ctx.lineTo(chartX + chartWidth, y)
     ctx.stroke()
-    ctx.fillStyle = '#9ca3af'
+    ctx.fillStyle = '#475569'
     drawTruncatedText(ctx, formatAbbreviated(maxValue * frac), rect.x + padding * 0.3, y, axisWidth - padding * 0.6)
     ctx.fillStyle = '#2563eb'
     drawTruncatedText(ctx, formatAbbreviated(maxCumulative * frac), chartX + chartWidth + padding * 0.4, y, rightAxisWidth - padding * 0.4)
@@ -548,11 +522,11 @@ export function drawCostProfileChart(
     const x = chartX + i * bucketWidth + barGap / 2
     const y = chartTop + chartHeight - barHeight
     const isFuture = nowMs !== undefined && bucket.start.getTime() > nowMs
-    ctx.fillStyle = isFuture ? 'rgba(234,179,8,0.3)' : '#eab308'
+    ctx.fillStyle = isFuture ? '#fbd45c' : '#f4b400'
     ctx.fillRect(x, y, barWidth, barHeight)
     if (i === currentBucketIndex) {
       ctx.strokeStyle = '#92400e'
-      ctx.lineWidth = Math.max(1, 2 * scale)
+      ctx.lineWidth = Math.max(1, 3 * scale)
       ctx.strokeRect(x, y, barWidth, barHeight)
     }
   })
@@ -560,7 +534,7 @@ export function drawCostProfileChart(
   // S-Curve line — cumulative cost, one point per bucket centre, plotted
   // against its own right-hand scale (maxCumulative) computed above.
   ctx.strokeStyle = '#2563eb'
-  ctx.lineWidth = Math.max(1, 2 * scale)
+  ctx.lineWidth = Math.max(1, 3 * scale)
   ctx.beginPath()
   buckets.forEach((_bucket, i) => {
     const x = chartX + i * bucketWidth + bucketWidth / 2
@@ -573,7 +547,7 @@ export function drawCostProfileChart(
     const x = chartX + i * bucketWidth + bucketWidth / 2
     const y = chartTop + chartHeight - (cumulative[i] / maxCumulative) * chartHeight
     ctx.beginPath()
-    ctx.arc(x, y, Math.max(1.5, 2 * scale), 0, Math.PI * 2)
+    ctx.arc(x, y, Math.max(1.5, 3 * scale), 0, Math.PI * 2)
     ctx.fill()
   })
 
@@ -603,13 +577,13 @@ export function drawCostProfileChart(
   // drawGanttStrip's own time axis uses, just driven by available pixel
   // width instead of a fixed calendar interval since these buckets are
   // always exactly one month apart already.
-  ctx.fillStyle = '#6b7280'
-  ctx.font = `${Math.round(8 * scale)}px system-ui, sans-serif`
+  ctx.fillStyle = '#334155'
+  ctx.font = `${Math.round(11 * scale)}px system-ui, sans-serif`
   // Wide enough for the longest real label ("Sept 2027") at this font size
   // (2026-07-25 fix — a narrower box here was truncating month labels with
   // an ellipsis, e.g. "Sept 2..."/"Oct 20...", even though there was
   // plenty of room between bars for the full text).
-  const labelDrawWidth = 50 * scale
+  const labelDrawWidth = 72 * scale
   const labelStride = Math.max(1, Math.ceil(labelDrawWidth / bucketWidth))
   buckets.forEach((bucket, i) => {
     if (i % labelStride !== 0) return
@@ -647,7 +621,7 @@ function drawActiveResourcesBox(ctx: CanvasRenderingContext2D, x: number, y: num
   const padding = OVERLAY_PADDING * scale
   const rowHeight = ROW_HEIGHT * 0.85 * scale
   const titleHeight = rowHeight * 1.1
-  const maxRows = 4
+  const maxRows = 3
   const shown = resources.slice(0, maxRows)
   const overflow = resources.length - shown.length
   const rowCount = shown.length + (overflow > 0 ? 1 : 0)
@@ -660,12 +634,14 @@ function drawActiveResourcesBox(ctx: CanvasRenderingContext2D, x: number, y: num
   ctx.lineWidth = Math.max(1, scale)
   ctx.strokeRect(x, y, width, height)
 
-  ctx.fillStyle = '#111827'
+  ctx.fillStyle = '#102d4a'
+  ctx.fillRect(x, y, width, titleHeight + padding)
+  ctx.fillStyle = '#ffffff'
   ctx.font = `bold ${Math.round(11 * scale)}px system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   drawTruncatedText(ctx, 'Active Resources', x + padding, y + padding + titleHeight / 2, width - padding * 2)
 
-  ctx.font = `${Math.round(9 * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(11 * scale)}px system-ui, sans-serif`
   shown.forEach((resource, i) => {
     const rowY = y + padding + titleHeight + i * rowHeight
     const rounded = Math.round(resource.value)
@@ -1293,9 +1269,12 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
     for (const { strip, cells, yearGroups, playheadIndex } of opts.timelineStrips) {
       const rect = viewRect(strip.viewport_slot)
       if (!rect) continue
-      const xPx = rect.x + (strip.position_x_pct / 100) * rect.width
-      const yPx = rect.y + (strip.position_y_pct / 100) * rect.height
-      drawTimelineStrip(ctx, xPx, yPx, strip, cells, yearGroups, playheadIndex, opts.scale)
+      const xPx = rect.x + padding
+      // A full-width strip must not cover the existing top-left date card.
+      const dateClearance = strip.viewport_slot === null && opts.includeDateOverlay && opts.now
+        ? (ROW_HEIGHT * 2 + 4) * opts.scale + padding * 2 : 0
+      const yPx = rect.y + Math.max(dateClearance, (strip.position_y_pct / 100) * rect.height)
+      drawTimelineStrip(ctx, xPx, yPx, { ...strip, width_px: Math.max(1, rect.width - padding * 2) / opts.scale }, cells, yearGroups, playheadIndex, opts.scale)
     }
   }
 }

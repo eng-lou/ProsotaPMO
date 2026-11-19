@@ -128,12 +128,12 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
   return (
     <div
       className="absolute z-10 cursor-grab active:cursor-grabbing select-none"
-      style={{ left: `${localPos.x}%`, top: `${localPos.y}%` }}
+      style={{ left: 10, right: 10, top: `${localPos.y}%` }}
       onMouseDown={startDrag}
     >
       <div
         style={{
-          position: 'relative', width: strip.width_px, height: strip.height_px, overflow: 'hidden',
+          position: 'relative', width: '100%', height: strip.height_px, overflow: 'hidden',
           backgroundColor: strip.background_color, border: `1px solid ${strip.band_border_color}`, borderRadius: 4,
         }}
       >

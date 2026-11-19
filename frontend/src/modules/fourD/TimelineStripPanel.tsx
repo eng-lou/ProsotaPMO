@@ -103,7 +103,7 @@ function Item({ strip, openViewCount, activities, udfDefinitions, getUdfValue, o
       </button>
       {styleOpen && (
         <div className="space-y-1 bg-gray-50 dark:bg-prosota-panel2 border border-gray-100 dark:border-prosota-line rounded px-2 py-1.5">
-          <NumberField label="Width" value={strip.width_px} min={100} step={20} onChange={v => onUpdate({ width_px: v })} />
+          <p className="text-xs text-gray-500">Width fits the viewport automatically.</p>
           <NumberField label="Height" value={strip.height_px} min={20} step={4} onChange={v => onUpdate({ height_px: v })} />
           <NumberField label="Font size" value={strip.font_size} min={6} step={1} onChange={v => onUpdate({ font_size: v })} />
           <ColorField label="Background" value={strip.background_color} onChange={v => onUpdate({ background_color: v })} />
