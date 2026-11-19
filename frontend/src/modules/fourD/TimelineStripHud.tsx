@@ -125,9 +125,11 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
     : -1
   const cellWidthPct = cells.length > 0 ? 100 / cells.length : 0
 
+  // Keep the draggable HUD below editor toolbars/panels (z-10 and above).
+  // Export placement is drawn separately and must not move with editor chrome.
   return (
     <div
-      className="absolute z-10 cursor-grab active:cursor-grabbing select-none"
+      className="absolute z-[5] cursor-grab active:cursor-grabbing select-none"
       style={{ left: 10, right: 10, top: `${localPos.y}%` }}
       onMouseDown={startDrag}
     >
