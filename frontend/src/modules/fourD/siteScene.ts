@@ -14,6 +14,7 @@ export interface SiteObjectState {
 export interface SitePathKey { date: string; progress: number; interpolation: 'linear' | 'smooth' | 'hold' }
 export interface PathMotion { activity_id?: string | null; bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
 export interface SiteItem {
+  load_handling?: import("./loadHandling").LoadHandling | null
   section_boxes?: SiteSectionBox[]
   illumination?: SiteIllumination | null
   motion_actions?: import('./workerActions').WorkerAction[]

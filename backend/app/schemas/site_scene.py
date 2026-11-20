@@ -1,3 +1,4 @@
+from app.schemas.load_handling import LoadHandling
 from typing import Literal
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -161,6 +162,7 @@ class SiteItem(BaseModel):
     animation_speed: float = Field(default=1, ge=0, le=10)
     motion_actions: list[WorkerAction] = Field(default_factory=list, max_length=200)
     attachment: SiteAttachment | None = None
+    load_handling: LoadHandling | None = None
     rig_disabled: bool = False
     instance_overrides: dict[int, FeatureReplacement] = Field(default_factory=dict, max_length=200)
     generator_version: Literal[1] = 1
@@ -207,6 +209,8 @@ class SiteItem(BaseModel):
             ordered=sorted(self.motion_actions,key=lambda a:datetime.fromisoformat(a.start.replace('Z','+00:00')))
             if any(datetime.fromisoformat(b.start.replace('Z','+00:00')) < datetime.fromisoformat(a.end.replace('Z','+00:00')) for a,b in zip(ordered,ordered[1:])):
                 raise ValueError('Actions for one actor cannot overlap')
+        if self.load_handling and self.load_handling.events and (self.attachment or self.path_motion):
+            raise ValueError('Load transfers cannot share a load with a single attachment or its own route')
         if self.attachment and self.path_motion:
             raise ValueError('Unbind this object from its path before attaching it to another object')
         if self.asset_part and self.kind != 'asset':
@@ -240,6 +244,21 @@ class SceneEdit(BaseModel):
         if len({i.id for i in self.items}) != len(self.items):
             raise ValueError("Duplicate site object IDs")
         by_id={i.id:i for i in self.items}
+        done=set()
+        def visit(item_id, chain):
+            if item_id in chain:
+                raise ValueError('Load transfers and attachments cannot form a cycle')
+            if item_id in done:
+                return
+            item=by_id[item_id]
+            parents=([item.attachment.parent_id] if item.attachment else [])+[e.parent_id for e in (item.load_handling.events if item.load_handling else []) if e.parent_id]
+            for parent in parents:
+                if parent not in by_id:
+                    raise ValueError('Remove load transfers before removing their carrier')
+                visit(parent,chain|{item_id})
+            done.add(item_id)
+        for item_id in by_id:
+            visit(item_id,set())
         for item in self.items:
             visited={item.id}; current=item
             while current.attachment:

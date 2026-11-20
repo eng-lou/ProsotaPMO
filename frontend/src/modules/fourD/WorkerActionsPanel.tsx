@@ -1,3 +1,4 @@
+import { LoadHandlingPanel } from "./LoadHandlingPanel"
 import { useEffect, useState, type MutableRefObject } from 'react'
 import { loadSiteAsset } from './siteAssets'
 import { TimelinePointInput, type TimelineFormat } from './TimelinePointInput'
@@ -52,9 +53,10 @@ export function WorkerActionsPanel({item,items,paths,disabled,format,dateRef,onS
       </div>)}
       <button className={button} disabled={actions.length>=200} onClick={()=>{const time=Math.max(start().getTime(),...actions.map(a=>Date.parse(a.end)));void save({motion_actions:[...actions,{id:crypto.randomUUID(),name:'Work',start:new Date(time).toISOString(),end:new Date(time+5*scale).toISOString(),clip:item.animation_clip||0,speed:1,loop:true,blend:.2}]})}}>+ Timed action at playhead / after last</button>
     </>}
+    <LoadHandlingPanel item={item} items={items} date={start} onSeek={onSeek} onApply={onApply}/>
     <details open={!!a}><summary>Attach this object to a worker or machine</summary>
       <p>Choose the worker and a hand, then move or rotate the tool in the viewport to fit its grip. For an operator, choose the machine’s cab or seat part instead.</p>
-      {!a?<button className={button} disabled={!!item.path_motion||items.length<2} onClick={()=>{const target=items.find(i=>i.id!==item.id);if(target)void save({attachment:{parent_id:target.id,node:'',start:start().toISOString(),end:new Date(start().getTime()+5*scale).toISOString(),position:{x:0,y:0,z:0},rotation:{x:0,y:0,z:0},only_during:false}})}}>Set attachment</button>:<div className="space-y-2">
+      {!a?<button className={button} disabled={!!item.path_motion||!!item.load_handling?.events.length||items.length<2} onClick={()=>{const target=items.find(i=>i.id!==item.id);if(target)void save({attachment:{parent_id:target.id,node:'',start:start().toISOString(),end:new Date(start().getTime()+5*scale).toISOString(),position:{x:0,y:0,z:0},rotation:{x:0,y:0,z:0},only_during:false}})}}>Set attachment</button>:<div className="space-y-2">
         <label>Follow object<select className={input} value={a.parent_id} onChange={e=>attach({parent_id:e.target.value,node:''})}>{items.filter(i=>i.id!==item.id).map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
         <div className="flex flex-wrap gap-2">{(['R','L'] as const).map(side=>{const node=handName(nodes,side);return node&&<button key={side} className={button} aria-pressed={a.node===node} onClick={()=>attach({node})}>Use {side==='R'?'right':'left'} hand</button>})}</div>
         <label>Attach to<select className={input} value={a.node} onChange={e=>attach({node:e.target.value})}><option value="">Object origin</option>{a.node&&!nodes.includes(a.node)&&<option value={a.node}>Missing: {a.node}</option>}{nodes.map(n=><option key={n} value={n}>{anchorLabel(n)}</option>)}</select></label>
