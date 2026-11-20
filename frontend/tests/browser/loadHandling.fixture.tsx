@@ -22,9 +22,11 @@ export async function run(){
   draw();for(let i=0;i<80&&!loadDates.has('deck');i++)await wait()
   const e=captureLoadEvent(items[0],'crane','',dates.current,true);items[0].load_handling!.events.push(e);draw();await wait();near(deck.getWorldPosition(new T.Vector3()).x,3)
   carrier.position.x=5;await wait();near(deck.getWorldPosition(new T.Vector3()).x,8)
+  carrier.add(new T.Mesh(new T.BoxGeometry(.2,.2,.2).translate(0,3,0),new T.MeshStandardMaterial()))
   const visibleSlings=()=>{let count=0;world.parent?.traverse(n=>{const mesh=n as T.Mesh;if(mesh.isMesh&&mesh.visible&&(mesh.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')count++});return count}
   if(visibleSlings()!==4)throw Error('Four sling legs must follow the hook')
   const slingBottom=()=>{let found:T.Mesh|undefined;world.parent?.traverse(n=>{const mesh=n as T.Mesh;if(!found&&mesh.isMesh&&mesh.visible&&(mesh.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')found=mesh});return found!.localToWorld(new T.Vector3(0,-.5,0))}
+  await wait();let sling:T.Mesh|undefined;world.parent?.traverse(n=>{const m=n as T.Mesh;if(!sling&&m.isMesh&&(m.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')sling=m});near(sling!.localToWorld(new T.Vector3(0,.5,0)).y,7)
   tray.position.z=2;await wait();near(slingBottom().z,2)
   tray.position.z=-1;await wait();near(slingBottom().z,-1)
   tray.position.z=0;await wait()

@@ -2,7 +2,7 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {build} from 'esbuild'
 const {outputFiles}=await build({stdin:{contents:"export * from './src/modules/fourD/loadHandling';export * as T from 'three'",resolveDir:process.cwd()},bundle:true,write:false,format:'esm'})
-const {T,liftingPointWorld,loadRoots,loadDates,captureLoadEvent,loadEventAt,loadEventWorld,validateLoadEvents}=await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'))
+const {T,slingAnchorWorld,liftingPointWorld,loadRoots,loadDates,captureLoadEvent,loadEventAt,loadEventWorld,validateLoadEvents}=await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'))
 const date=n=>new Date(1800000000000+n*1000),near=(a,b)=>a.elements.forEach((v,i)=>assert.ok(Math.abs(v-b.elements[i])<1e-6))
 test('truck to hook transfer preserves world pose; release stays fixed after hook moves and reverse seek restores attachment',()=>{
  const scene=new T.Group(),truck=new T.Group(),hook=new T.Group(),deck=new T.Group();scene.add(truck,hook,deck)
@@ -42,3 +42,12 @@ test('capture rejects stale viewport, self-parent and missing anchors; duplicate
  assert.deepEqual(liftingPointWorld(root,[1,2,3]).toArray(),[4,6,8]);
  })
 
+
+test('sling uses offset hook geometry without moving the saved attachment frame',()=>{
+ const crane=new T.Group(),hook=new T.Mesh(new T.BoxGeometry(1,1,1).translate(0,20,0));crane.add(hook);crane.position.set(3,4,5);crane.scale.setScalar(2);
+ assert.deepEqual(slingAnchorWorld(hook).toArray(),[3,44,5]);
+ const event={parent_id:'crane',matrix:new T.Matrix4().toArray()};const before=loadEventWorld(event,hook);
+ slingAnchorWorld(hook);near(loadEventWorld(event,hook),before);
+ hook.position.y=5;assert.deepEqual(slingAnchorWorld(hook).toArray(),[3,54,5]);hook.position.y=0;assert.deepEqual(slingAnchorWorld(hook).toArray(),[3,44,5]);
+ const marker=new T.Group();marker.position.y=2;crane.add(marker);assert.deepEqual(slingAnchorWorld(marker).toArray(),[3,8,5]);
+})

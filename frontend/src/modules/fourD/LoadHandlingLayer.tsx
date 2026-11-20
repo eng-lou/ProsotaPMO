@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import * as T from 'three'
 import type { SiteItem } from './siteScene'
 import { attachmentNode } from './workerActions'
-import { loadRoots,loadDates,loadEventAt,loadEventWorld,liftingPointWorld } from './loadHandling'
+import { loadRoots,loadDates,loadEventAt,loadEventWorld,liftingPointWorld,slingAnchorWorld } from './loadHandling'
 
 export function LoadHandlingLayer({items,roots,dateRef}:{items:SiteItem[];roots:MutableRefObject<Map<string,T.Group>>;dateRef:MutableRefObject<Date|null>}){
   const rig=useMemo(()=>new T.Group(),[])
@@ -36,7 +36,7 @@ export function LoadHandlingLayer({items,roots,dateRef}:{items:SiteItem[];roots:
         const local=object.parent.matrixWorld.clone().invert().multiply(world)
         local.decompose(object.position,object.quaternion,object.scale);object.updateWorldMatrix(true,true);object.userData.loadHandlingActive=true
         if(event.slings&&anchor){
-          rig.updateWorldMatrix(true,false);const inverse=rig.matrixWorld.clone().invert(),top=anchor.getWorldPosition(new T.Vector3()).applyMatrix4(inverse)
+          rig.updateWorldMatrix(true,false);const inverse=rig.matrixWorld.clone().invert(),top=slingAnchorWorld(anchor).applyMatrix4(inverse)
           for(const [index,point] of (item.load_handling?.lifting_points||[]).entries()){
             const endpoint=liftingPointWorld(object,point,item.load_handling?.lifting_nodes?.[index]);if(!endpoint)continue
             const bottom=endpoint.applyMatrix4(inverse),length=top.distanceTo(bottom)

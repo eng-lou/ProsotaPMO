@@ -52,3 +52,24 @@ export function liftingPointWorld(root:T.Object3D,point:[number,number,number],n
   if(node){const anchor=attachmentNode(root,node);return anchor?anchor.getWorldPosition(new T.Vector3()):null}
   return root.localToWorld(new T.Vector3(...point))
 }
+
+/** Imported mesh origins can be at ground level despite the hook geometry being aloft.
+ * Use the selected part's visible bounds for the sling only; retain the original
+ * attachment frame so saved load transfers do not jump when this fix is loaded.
+ * Empty connection markers and bones retain their explicit origins.
+ */
+export function slingAnchorWorld(anchor:T.Object3D){
+  anchor.updateWorldMatrix(true,true)
+  if(!(anchor as T.Bone).isBone){
+    const bounds=new T.Box3()
+    anchor.traverse(n=>{
+      const mesh=n as T.Mesh
+      if(!mesh.isMesh)return
+      for(let p:T.Object3D|null=n;p;p=p.parent)if(!p.visible)return
+      if(!mesh.geometry.boundingBox)mesh.geometry.computeBoundingBox()
+      if(mesh.geometry.boundingBox)bounds.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld))
+    })
+    if(!bounds.isEmpty())return bounds.getCenter(new T.Vector3())
+  }
+  return anchor.getWorldPosition(new T.Vector3())
+}
