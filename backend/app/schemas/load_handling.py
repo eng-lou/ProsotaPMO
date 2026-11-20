@@ -11,11 +11,15 @@ class LoadEvent(BaseModel):
     node: str = Field(default='', max_length=256)
     matrix: list[float] = Field(min_length=16, max_length=16)
     slings: bool = False
+    sling_offset: tuple[float, float, float] = (0,0,0)
+    sling_ring_angle: float = Field(default=0, ge=-360, le=360)
 
     @model_validator(mode='after')
     def valid_event(self):
         if datetime.fromisoformat(self.date.replace('Z', '+00:00')).tzinfo is None:
             raise ValueError('Load event time must include a timezone')
+        if any(abs(v) > 1000 for v in self.sling_offset):
+            raise ValueError('Invalid hook connection offset')
         m = self.matrix
         if any(abs(m[i]) > 1e-8 for i in (3, 7, 11)) or abs(m[15]-1) > 1e-8:
             raise ValueError('Load event requires an affine transform')

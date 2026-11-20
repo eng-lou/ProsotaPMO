@@ -199,7 +199,7 @@ export function SiteSceneLayer({ state, activities, links, profiles, dateRef, re
   return <group name="Prosota site objects">
     {items.map(item => <Item key={item.id} item={item} state={{...state,hideLightHandles:rendering,onRegister:register,...(rendering?{selected:null,selectedIds:new Set<string>()}:{})}} preview={false} activity={activities.find(a => a.id === item.activity_id)} dateRef={dateRef} links={links} profiles={profiles} activities={activities} />)}
     <SiteAttachments items={items} roots={roots} dateRef={state.pathDateRef||dateRef}/>
-    <LoadHandlingLayer items={items} roots={roots} dateRef={state.pathDateRef||dateRef}/>
+    <LoadHandlingLayer rendering={rendering} items={items} roots={roots} dateRef={state.pathDateRef||dateRef}/>
     {!rendering && state.preview && <Item key={'preview:' + state.preview.id} item={state.preview} state={state} preview dateRef={dateRef} links={links} profiles={profiles} activities={activities} />}
   </group>
 }

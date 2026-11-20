@@ -36,3 +36,6 @@ The load-transfer tools are implemented locally but are NOT yet deployed. They c
 
 ## Validation
 Original-rest geometry/material fingerprints match. All four screw groups include the upper tube, head and twelve rings; each collar group includes its handle. Actual Prosota rig evaluation checked rotation, 0.12 m screw travel, finite intermediate control poses and restoration of rest matrices. Assembled, lowered-screw, panel-packed and fully packed states were rendered in Chromium and visually inspected. This is not an automated collision certification of every combined control path.
+
+## Precise hook seating
+Expand Adjust hook connection below an existing Follow event. The timeline seeks to that event and a cyan marker shows the master ring's upper contact point. Change X/Y/Z offsets in metres along the hook connection axes and press Tab to save. Move the marker into the curved hook; rotate the ring if needed. The ring hangs 0.24 m below this point and the sling legs meet its bottom. These changes affect only the sling, not the deck's captured placement. Each attachment event retains its own settings. The marker disappears when the editor closes and is excluded from renders; the ring stays visible during that attachment and disappears on release.

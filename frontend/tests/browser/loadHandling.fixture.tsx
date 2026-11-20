@@ -23,10 +23,15 @@ export async function run(){
   const e=captureLoadEvent(items[0],'crane','',dates.current,true);items[0].load_handling!.events.push(e);draw();await wait();near(deck.getWorldPosition(new T.Vector3()).x,3)
   carrier.position.x=5;await wait();near(deck.getWorldPosition(new T.Vector3()).x,8)
   carrier.add(new T.Mesh(new T.BoxGeometry(.2,.2,.2).translate(0,3,0),new T.MeshStandardMaterial()))
-  const visibleSlings=()=>{let count=0;world.parent?.traverse(n=>{const mesh=n as T.Mesh;if(mesh.isMesh&&mesh.visible&&(mesh.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')count++});return count}
+  const visibleSlings=()=>{let count=0;world.parent?.traverse(n=>{const mesh=n as T.Mesh;if(mesh.isMesh&&mesh.geometry.type==='CylinderGeometry'&&mesh.visible&&(mesh.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')count++});return count}
   if(visibleSlings()!==4)throw Error('Four sling legs must follow the hook')
-  const slingBottom=()=>{let found:T.Mesh|undefined;world.parent?.traverse(n=>{const mesh=n as T.Mesh;if(!found&&mesh.isMesh&&mesh.visible&&(mesh.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')found=mesh});return found!.localToWorld(new T.Vector3(0,-.5,0))}
-  await wait();let sling:T.Mesh|undefined;world.parent?.traverse(n=>{const m=n as T.Mesh;if(!sling&&m.isMesh&&(m.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')sling=m});near(sling!.localToWorld(new T.Vector3(0,.5,0)).y,7)
+  const slingBottom=()=>{let found:T.Mesh|undefined;world.parent?.traverse(n=>{const mesh=n as T.Mesh;if(!found&&mesh.isMesh&&mesh.geometry.type==='CylinderGeometry'&&mesh.visible&&(mesh.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')found=mesh});return found!.localToWorld(new T.Vector3(0,-.5,0))}
+  await wait();let sling:T.Mesh|undefined;world.parent?.traverse(n=>{const m=n as T.Mesh;if(!sling&&m.isMesh&&m.geometry.type==='CylinderGeometry'&&(m.material as T.MeshStandardMaterial).color?.getHexString()==='d6a63c')sling=m});near(sling!.localToWorld(new T.Vector3(0,.5,0)).y,6.76)
+  const details=[...ui.querySelectorAll('details')].find(d=>d.querySelector('summary')?.textContent==='Adjust hook connection')!;details.open=true;await wait()
+  const offset=ui.querySelector('[aria-label="Hook offset Y"]') as HTMLInputElement;offset.focus();offset.value='-1';offset.dispatchEvent(new FocusEvent('focusout',{bubbles:true}));await wait()
+  near(items[0].load_handling!.events[0].sling_offset![1],-1);near(deck.getWorldPosition(new T.Vector3()).x,8)
+  near(sling!.localToWorld(new T.Vector3(0,.5,0)).y,5.76)
+  const ring=()=>{let found:T.Mesh|undefined;world.parent?.traverse(n=>{const m=n as T.Mesh;if(m.isMesh&&m.geometry.type==='TorusGeometry')found=m});return found!};if(!ring().visible)throw Error('Master ring missing')
   tray.position.z=2;await wait();near(slingBottom().z,2)
   tray.position.z=-1;await wait();near(slingBottom().z,-1)
   tray.position.z=0;await wait()
@@ -35,7 +40,7 @@ export async function run(){
   const release=[...ui.querySelectorAll('button')].find(b=>b.textContent==='Release here')!;release.click();await wait()
   if(items[0].load_handling!.events.length!==2)throw Error('Release button did not save')
   carrier.position.x=20;await wait();near(deck.getWorldPosition(new T.Vector3()).x,8)
-  if(visibleSlings()!==0)throw Error('Released slings must disappear')
+  if(visibleSlings()!==0||ring().visible)throw Error('Released slings and ring must disappear')
   dates.current=new Date(e.date);await wait();near(deck.getWorldPosition(new T.Vector3()).x,23)
   dates.current=new Date(Date.parse(e.date)-1000);await wait();near(deck.getWorldPosition(new T.Vector3()).x,3)
   items[0].load_handling!.events=[];draw();await wait();near(deck.position.x,3)

@@ -5,7 +5,7 @@ import { attachmentNode } from './workerActions'
 export interface LoadEvent {
   id:string; date:string; parent_id:string|null; node:string
   // Metre-based anchor-relative pose for attachment; world pose for release.
-  matrix:number[]; slings:boolean
+  matrix:number[]; slings:boolean; sling_offset?:[number,number,number]; sling_ring_angle?:number
 }
 export interface LoadHandling { events:LoadEvent[]; lifting_points:[number,number,number][]; lifting_nodes?:string[] }
 export const loadRoots=new Map<string,T.Object3D>()
@@ -72,4 +72,14 @@ export function slingAnchorWorld(anchor:T.Object3D){
     if(!bounds.isEmpty())return bounds.getCenter(new T.Vector3())
   }
   return anchor.getWorldPosition(new T.Vector3())
+}
+
+// Editor-only marker selection; never persisted in project data.
+export const slingEditors=new Set<string>()
+export function slingConnection(anchor:T.Object3D,event:LoadEvent){
+  const frame=anchorFrame(anchor),rotation=new T.Quaternion().setFromRotationMatrix(frame)
+  const seat=slingAnchorWorld(anchor).add(new T.Vector3(...(event.sling_offset||[0,0,0])).applyQuaternion(rotation))
+  rotation.multiply(new T.Quaternion().setFromAxisAngle(new T.Vector3(0,1,0),(event.sling_ring_angle||0)*Math.PI/180))
+  const up=new T.Vector3(0,1,0).applyQuaternion(rotation)
+  return {seat,center:seat.clone().addScaledVector(up,-.12),bottom:seat.clone().addScaledVector(up,-.24),rotation}
 }

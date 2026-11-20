@@ -15,6 +15,11 @@ class LoadTests(unittest.TestCase):
         self.assertEqual(LoadHandling.model_validate_json(value.model_dump_json()),value)
         for events in ([event(),event()],[{**event(), 'matrix':[0]*16}],[{**event(),'date':'2026-11-20T12:00:00'}]):
             with self.assertRaises(ValidationError): LoadHandling(events=events)
+    def test_hook_connection(self):
+        value=LoadHandling(events=[{**event(), 'sling_offset':(0,-1,0), 'sling_ring_angle':90}])
+        self.assertEqual(LoadHandling.model_validate_json(value.model_dump_json()),value)
+        for patch in ({'sling_offset':(0,float('nan'),0)},{'sling_offset':(0,1001,0)},{'sling_ring_angle':361}):
+            with self.assertRaises(ValidationError): LoadHandling(events=[{**event(),**patch}])
     def test_named_lifting_points(self):
         value=LoadHandling(lifting_points=[(0,0,0)],lifting_nodes=['LiftEye_1'])
         self.assertEqual(LoadHandling.model_validate_json(value.model_dump_json()).lifting_nodes,['LiftEye_1'])

@@ -2,7 +2,7 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {build} from 'esbuild'
 const {outputFiles}=await build({stdin:{contents:"export * from './src/modules/fourD/loadHandling';export * as T from 'three'",resolveDir:process.cwd()},bundle:true,write:false,format:'esm'})
-const {T,slingAnchorWorld,liftingPointWorld,loadRoots,loadDates,captureLoadEvent,loadEventAt,loadEventWorld,validateLoadEvents}=await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'))
+const {T,slingConnection,slingAnchorWorld,liftingPointWorld,loadRoots,loadDates,captureLoadEvent,loadEventAt,loadEventWorld,validateLoadEvents}=await import('data:text/javascript;base64,'+Buffer.from(outputFiles[0].text).toString('base64'))
 const date=n=>new Date(1800000000000+n*1000),near=(a,b)=>a.elements.forEach((v,i)=>assert.ok(Math.abs(v-b.elements[i])<1e-6))
 test('truck to hook transfer preserves world pose; release stays fixed after hook moves and reverse seek restores attachment',()=>{
  const scene=new T.Group(),truck=new T.Group(),hook=new T.Group(),deck=new T.Group();scene.add(truck,hook,deck)
@@ -50,4 +50,11 @@ test('sling uses offset hook geometry without moving the saved attachment frame'
  slingAnchorWorld(hook);near(loadEventWorld(event,hook),before);
  hook.position.y=5;assert.deepEqual(slingAnchorWorld(hook).toArray(),[3,54,5]);hook.position.y=0;assert.deepEqual(slingAnchorWorld(hook).toArray(),[3,44,5]);
  const marker=new T.Group();marker.position.y=2;crane.add(marker);assert.deepEqual(slingAnchorWorld(marker).toArray(),[3,8,5]);
+})
+
+test('hook seat offset uses metres and follows rotated scaled anchors without changing load pose',()=>{
+ const hook=new T.Group();hook.position.set(5,6,7);hook.rotation.z=Math.PI/2;hook.scale.setScalar(.01);
+ const event={parent_id:'crane',matrix:new T.Matrix4().toArray(),sling_offset:[0,-1,0],sling_ring_angle:90};
+ const before=loadEventWorld(event,hook);const c=slingConnection(hook,JSON.parse(JSON.stringify(event)));
+ assert.ok(c.seat.distanceTo(new T.Vector3(6,6,7))<1e-6);assert.ok(Math.abs(c.seat.distanceTo(c.bottom)-.24)<1e-6);near(loadEventWorld(event,hook),before);
 })
