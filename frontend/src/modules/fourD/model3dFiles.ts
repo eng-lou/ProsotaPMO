@@ -4,6 +4,7 @@ import {
   decompressIfGzip, getOrDownloadFile, maybeCompress, pruneCachedFiles, putCachedFile, storedContentType,
 } from '@/lib/fileCache'
 import type { UpAxis } from './upAxis'
+import { getModelContentVersion } from './modelContentVersion'
 
 export type Model3DKind = 'ifc' | 'mesh'
 
@@ -92,8 +93,10 @@ export async function uploadModel3DFile(
   // first reload after an import doesn't download them. A model's bytes
   // never change under the same id (a re-import replaces the row — new id —
   // see model3d_file.py's create_file), so caching by id is safe.
-  const { data: revision } = await api.get<{ version: string }>(`/api/v1/model3d-files/${res.data.id}/content-version`)
-  void putCachedFile('model', res.data.project_id, `${res.data.id}:${revision.version}`, stored)
+  // Upload is already saved. A failed optional cache seed must not report it as lost.
+  void getModelContentVersion(res.data.id).then(version =>
+    putCachedFile('model', res.data.project_id, `${res.data.id}:${version}`, stored),
+  ).catch(() => { /* Restore will verify the version and download when needed. */ })
   return res.data
 }
 
@@ -101,9 +104,9 @@ export async function uploadModel3DFile(
 export async function downloadModel3DFile(
   file: Pick<Model3DFile, 'id' | 'project_id'> & { size_bytes?: number },
 ): Promise<Blob> {
-  const { data: revision } = await api.get<{ version: string }>(`/api/v1/model3d-files/${file.id}/content-version`)
+  const version = await getModelContentVersion(file.id)
   const stored = await getOrDownloadFile(
-    'model', file.project_id, `${file.id}:${revision.version}`,
+    'model', file.project_id, `${file.id}:${version}`,
     () => downloadLargeBlob(`/api/v1/model3d-files/${file.id}/download`), file.size_bytes,
   )
   return decompressIfGzip(stored)
@@ -112,8 +115,8 @@ export async function downloadModel3DFile(
 export const pruneModel3DFileCache = async (projectId: string, keepFileIds: string[]) => {
   try {
     const keys = await Promise.all(keepFileIds.map(async id => {
-      const { data } = await api.get<{ version: string }>(`/api/v1/model3d-files/${id}/content-version`)
-      return `${id}:${data.version}`
+      const version = await getModelContentVersion(id)
+      return `${id}:${version}`
     }))
     await pruneCachedFiles('model', projectId, keys)
   } catch { /* Keep the cache when a version cannot be checked. */ }
