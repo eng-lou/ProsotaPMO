@@ -56,10 +56,12 @@ function shortModelName(name: string): string {
 // only a person can settle them.
 export function RealisticMaterialsPanel({
   entries, mapping, onMappingChange, analysing, entryModels, onSelectEntry, glassTransmission, onGlassTransmissionChange,
-  targetsByKey = null, customEditor, loadErrors = [], onRetry, wearGuides,
+  syncStatus, onSyncRetry, targetsByKey = null, customEditor, loadErrors = [], onRetry, wearGuides,
 }: {
   // Materials used by the current viewport selection (null = nothing
   // selected). When set, the list narrows to just those (2026-10-02).
+  syncStatus?: string
+  onSyncRetry?: () => void
   customEditor?: React.ReactNode
   wearGuides?: Map<string,WearGuide>
   targetsByKey?: Map<string, MaterialTarget[]> | null
@@ -95,6 +97,10 @@ export function RealisticMaterialsPanel({
   return (
     <div className="flex flex-col h-full min-h-0 overflow-y-auto">
       <div className="px-3 py-2"><ToolVisualGuide topic="materials"/></div>
+      {syncStatus && <div role="status" className="px-3 py-2 text-xs">
+        {syncStatus}
+        {(syncStatus.includes('not synced') || syncStatus.includes('conflict')) && <button className="ml-2 underline" onClick={onSyncRetry}>Retry sync</button>}
+      </div>}
       <div className="px-3 py-2 border-b border-gray-100 dark:border-prosota-line space-y-2 shrink-0">
         <label className="flex items-start gap-2 text-xs text-gray-700 dark:text-prosota-muted cursor-pointer">
           <input

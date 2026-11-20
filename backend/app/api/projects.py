@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import uuid
+import json
+
+from pydantic import BaseModel, Field
+from app.services.project_materials import apply_material_changes
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import delete, func, select
@@ -150,3 +154,37 @@ async def delete_project(
     await db.execute(delete(Project).where(Project.id == project_id))
     await db.commit()
     return Response(status_code=204)
+
+
+class MaterialChange(BaseModel):
+    before: str | None = None
+    after: str | None = None
+
+
+class MaterialEdit(BaseModel):
+    seed: dict[str, str] | None = Field(default=None, max_length=50000)
+    changes: dict[str, MaterialChange] = Field(default_factory=dict, max_length=50000)
+
+
+@router.get("/{project_id}/materials")
+async def get_materials(project_id: uuid.UUID, db: AsyncSession = Depends(get_db), current_user=Depends(get_db_user)):
+    project = await get_project(project_id, db, current_user)
+    return {"mapping": project.material_mapping}
+
+
+@router.patch("/{project_id}/materials")
+async def edit_materials(project_id: uuid.UUID, data: MaterialEdit, db: AsyncSession = Depends(get_db), current_user=Depends(get_db_user)):
+    if len(json.dumps(data.model_dump()).encode()) > 2 * 1024 * 1024:
+        raise HTTPException(413, "Material assignments exceed the project limit")
+    # Lock the owner row so two browsers cannot both pass the comparison then overwrite each other.
+    project = (await db.execute(select(Project).where(Project.id == project_id).with_for_update())).scalar_one_or_none()
+    if not project or project.org_id != current_user.org_id or project.created_by != current_user.id:
+        raise HTTPException(404, "Project not found")
+    try:
+        mapping = apply_material_changes(project.material_mapping, data.seed,
+            {key: change.model_dump() for key, change in data.changes.items()})
+    except ValueError:
+        raise HTTPException(409, "Materials changed in another browser. Your local copy has been retained.")
+    project.material_mapping = mapping
+    await db.commit()
+    return {"mapping": mapping}

@@ -1,3 +1,4 @@
+import { useProjectMaterials } from './useProjectMaterials'
 import { createFrameNotifier } from './frameNotifier'
 import { replaceEqualDeep } from '@tanstack/react-query'
 import { loadRenderCaptureSettings } from './renderCaptureSettings'
@@ -180,8 +181,8 @@ import { ReloadIfcDialog } from './ReloadIfcDialog'
 import { defaultSourceUpAxis, type UpAxis } from './upAxis'
 import { loadViewerSettings, saveViewerSettings, type ViewerSettings } from './viewerSettings'
 import {
-  entryModelsByKey, expressIdsForKey, extractMeshRealisticInfo, keysForExpressId, loadRealisticMapping, mergeRealisticEntries,
-  saveRealisticMapping, type RealisticEntryModel, type RealisticMaterialEntry, type RealisticMaterialMap,
+  entryModelsByKey, expressIdsForKey, extractMeshRealisticInfo, keysForExpressId, mergeRealisticEntries,
+  type RealisticEntryModel, type RealisticMaterialEntry,
   type RealisticModelInfo,
 } from './realisticMaterials'
 import { loadIfcUnitDisplay, saveIfcUnitDisplay, type IfcUnitDisplay } from './ifcUnitDisplay'
@@ -5974,17 +5975,11 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // extracted once, the first time the mode is on while it's loaded, and
   // cached on its root object (userData.realisticMaterialInfo) where the
   // viewports read it; realisticInfoVersion tells them it has landed. The
-  // manual material -> class mapping is per project, saved in this
-  // browser's localStorage like the rest of the 3D view settings.
-  const [realisticMapping, setRealisticMappingState] = useState<RealisticMaterialMap>({})
+  // Manual finishes sync with the project; the browser cache is retained for recovery.
+  const { mapping: realisticMapping, setMapping: setRealisticMapping, status: materialSyncStatus, retry: retryMaterialSync } = useProjectMaterials(selectedProject?.id)
   const wearGuides=useMemo(()=>makeWearGuides(paths,zones,settings.upAxis),[paths,zones,settings.upAxis])
   const renderMaterialMapping=useMemo(()=>Object.values(realisticMapping).some(v=>typeof v==='string' && (v.includes('"path:') || v.includes('"zone:')))
     ? {...realisticMapping,[WEAR_GUIDES]:wearGuides} : realisticMapping,[realisticMapping,wearGuides])
-  useEffect(() => { setRealisticMappingState(loadRealisticMapping(selectedProject?.id)) }, [selectedProject?.id])
-  const setRealisticMapping = (next: RealisticMaterialMap) => {
-    setRealisticMappingState(next)
-    saveRealisticMapping(selectedProject?.id, next)
-  }
   const [realisticInfoVersion, setRealisticInfoVersion] = useState(0)
   const [realisticEntries, setRealisticEntries] = useState<RealisticMaterialEntry[]>([])
   const [realisticEntryModels, setRealisticEntryModels] = useState<Record<string, RealisticEntryModel[]>>({})
@@ -7367,6 +7362,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleRealisticPanelDock, onClose: () => setRealisticPanelDismissed(true),
       content: (
         <RealisticMaterialsPanel
+          syncStatus={materialSyncStatus} onSyncRetry={retryMaterialSync}
           wearGuides={wearGuides}
           customEditor={<div className="py-3 space-y-2" data-testid="custom-material-editor">
             <div className="px-3 text-xs font-semibold">Custom material & presets</div>

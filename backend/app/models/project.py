@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from sqlalchemy import ForeignKey, Integer, Numeric, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin
@@ -52,6 +52,9 @@ class Project(Base, TimestampMixin):
     # different shape of input than this ratio-based switch, not yet wired
     # as a per-element default.
     eac_method: Mapped[str] = mapped_column(String(20), nullable=False, default="cpi", server_default="cpi")
+
+    # Manual realistic finishes travel with the project; null denotes an unmigrated project.
+    material_mapping: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     organisation: Mapped[Organisation] = relationship(back_populates="projects")
     periods: Mapped[list[Period]] = relationship(back_populates="project")
