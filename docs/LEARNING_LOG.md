@@ -9215,3 +9215,11 @@ Publication status: git staging could not create the worktree index lock. Elevat
 - Schedule-linked lift heights, elapsed climb durations, manual timing overrides and geometry-top capture. Holds and reverse scrubbing are stateless.
 - Persist typed climb data and reject simultaneous route/attachment ownership. Reject invalid or overlapping climb windows.
 - Keep detailed mechanical cycles out of scope for assets that do not contain those moving parts.
+
+## 2026-11-20 — TBM and piling work sequences
+
+- Extend schedule-driven whole-asset movement with TBM chainages on an open 3D alignment and piling travel/work locations. Preserve original GLB geometry, placement offsets and internal scale.
+- Synchronise selected excavation volumes with work progress. Piling uses a calibrated existing equipment slide control, then reveals a separate completed pile. Restore geometry, clipping and rig keys on reverse seek/removal.
+- Use explicit Save for draft sequence editing. Validate dates, overlap, chainage continuity, tool travel and exclusive ownership of machine motion and visual targets.
+- Keep this first version visual: drive volumes need splitting at sharp bends; piling uses straight travel and fixed presentation phases. No terrain boolean, tunnel lining, auger rotation or detailed installation cycle is implied.
+- Validation: 13 frontend and 13 backend tests; production build; isolated Chromium scene/rig integration. Preserve unrelated catalogue edits in the working tree and publish only the reviewed feature files/patch.

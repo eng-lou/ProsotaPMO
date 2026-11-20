@@ -1,3 +1,5 @@
+import { sampleWork, applyWorkPose } from './workSequence'
+import { workVisual, createWorkClip } from './workSequenceVisual'
 import { climbHeight } from './climbingFormwork'
 import { LoadHandlingLayer } from "./LoadHandlingLayer"
 import { SiteLight } from './SiteLight'
@@ -105,6 +107,8 @@ function FootprintGeometry({item}:{item:SiteItem}) {
 function Item({ item, state, preview, activity, dateRef, links, activities, profiles, instance = false, instanceIndex }: { instanceIndex?:number; instance?: boolean; item: SiteItem; state: SiteLayerState; preview: boolean; activity?: Activity; dateRef: React.MutableRefObject<Date | null>; links: ModelElementLink[]; activities: Activity[]; profiles: AnimationProfile[] }) {
   const motionRoot = useRef<THREE.Group>(null)
   const motionTime = useRef<number | null>(null)
+  const workPath=state.paths?.find(p=>p.id===item.work_sequence?.path_id)
+  const workCurve=useMemo(()=>workPath?buildPathCurve(workPath.points,workPath.closed,workPath.curve_mode):null,[workPath])
   const sourcePath = state.paths?.find(p => p.id === item.path_motion?.path_id)
   const curve = useMemo(() => sourcePath ? buildPathCurve(sourcePath.points, sourcePath.closed, sourcePath.curve_mode) : null, [sourcePath])
   const pathActivity = activities.find(a => a.id === item.path_motion?.activity_id)
@@ -119,7 +123,13 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     if (cue === false) { parent.visible = false; return }
     if (selectable.current?.userData.simulatorOwnsPose) { parent.visible = true; return }
     parent.visible = preview || instance || !item.path_motion?.activity_id || (!!fittedMotion && sitePathActivityVisible(fittedMotion, dateRef.current))
-    if (!preview && !instance && curve && fittedMotion) {
+    if(selectable.current)delete selectable.current.userData.workSequenceControl
+    if(!preview&&!instance&&item.work_sequence){
+      try{const config=item.work_sequence,origin={x:item.position.x+config.offset.x,y:item.position.y+config.offset.y,z:item.position.z+config.offset.z};
+        const time=(state.pathDateRef||dateRef).current?.getTime()??NaN,sample=sampleWork(config,activities,time,origin,workCurve);applyWorkPose(parent,sample,origin);motionTime.current=null;
+        if(selectable.current&&config.kind==='piling'&&config.tool_control)selectable.current.userData.workSequenceControl={time,control:config.tool_control,value:sample.tool}
+      }catch{parent.position.set(0,0,0);parent.quaternion.identity();parent.scale.setScalar(1)}
+    } else if (!preview && !instance && curve && fittedMotion) {
       const pathDate = (item.path_motion?.activity_id ? dateRef : state.pathDateRef || dateRef).current
       const seconds = pathDate ? (pathDate.getTime() - Date.parse(fittedMotion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
       motionTime.current = applySitePath(parent, curve, fittedMotion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
@@ -150,6 +160,15 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const animationBase = useMemo(() => new THREE.Vector3(), [])
   useSiteAnimation(root, animationBase, resolved, links.some(l => l.source_kind === 'site' && l.element_ref === item.id), dateRef, preview,
     () => !item.activity_id || presentAt(activity, dateRef.current), instance, equipmentWindow)
+  const workVisualRoot=useRef<THREE.Group>(null)
+  const workClip=useMemo(()=>createWorkClip(),[])
+  useEffect(()=>()=>workClip.dispose(),[workClip])
+  const visualOwner=state.items.find(i=>i.work_sequence?.steps.some(s=>s.excavation_id===item.id||s.pile_id===item.id))
+  const visualPath=state.paths?.find(p=>p.id===visualOwner?.work_sequence?.path_id)
+  const visualCurve=useMemo(()=>visualPath?buildPathCurve(visualPath.points,visualPath.closed,visualPath.curve_mode):null,[visualPath])
+  useFrame(()=>{const group=workVisualRoot.current;if(!group)return;group.visible=true;
+    try{if(!preview&&!instance&&visualOwner?.work_sequence){const v=workVisual(visualOwner.work_sequence,activities,item.id,(state.pathDateRef||dateRef).current?.getTime()??NaN,visualCurve);group.visible=v.visible;workClip.apply(group,v.plane)}else workClip.apply(group,null)}catch{workClip.apply(group,null)}
+  })
   const rotation = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), item.up_axis === 'z' ? Math.PI / 2 : 0)
     .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), item.yaw * Math.PI / 180)), [item.up_axis, item.yaw])
   const colour = !preview && state.selected === item.id ? '#38bdf8' : item.color
@@ -165,7 +184,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     rotation={[item.rotation?.x || 0, item.rotation?.y || 0, item.rotation?.z || 0]}
     scale={[item.scale?.x ?? 1, item.scale?.y ?? 1, item.scale?.z ?? 1]}
     visible={!registered || (!state.hiddenIds?.has('site:' + item.id) && (!state.isolate || !!state.isolatedIds?.has('site:' + item.id)))}>
-    <group>
+    <group ref={workVisualRoot}>
     <group ref={root} userData={{ isSitePreview: preview }} visible={preview || !item.activity_id || presentAt(activity, dateRef.current)}>
     <group key={item.kind==='geographic'||item.kind==='asset'?item.id:item.color + ':' + state.selected + ':' + preview}>
     {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={mapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface)=>{if(state.boxSelecting)return;state.onSelect(item.id);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :

@@ -20,6 +20,7 @@ export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError, vi
   const bindings = useRef<{ rig: EquipmentRig; runtime: ReturnType<typeof bindEquipment>; root:THREE.Object3D; bucket?:THREE.Object3D; soil?:ReturnType<typeof createSoilPlayback> }[]>([])
   const last = useRef<{ time: number | null; preview: typeof preview } | null>(null)
   const lastVisual = useRef<typeof visual>(undefined)
+  const sequenceDriven = useRef(new WeakSet<THREE.Object3D>())
   const { invalidate, scene } = useThree()
   useEffect(() => {
     const next: typeof bindings.current = []
@@ -63,9 +64,12 @@ export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError, vi
     lastVisual.current = visual
     last.current = { time, preview }
     for (const { rig, runtime, root, bucket, soil } of bindings.current) {
-      if(changed){
+      const sequence=root.userData.workSequenceControl
+      const override=sequence&&sequence.time===time&&rig.definition.controls.some(c=>c.id===sequence.control)?{[sequence.control]:sequence.value}:null
+      if(changed||override||sequenceDriven.current.has(root)){
+        if(override)sequenceDriven.current.add(root);else sequenceDriven.current.delete(root)
         if (visual?.model === rig.model_ref) runtime.evaluate(null, Object.fromEntries(rig.definition.controls.map(c=>[c.id,c.rest])), visual.joint && visual.mode==='pose' ? {[visual.joint]:visual.amount} : {})
-        else runtime.evaluate(time, preview?.model === rig.model_ref && preview.time === time ? preview.values : {})
+        else runtime.evaluate(time, preview?.model === rig.model_ref && preview.time === time ? preview.values : override||{})
       }
       if(soil&&bucket){
         let visible=true;for(let n:THREE.Object3D|null=root;n;n=n.parent)if(!n.visible)visible=false

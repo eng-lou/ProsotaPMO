@@ -8,7 +8,7 @@ import {TimelinePointInput,type TimelineFormat} from './TimelinePointInput'
 const cls='w-full rounded border p-1 dark:bg-prosota-panel2'
 export function ClimbingFormworkPanel({item,activities,axis,format,onSeek,onApply,selectedSources,disabled}:{item:SiteItem;activities:Activity[];axis:'y'|'z';format:TimelineFormat;onSeek:(d:Date)=>void;onApply:(p:Partial<SiteItem>)=>Promise<void>;selectedSources:()=>ShapeSource[];disabled:boolean}){
  const [selected,setSelected]=useState<string[]>([]),[query,setQuery]=useState(''),[rise,setRise]=useState(3),[hours,setHours]=useState(24),[error,setError]=useState(''),[busy,setBusy]=useState(false)
- const config=item.climbing_formwork,blocked=!!item.path_motion||!!item.attachment||!!item.load_handling?.events.length
+ const config=item.climbing_formwork,blocked=!!item.work_sequence||!!item.path_motion||!!item.attachment||!!item.load_handling?.events.length
  let warning='';try{if(config)climbWindows(config,activities)}catch(e){warning=(e as Error).message}
  async function save(value:ClimbingFormwork|null){setBusy(true);setError('');try{if(value)climbWindows(value,activities);await onApply({climbing_formwork:value})}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
  const change=(id:string,patch:Partial<ClimbLift>)=>{if(config)void save({...config,lifts:config.lifts.map(l=>l.id===id?{...l,...patch}:l)})}

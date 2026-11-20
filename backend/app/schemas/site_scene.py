@@ -1,3 +1,4 @@
+from app.schemas.work_sequence import WorkSequence
 from app.schemas.climbing_formwork import ClimbingFormwork
 from app.schemas.load_handling import LoadHandling
 from typing import Literal
@@ -165,6 +166,7 @@ class SiteItem(BaseModel):
     attachment: SiteAttachment | None = None
     load_handling: LoadHandling | None = None
     climbing_formwork: ClimbingFormwork | None = None
+    work_sequence: WorkSequence | None = None
     rig_disabled: bool = False
     instance_overrides: dict[int, FeatureReplacement] = Field(default_factory=dict, max_length=200)
     generator_version: Literal[1] = 1
@@ -211,6 +213,12 @@ class SiteItem(BaseModel):
             ordered=sorted(self.motion_actions,key=lambda a:datetime.fromisoformat(a.start.replace('Z','+00:00')))
             if any(datetime.fromisoformat(b.start.replace('Z','+00:00')) < datetime.fromisoformat(a.end.replace('Z','+00:00')) for a,b in zip(ordered,ordered[1:])):
                 raise ValueError('Actions for one actor cannot overlap')
+        if self.work_sequence and (self.kind != "asset" or self.asset_part):
+            raise ValueError("Work sequences require a complete imported machine")
+        if self.work_sequence and (self.climbing_formwork or self.path_motion or self.attachment or (self.load_handling and self.load_handling.events)):
+            raise ValueError("Work sequences cannot share routes, climbing or attachments")
+        if self.work_sequence and any(self.id in (step.excavation_id,step.pile_id) for step in self.work_sequence.steps):
+            raise ValueError("A machine cannot be its own work target")
         if self.climbing_formwork and (self.path_motion or self.attachment or (self.load_handling and self.load_handling.events)):
             raise ValueError('Climbing formwork cannot share routes or attachments')
         if self.load_handling and self.load_handling.events and (self.attachment or self.path_motion):
@@ -248,6 +256,18 @@ class SceneEdit(BaseModel):
         if len({i.id for i in self.items}) != len(self.items):
             raise ValueError("Duplicate site object IDs")
         by_id={i.id:i for i in self.items}
+        claimed=set()
+        for machine in self.items:
+            if not machine.work_sequence: continue
+            for step in machine.work_sequence.steps:
+                for target_id in (step.excavation_id,step.pile_id):
+                    if not target_id: continue
+                    target=by_id.get(target_id)
+                    if not target or target_id in claimed:
+                        raise ValueError('Work targets must exist and belong to one step')
+                    if target.work_sequence or target.climbing_formwork or target.path_motion or target.attachment or (target.load_handling and target.load_handling.events):
+                        raise ValueError('Work targets must be stationary objects')
+                    claimed.add(target_id)
         done=set()
         def visit(item_id, chain):
             if item_id in chain:
