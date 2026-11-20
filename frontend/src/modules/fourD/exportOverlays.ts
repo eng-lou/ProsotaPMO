@@ -1245,8 +1245,11 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   // can be moved to the top left corner") — was bottom-right, sharing that
   // corner uneasily with the Animation Timeline's own edge; top-left is
   // clear of both the legend (bottom-left) and the Gantt/Table bands.
+  const dateRowStrip = opts.includeTimelineStrip
+    ? opts.timelineStrips.find(({ strip }) => strip.visible && strip.viewport_slot === null)?.strip : undefined
+  const dateRowY = mv.y + Math.max(padding, ((dateRowStrip?.position_y_pct ?? 0) / 100) * mv.height)
   if (opts.includeDateOverlay) {
-    drawDateOverlay(ctx, mv.x + padding, mv.y + padding, opts.now, opts.scheduleStart, opts.scale)
+    drawDateOverlay(ctx, mv.x + padding, dateRowY, opts.now, opts.scheduleStart, opts.scale)
   }
   // Positions stay relative to the widget's own view rect, not the full
   // canvas (2026-07-31) — same behaviour whether or not Gantt/Table bands
@@ -1269,12 +1272,13 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
     for (const { strip, cells, yearGroups, playheadIndex } of opts.timelineStrips) {
       const rect = viewRect(strip.viewport_slot)
       if (!rect) continue
-      const xPx = rect.x + padding
-      // A full-width strip must not cover the existing top-left date card.
-      const dateClearance = strip.viewport_slot === null && opts.includeDateOverlay && opts.now
-        ? (ROW_HEIGHT * 2 + 4) * opts.scale + padding * 2 : 0
-      const yPx = rect.y + Math.max(dateClearance, (strip.position_y_pct / 100) * rect.height)
-      drawTimelineStrip(ctx, xPx, yPx, { ...strip, width_px: Math.max(1, rect.width - padding * 2) / opts.scale }, cells, yearGroups, playheadIndex, opts.scale)
+      // Date and the first main-view strip share a row; editor toolbar space
+      // is intentionally absent from exported images/video.
+      const dateWidth = strip.id === dateRowStrip?.id && opts.includeDateOverlay && opts.now
+        ? 150 * opts.scale + padding : 0
+      const xPx = rect.x + padding + dateWidth
+      const yPx = rect.y + Math.max(padding, (strip.position_y_pct / 100) * rect.height)
+      drawTimelineStrip(ctx, xPx, yPx, { ...strip, width_px: Math.max(1, rect.width - padding * 2 - dateWidth) / opts.scale }, cells, yearGroups, playheadIndex, opts.scale)
     }
   }
 }

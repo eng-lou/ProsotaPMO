@@ -7095,7 +7095,7 @@ export function Viewport3D({
         date={timelineDateRefProp.current || new Date()} views={cameraViews} cameras={cameras} onSave={onSaveMotionCamera}
         picking={pickingMotionTarget} onPick={() => setPickingMotionTarget(v => !v)} exporting={isExportingVideo}
         onClose={() => { setPickingMotionTarget(false); setShowCameraPresets(false) }} />)}
-      <div className="absolute top-2 left-2 z-10 flex flex-wrap gap-1 max-w-[calc(100%-1rem)]">
+      <div data-viewport-toolbar className="absolute top-2 left-2 z-10 flex flex-wrap gap-1 max-w-[calc(100%-1rem)]">
 
 
         <button

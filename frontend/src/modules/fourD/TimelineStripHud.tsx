@@ -69,6 +69,21 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
   const [playheadDate, setPlayheadDate] = useState<Date | null>(null)
   const [localPos, setLocalPos] = useState({ x: strip.position_x_pct, y: strip.position_y_pct })
   const isDraggingRef = useRef(false)
+  const [editorTop, setEditorTop] = useState(10)
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const toolbar = container.querySelector<HTMLElement>('[data-viewport-toolbar]')
+    const measure = () => {
+      const top = toolbar ? toolbar.getBoundingClientRect().bottom - container.getBoundingClientRect().top + 10 : 10
+      setEditorTop(Math.max(10, top))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(container)
+    if (toolbar) observer.observe(toolbar)
+    return () => observer.disconnect()
+  }, [containerRef])
 
   const domain = useMemo(() => {
     const scoped = activities.filter(a => matchingIds.has(a.id))
@@ -103,7 +118,7 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
 
     const onMove = (moveEvent: MouseEvent) => {
       const xPct = Math.min(100, Math.max(0, ((moveEvent.clientX - rect.left) / rect.width) * 100))
-      const yPct = Math.min(100, Math.max(0, ((moveEvent.clientY - rect.top) / rect.height) * 100))
+      const yPct = Math.min(100, Math.max(0, ((moveEvent.clientY - rect.top - editorTop) / Math.max(1, rect.height - editorTop - strip.height_px - 10)) * 100))
       setLocalPos({ x: xPct, y: yPct })
     }
     const onUp = (upEvent: MouseEvent) => {
@@ -111,7 +126,7 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
       document.removeEventListener('mouseup', onUp)
       isDraggingRef.current = false
       const xPct = Math.min(100, Math.max(0, ((upEvent.clientX - rect.left) / rect.width) * 100))
-      const yPct = Math.min(100, Math.max(0, ((upEvent.clientY - rect.top) / rect.height) * 100))
+      const yPct = Math.min(100, Math.max(0, ((upEvent.clientY - rect.top - editorTop) / Math.max(1, rect.height - editorTop - strip.height_px - 10)) * 100))
       onCommitPosition(strip.id, xPct, yPct)
     }
     document.addEventListener('mousemove', onMove)
@@ -130,7 +145,7 @@ export function TimelineStripHud({ strip, activities, matchingIds, timelineDateR
   return (
     <div
       className="absolute z-[5] cursor-grab active:cursor-grabbing select-none"
-      style={{ left: 10, right: 10, top: `${localPos.y}%` }}
+      style={{ left: 10, right: 10, top: `calc(${editorTop}px + (100% - ${editorTop + strip.height_px + 10}px) * ${Math.min(100, Math.max(0, localPos.y)) / 100})` }}
       onMouseDown={startDrag}
     >
       <div

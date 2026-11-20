@@ -31,3 +31,15 @@ test('timeline export fits its view regardless of authored pixel width or horizo
   assert.deepEqual(strip.r,[110,150,width-20,40])
  }
 })
+test('date card and timeline share a row without overlapping at 720p and 4K',()=>{
+ for(const scale of [2/3,2]) for(const position of [0,25]){
+  const width=1920*scale,height=700*scale,ctx=context(),rect={x:0,y:80*scale,width,height}
+  composeExportFrame(ctx,{totalWidth:width,totalHeight:height+rect.y,mainViewRect:rect,comparisonViewRects:[]},{mainCanvas:{width,height},scale,mainViewTitle:'',includeTimelineStrip:true,includeDateOverlay:true,now:new Date('2028-10-20'),scheduleStart:new Date('2026-11-16'),timelineStrips:[{strip:{id:'timeline',visible:true,viewport_slot:null,position_x_pct:0,position_y_pct:position,width_px:3000,height_px:40,background_color:'#123456',band_border_color:'#fff',text_color:'#fff',font_size:12},cells:[],yearGroups:[],playheadIndex:-1}]})
+  const strip=ctx.fills.find(f=>f.color==='#123456')
+  const card=ctx.fills.find(f=>Math.abs(f.r[2]-150*scale)<.001)
+  assert(card);assert.equal(strip.r[1],card.r[1])
+  assert(Math.abs(strip.r[0]-(card.r[0]+card.r[2]+10*scale))<.001)
+  assert(Math.abs(strip.r[0]+strip.r[2]-(width-10*scale))<.001)
+  if(position===0) assert.equal(strip.r[1],rect.y+10*scale)
+ }
+})
