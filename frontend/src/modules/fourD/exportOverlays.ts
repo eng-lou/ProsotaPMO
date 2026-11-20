@@ -532,14 +532,6 @@ export function drawCostProfileChart(
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y)
   })
   ctx.stroke()
-  ctx.fillStyle = '#2563eb'
-  buckets.forEach((_bucket, i) => {
-    const x = chartX + i * bucketWidth + bucketWidth / 2
-    const y = chartTop + chartHeight - (cumulative[i] / maxCumulative) * chartHeight
-    ctx.beginPath()
-    ctx.arc(x, y, Math.max(1.5, 3 * scale), 0, Math.PI * 2)
-    ctx.fill()
-  })
 
   // "Now" line — same dashed-amber convention as drawGanttStrip's own,
   // positioned across the *whole* bucket range (not just up to the last
