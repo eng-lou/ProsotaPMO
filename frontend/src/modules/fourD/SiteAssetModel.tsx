@@ -16,12 +16,12 @@ import * as THREE from 'three'
 import { Html, useBounds } from '@react-three/drei'
 import { applyCustomMaterial, captureMaterialChannels, hasCustomTextures } from './customMaterial'
 import type { CustomTextureSet } from './customTextures'
-import { loadSiteAsset } from './siteAssets'
+import { loadSiteAssetWithRecovery } from './siteAssetRecovery'
 import type { AssetPart } from './assetParts'
 import { applySiteTextureCutout, applySiteSurfaceOpacity, siteMaterialSlots, siteMaterialLook } from './siteAssetMaterials'
 import { disposeRealisticVariant, type RealisticMaterialMap } from './realisticMaterials'
 
-export function SiteAssetModel({ adaptiveDetail = false, captureDetail = false, id, part, preview = false, selected = false, fit = false, mapping, importedLights = true, transmission = false, onLoaded, textures, opacity, playing=true, clip=0, speed=1, motionTime, pathBound=false, actions=[], actionDateRef, daysPerSecond=1 }: { adaptiveDetail?: boolean; captureDetail?: boolean; actions?:WorkerAction[]; actionDateRef?:React.MutableRefObject<Date|null>; daysPerSecond?:number; part?: AssetPart | null; pathBound?: boolean; motionTime?: React.MutableRefObject<number|null>; playing?:boolean; clip?:number; speed?:number; textures?:CustomTextureSet; opacity?:number; id: string; preview?: boolean; selected?: boolean; fit?: boolean; mapping?: RealisticMaterialMap; importedLights?: boolean; transmission?: boolean; onLoaded?(): void }) {
+export function SiteAssetModel({ showStatus = true, adaptiveDetail = false, captureDetail = false, id, part, preview = false, selected = false, fit = false, mapping, importedLights = true, transmission = false, onLoaded, textures, opacity, playing=true, clip=0, speed=1, motionTime, pathBound=false, actions=[], actionDateRef, daysPerSecond=1 }: { showStatus?: boolean; adaptiveDetail?: boolean; captureDetail?: boolean; actions?:WorkerAction[]; actionDateRef?:React.MutableRefObject<Date|null>; daysPerSecond?:number; part?: AssetPart | null; pathBound?: boolean; motionTime?: React.MutableRefObject<number|null>; playing?:boolean; clip?:number; speed?:number; textures?:CustomTextureSet; opacity?:number; id: string; preview?: boolean; selected?: boolean; fit?: boolean; mapping?: RealisticMaterialMap; importedLights?: boolean; transmission?: boolean; onLoaded?(): void }) {
   const [object, setObject] = useState<THREE.Object3D | null>(null)
   useLayoutEffect(() => {
     if (!object || importedLights) return
@@ -30,6 +30,14 @@ export function SiteAssetModel({ adaptiveDetail = false, captureDetail = false, 
   }, [object, importedLights])
   useContextDetail(object, adaptiveDetail, selected || preview || captureDetail)
   const [error, setError] = useState('')
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    const retryAsset = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === id) setRetry(value => value + 1)
+    }
+    window.addEventListener('prosota-retry-site-asset', retryAsset)
+    return () => window.removeEventListener('prosota-retry-site-asset', retryAsset)
+  }, [id])
   const pathAnchor=useMemo(()=>object && pathBound && object.animations.length ? clipPathAnchor(object,object.animations[Math.min(clip,object.animations.length-1)]) : new THREE.Vector3(),[object,pathBound,clip])
   const invalidateBounds=useMemo(()=>object ? animatedAssetBounds(object) : ()=>{},[object])
   const mixer=useRef<THREE.AnimationMixer>(),elapsed=useRef(0),lastPoseTime=useRef<number|null>(null)
@@ -73,7 +81,7 @@ export function SiteAssetModel({ adaptiveDetail = false, captureDetail = false, 
     let active = true
     const materials: THREE.Material[] = []
     setObject(null); setError('')
-    void loadSiteAsset(id,part).then(value => {
+    void loadSiteAssetWithRecovery(id,part).then(value => {
       if (!active) return
       const slots = siteMaterialSlots(value,id)
       value.traverse(node => {
@@ -100,12 +108,20 @@ export function SiteAssetModel({ adaptiveDetail = false, captureDetail = false, 
       // SkeletonUtils clones meshes but omits their custom shadow materials.
       prepareCutoutRendering(value)
       setObject(value)
-    }).catch(reason => { if (active) setError(reason.message || 'Asset unavailable') })
+    }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Asset unavailable') })
     return () => { active = false; materials.forEach(material => { disposeRealisticVariant(material); material.dispose() }) }
-  }, [id, JSON.stringify(part), preview, selected, mapping, transmission, textures, opacity])
+  }, [id, JSON.stringify(part), preview, selected, mapping, transmission, textures, opacity, retry])
   return object ? <><group position={pathAnchor}><primitive object={object} dispose={null} /></group>{fit && <FitAsset object={object} />}</> : <group>
     <mesh position={[0, .5, 0]}><boxGeometry /><meshBasicMaterial color={error ? '#ef4444' : '#94a3b8'} wireframe /></mesh>
-    <Html center position={[0, 1.1, 0]}><span className="bg-white text-slate-800 px-2 py-1 text-xs whitespace-nowrap">{error ? 'Asset unavailable — reopen library' : 'Loading asset…'}</span></Html>
+    {showStatus && (selected || preview || fit) && <Html center position={[0, 1.1, 0]}>
+      <div className="bg-white text-slate-800 px-2 py-1 text-xs rounded shadow max-w-64" onPointerDown={event => event.stopPropagation()}>
+        <div>{error ? 'Asset could not load' : 'Loading asset…'}</div>
+        {error && <><div className="break-words mt-1">{error}</div><button className="underline mt-1" onClick={event => {
+          event.stopPropagation()
+          window.dispatchEvent(new CustomEvent('prosota-retry-site-asset', { detail: id }))
+        }}>Retry this asset and its copies</button></>}
+      </div>
+    </Html>}
   </group>
 }
 
