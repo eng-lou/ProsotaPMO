@@ -93,7 +93,6 @@ const ROW_HEIGHT = 20
 // visibly inconsistent sizes). The gap is on top of drawTruncatedText's own
 // fix below, which is the actual root cause of the size inconsistency: see
 // that function's own header.
-const COLUMN_GAP = 10
 
 // ctx.fillText(text, x, y, maxWidth) does NOT clip or wrap long text to
 // maxWidth — per the Canvas 2D spec, the browser instead *squishes* the
@@ -186,7 +185,7 @@ export function computeExportLayout(
     ? { x: tableWidth, y: 0, width: viewportWidth, height: ganttHeight }
     : null
   const tableRect: Rect | null = opts.includeActivityTable
-    ? { x: 0, y: ganttHeight, width: tableWidth, height: viewportHeight }
+    ? { x: 0, y: titleBlockWantsSpace ? ganttHeight : 0, width: tableWidth, height: titleBlockWantsSpace ? viewportHeight : totalHeight - costHeight }
     : null
 
   // Split evenly between main and the comparison column when any
@@ -283,7 +282,7 @@ export function drawGanttStrip(
   const chartWidth = Math.max(1, rect.width - labelWidth)
   const xFor = (d: Date) => chartX + Math.max(0, Math.min(1, (d.getTime() - domainStart.getTime()) / (domainEnd.getTime() - domainStart.getTime()))) * chartWidth
   ctx.fillStyle = '#102d4a'; ctx.fillRect(rect.x, rect.y, rect.width, axisHeight)
-  ctx.font = `bold ${Math.round(15 * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(15 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'
   drawTruncatedText(ctx, 'Activity', rect.x + padding, rect.y + axisHeight / 2, labelWidth - padding * 2)
   const months = Math.max(1, (domainEnd.getFullYear() - domainStart.getFullYear()) * 12 + domainEnd.getMonth() - domainStart.getMonth())
@@ -292,7 +291,7 @@ export function drawGanttStrip(
     const x = xFor(tick), nextX = xFor(addMonths(tick, step))
     ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = Math.max(1, scale)
     ctx.beginPath(); ctx.moveTo(x, rect.y); ctx.lineTo(x, rect.y + rect.height); ctx.stroke()
-    ctx.fillStyle = '#ffffff'; ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`
+    ctx.fillStyle = '#ffffff'; ctx.font = `bold ${Math.round(13 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     drawTruncatedText(ctx, tick.toLocaleDateString('en-GB', {month:'short', year:'numeric'}), x + padding / 2, rect.y + axisHeight / 2, nextX - x - padding)
   }
   rows.forEach((activity, i) => {
@@ -300,7 +299,7 @@ export function drawGanttStrip(
     ctx.fillStyle = i % 2 ? '#f1f5f9' : '#ffffff'
     ctx.fillRect(rect.x, y, labelWidth, rowHeight)
     ctx.strokeStyle = '#dbe2ea'; ctx.beginPath(); ctx.moveTo(rect.x,y + rowHeight); ctx.lineTo(rect.x + rect.width,y + rowHeight); ctx.stroke()
-    ctx.font = `600 ${Math.round(14 * scale)}px system-ui, sans-serif`; ctx.fillStyle = '#102d4a'
+    ctx.font = `600 ${Math.round(14 * scale)}px "IBM Plex Sans", system-ui, sans-serif`; ctx.fillStyle = '#102d4a'
     drawTruncatedText(ctx, activity.task_name, rect.x + padding, y + rowHeight / 2, labelWidth - 2 * padding)
     const x = xFor(new Date(activity.start!)), finish = xFor(new Date(activity.finish!))
     ctx.fillStyle = activity.is_critical ? '#ef4444' : '#1683ef'
@@ -313,73 +312,64 @@ export function drawGanttStrip(
   ctx.restore()
 }
 
-// Plain Code/Name/Start/Finish text rows, highlighting whichever
-// activity(ies) are currently active relative to `now` — a feature the
-// live ScheduleWindow.tsx doesn't have at all (selection-only highlight
-// there), genuinely new rather than a re-derivation.
+// Readable export table, using the same palette as the Gantt header.
 export function drawActivityTableStrip(
   ctx: CanvasRenderingContext2D, rect: Rect, activities: Activity[], now: Date | null, scale: number,
 ): void {
   ctx.save()
+  ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.width, rect.height); ctx.clip()
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-  ctx.strokeStyle = '#d1d5db'
-  ctx.lineWidth = Math.max(1, scale)
-  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
-
-  const padding = OVERLAY_PADDING * scale
-  const rowHeight = ROW_HEIGHT * scale
-  const maxRows = Math.max(1, Math.floor((rect.height - padding * 2) / rowHeight))
-  const rows = selectExportActivities(activities, now, maxRows)
-  const nowMs = now?.getTime()
-
-  // Column bounds are the same for every row — hoisted out of the loop
-  // below (2026-07-25 fix) rather than recomputed per row, and also used
-  // afterward to draw two visible vertical divider lines: the gap alone
-  // (COLUMN_GAP) wasn't a reliably visible break once a long name got
-  // truncated right up against its own allotted width (Maro's screenshot
-  // still showed the date running into the name at that boundary) — an
-  // actual ruled line, the same convention a real data table would use,
-  // makes the column boundary unambiguous regardless of how close any one
-  // row's text happens to sit next to it. Code/date shares kept small
-  // (2026-07-25, per Maro: "activity name text is cut off", then "the
-  // column and date... has too much space, give the extra to the activity
-  // name column") — "T-0044" and a short date never need much room, so
-  // most of the column now goes to the name, which still truncates on a
-  // genuinely long activity name but far less eagerly than before.
-  const gap = COLUMN_GAP * scale
-  const codeWidth = rect.width * 0.13
-  const dateWidth = rect.width * 0.16
-  const nameX = rect.x + padding + codeWidth + gap
-  const nameWidth = rect.width - padding * 2 - codeWidth - dateWidth - gap * 2
+  const padding = 10 * scale, gap = 8 * scale
+  const headerHeight = 40 * scale, rowHeight = 46 * scale, footerHeight = 26 * scale
+  const maxRows = Math.max(0, Math.floor((rect.height - headerHeight - footerHeight) / rowHeight))
+  const rows = maxRows ? selectExportActivities(activities, now, maxRows) : []
+  const total = activities.filter(a => a.activity_type !== 'wbs_summary' && a.start && a.finish).length
+  const codeWidth = 64 * scale, dateWidth = 92 * scale
+  const codeX = rect.x + padding
+  const nameX = codeX + codeWidth + gap
   const dateX = rect.x + rect.width - padding - dateWidth
-
-  ctx.font = `${Math.round(10 * scale)}px system-ui, sans-serif`
+  const nameWidth = Math.max(0, dateX - gap - nameX)
+  ctx.fillStyle = '#1e3048'
+  ctx.fillRect(rect.x, rect.y, rect.width, headerHeight)
+  ctx.font = `500 ${13 * scale}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'
-  rows.forEach((a, i) => {
-    const y = rect.y + padding + i * rowHeight
-    const active = nowMs !== undefined && nowMs >= new Date(a.start!).getTime() && nowMs <= new Date(a.finish!).getTime()
-    if (active) {
-      ctx.fillStyle = '#dbeafe'
-      ctx.fillRect(rect.x + 1, y, rect.width - 2, rowHeight)
-    }
-    ctx.fillStyle = a.is_critical ? '#b91c1c' : '#374151'
-    drawTruncatedText(ctx, a.code, rect.x + padding, y + rowHeight / 2, codeWidth - gap)
-    drawTruncatedText(ctx, a.task_name, nameX, y + rowHeight / 2, nameWidth)
-    ctx.fillStyle = '#6b7280'
-    drawTruncatedText(ctx, formatShortDate(new Date(a.finish!)), dateX, y + rowHeight / 2, dateWidth)
-  })
-
-  ctx.strokeStyle = '#e5e7eb'
-  ctx.lineWidth = Math.max(1, scale)
-  const dividerTop = rect.y + padding * 0.4
-  const dividerBottom = rect.y + rect.height - padding * 0.4
-  for (const dividerX of [rect.x + padding + codeWidth + gap / 2, dateX - gap / 2]) {
-    ctx.beginPath()
-    ctx.moveTo(dividerX, dividerTop)
-    ctx.lineTo(dividerX, dividerBottom)
-    ctx.stroke()
+  ctx.fillStyle = '#ffffff'
+  for (const [label, x, width] of [['Code', codeX, codeWidth], ['Activity', nameX, nameWidth], ['Finish', dateX, dateWidth]] as const) {
+    drawTruncatedText(ctx, label, x, rect.y + headerHeight / 2, width)
   }
+  const nowMs = now?.getTime()
+  rows.forEach((activity, index) => {
+    const y = rect.y + headerHeight + index * rowHeight
+    const active = nowMs !== undefined && nowMs >= new Date(activity.start!).getTime() && nowMs <= new Date(activity.finish!).getTime()
+    ctx.fillStyle = active ? '#dbeafe' : index % 2 ? '#f1f5f9' : '#ffffff'
+    ctx.fillRect(rect.x, y, rect.width, rowHeight)
+    if (active) { ctx.fillStyle = '#1683ef'; ctx.fillRect(rect.x, y, 4 * scale, rowHeight) }
+    const color = activity.is_critical ? '#b91c1c' : '#1e3048'
+    ctx.fillStyle = color
+    ctx.font = `${11.5 * scale}px "IBM Plex Sans", system-ui, sans-serif`
+    drawTruncatedText(ctx, activity.code, codeX, y + rowHeight / 2, codeWidth)
+    ctx.font = `${active ? 500 : 400} ${13 * scale}px "IBM Plex Sans", system-ui, sans-serif`
+    const words = activity.task_name.split(/\s+/)
+    let first = ''
+    while (words.length && ctx.measureText(first ? `${first} ${words[0]}` : words[0]).width <= nameWidth) {
+      first = first ? `${first} ${words.shift()}` : words.shift()!
+    }
+    if (!first && words.length) first = words.shift()!
+    const second = words.join(' ')
+    drawTruncatedText(ctx, first, nameX, y + (second ? 15 : 23) * scale, nameWidth)
+    if (second) drawTruncatedText(ctx, second, nameX, y + 32 * scale, nameWidth)
+    ctx.font = `${12 * scale}px "IBM Plex Sans", system-ui, sans-serif`
+    ctx.fillStyle = '#475569'
+    drawTruncatedText(ctx, formatShortDate(new Date(activity.finish!)), dateX, y + rowHeight / 2, dateWidth)
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = Math.max(1, scale)
+    ctx.beginPath(); ctx.moveTo(rect.x, y + rowHeight); ctx.lineTo(rect.x + rect.width, y + rowHeight); ctx.stroke()
+  })
+  ctx.fillStyle = '#475569'
+  ctx.font = `${11 * scale}px "IBM Plex Sans", system-ui, sans-serif`
+  drawTruncatedText(ctx, total ? `${rows.length} of ${total} activities � around current date` : 'No scheduled activities', codeX, rect.y + rect.height - footerHeight / 2, rect.width - padding * 2)
+  ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = Math.max(1, scale)
+  ctx.strokeRect(rect.x, rect.y, rect.width, rect.height)
   ctx.restore()
 }
 
@@ -466,7 +456,7 @@ export function drawCostProfileChart(
 
   // Legend — distinguishes the bars from the S-Curve line, since both
   // now share the chart and only differ by colour/axis.
-  ctx.font = `${Math.round(13 * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(13 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   ctx.fillStyle = '#eab308'
   ctx.fillRect(chartX, rect.y + padding + legendHeight / 2 - 4 * scale, 8 * scale, 8 * scale)
@@ -578,7 +568,7 @@ export function drawCostProfileChart(
   // width instead of a fixed calendar interval since these buckets are
   // always exactly one month apart already.
   ctx.fillStyle = '#334155'
-  ctx.font = `${Math.round(11 * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(11 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   // Wide enough for the longest real label ("Sept 2027") at this font size
   // (2026-07-25 fix — a narrower box here was truncating month labels with
   // an ellipsis, e.g. "Sept 2..."/"Oct 20...", even though there was
@@ -637,11 +627,11 @@ function drawActiveResourcesBox(ctx: CanvasRenderingContext2D, x: number, y: num
   ctx.fillStyle = '#102d4a'
   ctx.fillRect(x, y, width, titleHeight + padding)
   ctx.fillStyle = '#ffffff'
-  ctx.font = `bold ${Math.round(11 * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(11 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   drawTruncatedText(ctx, 'Active Resources', x + padding, y + padding + titleHeight / 2, width - padding * 2)
 
-  ctx.font = `${Math.round(11 * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(11 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   shown.forEach((resource, i) => {
     const rowY = y + padding + titleHeight + i * rowHeight
     const rounded = Math.round(resource.value)
@@ -683,11 +673,11 @@ export function drawAppearanceLegend(ctx: CanvasRenderingContext2D, x: number, y
   ctx.strokeRect(x, y, width, height)
 
   ctx.fillStyle = '#111827'
-  ctx.font = `bold ${Math.round(11 * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(11 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   ctx.fillText('Appearance', x + padding, y + padding + titleHeight / 2)
 
-  ctx.font = `${Math.round(10 * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(10 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   profiles.forEach((profile, i) => {
     const rowY = y + padding + titleHeight + i * rowHeight
     ctx.fillStyle = profile.config.color_from ?? profile.config.color_to ?? '#9ca3af'
@@ -718,13 +708,13 @@ export function drawDateOverlay(ctx: CanvasRenderingContext2D, x: number, y: num
 
   ctx.textBaseline = 'middle'
   ctx.fillStyle = '#111827'
-  ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(13 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.fillText(formatShortDate(now), x + padding, y + height * 0.35)
 
   if (scheduleStart) {
     const weeks = Math.max(0, Math.floor((now.getTime() - scheduleStart.getTime()) / (7 * 86_400_000)))
     ctx.fillStyle = '#6b7280'
-    ctx.font = `${Math.round(10 * scale)}px system-ui, sans-serif`
+    ctx.font = `${Math.round(10 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     ctx.fillText(`Week ${weeks}`, x + padding, y + height * 0.75)
   }
   ctx.restore()
@@ -749,7 +739,7 @@ export function drawRadialChart(
   const cy = y + labelHeight + radius
 
   ctx.save()
-  ctx.font = `bold ${Math.round(10 * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(10 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   const textWidth = ctx.measureText(chart.title).width
   const labelPaddingX = 6 * scale
   const labelWidth = textWidth + labelPaddingX * 2
@@ -795,7 +785,7 @@ export function drawRadialChart(
   } else {
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.font = `bold ${Math.round(12 * scale)}px system-ui, sans-serif`
+    ctx.font = `bold ${Math.round(12 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     ctx.fillStyle = chart.text_color
     ctx.fillText(`${Math.round(progress * 100)}%`, cx, cy)
   }
@@ -826,7 +816,7 @@ export function drawTimelineStrip(
 
   if (cells.length === 0) {
     ctx.fillStyle = strip.text_color
-    ctx.font = `${Math.round(strip.font_size * scale)}px system-ui, sans-serif`
+    ctx.font = `${Math.round(strip.font_size * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText('No scheduled activities in scope', x + width / 2, y + height / 2)
@@ -849,7 +839,7 @@ export function drawTimelineStrip(
   ctx.fillStyle = strip.text_color
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
-  ctx.font = `bold ${Math.round(strip.font_size * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(strip.font_size * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.strokeStyle = strip.band_border_color
   ctx.lineWidth = Math.max(1, scale)
   for (const g of yearGroups) {
@@ -862,7 +852,7 @@ export function drawTimelineStrip(
     ctx.stroke()
   }
 
-  ctx.font = `${Math.round(strip.font_size * scale)}px system-ui, sans-serif`
+  ctx.font = `${Math.round(strip.font_size * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   cells.forEach((c, i) => {
     ctx.fillText(MONTH_LETTERS[c.month], x + i * cellWidth + cellWidth / 2, y + halfHeight + halfHeight / 2)
   })
@@ -917,7 +907,7 @@ function drawTitleBlock(ctx: CanvasRenderingContext2D, rect: Rect, title: string
   let cursorY = rect.y + padding
 
   if (trimmedTitle) {
-    ctx.font = `bold ${Math.round(15 * scale)}px system-ui, sans-serif`
+    ctx.font = `bold ${Math.round(15 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     ctx.fillStyle = '#111827'
     const titleLineHeight = 19 * scale
     const titleLines = wrapText(ctx, trimmedTitle, maxWidth).slice(0, 2)
@@ -928,7 +918,7 @@ function drawTitleBlock(ctx: CanvasRenderingContext2D, rect: Rect, title: string
   }
 
   if (trimmedNarrative) {
-    ctx.font = `${Math.round(10 * scale)}px system-ui, sans-serif`
+    ctx.font = `${Math.round(10 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     ctx.fillStyle = '#4b5563'
     const lineHeight = 14 * scale
     const narrativeLines = wrapText(ctx, trimmedNarrative, maxWidth)
@@ -955,7 +945,7 @@ export function drawViewTitle(ctx: CanvasRenderingContext2D, rect: Rect, title: 
   if (!trimmed) return
   const padding = OVERLAY_PADDING * scale
   ctx.save()
-  ctx.font = `bold ${Math.round(13 * scale)}px system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(13 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   const maxTextWidth = Math.max(0, rect.width - padding * 4)
   const textWidth = Math.min(ctx.measureText(trimmed).width, maxTextWidth)
@@ -1126,7 +1116,7 @@ function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; 
       ctx.lineWidth = 2 * scale
       ctx.stroke()
     }
-    ctx.font = `${14 * scale}px system-ui, sans-serif`
+    ctx.font = `${14 * scale}px "IBM Plex Sans", system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillStyle = label.textColor
@@ -1135,7 +1125,7 @@ function drawExportLabel(ctx: CanvasRenderingContext2D, screenPos: { x: number; 
     return
   }
 
-  ctx.font = `${label.bold ? 'bold ' : ''}${label.fontSize * scale}px system-ui, sans-serif`
+  ctx.font = `${label.bold ? 'bold ' : ''}${label.fontSize * scale}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'
   const paddingX = 8 * scale
   const paddingY = 5 * scale
