@@ -9208,3 +9208,10 @@ Fresh release-worktree validation passed: 387 frontend tests, two optional tests
 - Reviewed Redhuan D. Oon's MIT BIM OOTB patterns for workers, reusable geometry, selective updates and browser witnesses. No third-party source copied. Detailed evidence, test commands and remaining limits are in RELEASE_0.2.50.md.
 
 Publication status: git staging could not create the worktree index lock. Elevated execution was rejected by the session approval policy. No commit or push was made. A fingerprint-checked publisher is prepared at scripts/publish-web-0.2.50.ps1 for normal PowerShell; it stages only the reviewed release and refuses a non-fast-forward push.
+
+## 2026-11-20 — Simple climbing formwork
+
+- Move the original complete GLB with a separate vertical motion root; preserve its authored placement and internal parts.
+- Schedule-linked lift heights, elapsed climb durations, manual timing overrides and geometry-top capture. Holds and reverse scrubbing are stateless.
+- Persist typed climb data and reject simultaneous route/attachment ownership. Reject invalid or overlapping climb windows.
+- Keep detailed mechanical cycles out of scope for assets that do not contain those moving parts.

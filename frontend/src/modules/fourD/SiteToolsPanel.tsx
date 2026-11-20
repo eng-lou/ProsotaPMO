@@ -1,3 +1,4 @@
+import { ClimbingFormworkPanel } from './ClimbingFormworkPanel'
 import { GROUND_FINISHES, REALISTIC_CLASS_LABELS } from './realisticMaterials'
 import { LightSettings, defaultSiteIllumination } from './LightSettings'
 import { AssetPartsPanel } from './AssetPartsPanel'
@@ -265,6 +266,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     {chosen?.geographic&&!edit&&<GeographicWorkbench key={'geography:'+chosen.id} item={chosen} state={state} source={source} projectId={projectId} assets={inventory.assets}/>}
     {chosen&&chosen.kind!=='light'&&!chosen.geographic&&!edit&&<><ReplacementPanel key={chosen.id} state={state} assets={inventory.assets} selection={{itemId:chosen.id,instanceIndex:state.detailSelection?.itemId===chosen.id?state.detailSelection.instanceIndex:undefined}}/><button className={button} disabled={!source||busy||capturing} onClick={async()=>{if(!source)return;setCapturing(true);try{await downloadObjectGlb(source,chosen.name,upAxis)}catch(e){setError(siteError(e))}finally{setCapturing(false)}}}>Export object GLB (static pose)</button></>}
     {chosen?.asset_id && !chosen.asset_part && !edit && <SiteAnimationControls item={chosen} projectId={projectId} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} onApplyMotion={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Import motion for ${chosen.name}`)}} />}
+    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
     {chosen && !edit && <section className="border-t pt-2 space-y-2 dark:border-prosota-line">
       <strong>Activity links & profiles</strong>

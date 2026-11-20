@@ -1,3 +1,4 @@
+import { climbHeight } from './climbingFormwork'
 import { LoadHandlingLayer } from "./LoadHandlingLayer"
 import { SiteLight } from './SiteLight'
 import { applyFootprintEdges } from './footprintEdges'
@@ -122,7 +123,12 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
       const pathDate = (item.path_motion?.activity_id ? dateRef : state.pathDateRef || dateRef).current
       const seconds = pathDate ? (pathDate.getTime() - Date.parse(fittedMotion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
       motionTime.current = applySitePath(parent, curve, fittedMotion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
-    } else { parent.position.set(0,0,0); parent.quaternion.identity(); parent.scale.setScalar(1); motionTime.current=null }
+    } else { parent.position.set(0,0,0); parent.quaternion.identity(); parent.scale.setScalar(1); motionTime.current=null
+      if(!preview&&!instance&&item.climbing_formwork){
+        try { const date=(state.pathDateRef||dateRef).current;parent.position[item.climbing_formwork.axis]=date?climbHeight(item.climbing_formwork,activities,date.getTime()):0 }
+        catch { parent.position.set(0,0,0) }
+      }
+    }
   }, -1)
   const root = useRef<THREE.Group>(null)
   const selectable = useRef<THREE.Group>(null)

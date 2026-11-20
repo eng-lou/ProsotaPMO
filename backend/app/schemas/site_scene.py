@@ -1,3 +1,4 @@
+from app.schemas.climbing_formwork import ClimbingFormwork
 from app.schemas.load_handling import LoadHandling
 from typing import Literal
 from uuid import UUID
@@ -163,6 +164,7 @@ class SiteItem(BaseModel):
     motion_actions: list[WorkerAction] = Field(default_factory=list, max_length=200)
     attachment: SiteAttachment | None = None
     load_handling: LoadHandling | None = None
+    climbing_formwork: ClimbingFormwork | None = None
     rig_disabled: bool = False
     instance_overrides: dict[int, FeatureReplacement] = Field(default_factory=dict, max_length=200)
     generator_version: Literal[1] = 1
@@ -209,6 +211,8 @@ class SiteItem(BaseModel):
             ordered=sorted(self.motion_actions,key=lambda a:datetime.fromisoformat(a.start.replace('Z','+00:00')))
             if any(datetime.fromisoformat(b.start.replace('Z','+00:00')) < datetime.fromisoformat(a.end.replace('Z','+00:00')) for a,b in zip(ordered,ordered[1:])):
                 raise ValueError('Actions for one actor cannot overlap')
+        if self.climbing_formwork and (self.path_motion or self.attachment or (self.load_handling and self.load_handling.events)):
+            raise ValueError('Climbing formwork cannot share routes or attachments')
         if self.load_handling and self.load_handling.events and (self.attachment or self.path_motion):
             raise ValueError('Load transfers cannot share a load with a single attachment or its own route')
         if self.attachment and self.path_motion:
