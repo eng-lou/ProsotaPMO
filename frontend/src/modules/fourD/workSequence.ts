@@ -6,7 +6,8 @@ type Activity={id:string;start?:string|null;finish?:string|null}
 export function workWindows(config:WorkSequence,activities:Activity[]){
  if(![config.offset.x,config.offset.y,config.offset.z,config.tool_rest,config.tool_full].every(Number.isFinite)||config.tool_rest<0||config.tool_rest>1||config.tool_full<0||config.tool_full>1)throw Error('Enter finite offsets and control values between 0 and 1.');
  if(new Set(config.steps.map(s=>s.id)).size!==config.steps.length)throw Error('Duplicate step IDs.');
- const rows=config.steps.map(s=>{const a=activities.find(a=>a.id===s.activity_id),start=Date.parse(s.start||a?.start||''),finish=Date.parse(s.finish||a?.finish||'');
+ const activityById=new Map(activities.map(a=>[a.id,a]));
+ const rows=config.steps.map(s=>{const a=activityById.get(s.activity_id),start=Date.parse(s.start||a?.start||''),finish=Date.parse(s.finish||a?.finish||'');
  if(!Number.isFinite(start)||!Number.isFinite(finish)||finish<=start)throw Error('Every step needs an activity with valid start and finish dates, or manual overrides.');
  if(![s.start_chainage,s.end_chainage,s.depth,s.travel_hours,s.position.x,s.position.y,s.position.z].every(Number.isFinite)||s.depth<=0||s.travel_hours<0)throw Error('Enter valid coordinates, positive depth and non-negative travel time.');
  if(config.kind==='tbm'&&(s.start_chainage<0||s.end_chainage<=s.start_chainage))throw Error('Drive end chainage must exceed its start.');
@@ -19,8 +20,8 @@ export function workWindows(config:WorkSequence,activities:Activity[]){
 }
 const clamp=(v:number)=>Math.max(0,Math.min(1,v))
 export function workProgress(start:number,finish:number,time:number){return clamp((time-start)/(finish-start))}
-export function sampleWork(config:WorkSequence,activities:Activity[],time:number,origin:PathCoordinate,curve?:T.Curve<T.Vector3>|null){
- const rows=workWindows(config,activities),point=new T.Vector3(origin.x,origin.y,origin.z),rotation=new T.Quaternion();let depth=0,chainage=rows[0]?.start_chainage||0;
+export function sampleWork(config:WorkSequence,activities:Activity[],time:number,origin:PathCoordinate,curve?:T.Curve<T.Vector3>|null,resolved?:ReturnType<typeof workWindows>){
+ const rows=resolved??workWindows(config,activities),point=new T.Vector3(origin.x,origin.y,origin.z),rotation=new T.Quaternion();let depth=0,chainage=rows[0]?.start_chainage||0;
  if(!Number.isFinite(time))return {point,rotation,depth,chainage,tool:config.tool_rest};
  if(config.kind==='tbm'){
   if(!curve||curve.getLength()<=1e-6)throw Error('Choose a non-empty tunnel alignment.');const length=curve.getLength();

@@ -1,0 +1,23 @@
+/* Scoped to animation authoring; use Prosota's existing body typeface. */
+.construction-controls { --cc-bg:#fff; --cc-field:#f8fafc; --cc-text:#26364b; --cc-muted:#596b82; --cc-line:#d5deea; --cc-hover:#eef4fc; font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:13px; line-height:1.5; color:var(--cc-text); background:var(--cc-bg); border-color:var(--cc-line); min-width:0; color-scheme:light; }
+.dark .construction-controls { --cc-bg:#0c1a2e; --cc-field:#101f36; --cc-text:#e6edf7; --cc-muted:#a9bbd2; --cc-line:#30465f; --cc-hover:#1c3049; color-scheme:dark; }
+.construction-controls :is(input,select,button) { font:inherit; color:var(--cc-text); border:1px solid var(--cc-line); border-radius:5px; min-height:30px; max-width:100%; }
+.construction-controls :is(input,select) { background:var(--cc-field); padding:4px 7px; }
+.construction-controls input::placeholder { color:var(--cc-muted); opacity:1; }
+.construction-controls input[type=checkbox] { min-height:14px; width:14px; height:14px; margin-right:7px; accent-color:#2e7df7; }
+.construction-controls input[type=number] { font-variant-numeric:tabular-nums; }
+.construction-controls select option { background:var(--cc-field); color:var(--cc-text); }
+.construction-controls button { background:var(--cc-field); padding:4px 8px; margin:2px 3px 2px 0; cursor:pointer; }
+.construction-controls button:hover:not(:disabled) { background:var(--cc-hover); }
+.construction-controls :is(button,input,select,summary):focus-visible { outline:2px solid #2e7df7; outline-offset:2px; }
+.construction-controls :is(button,input,select):disabled { opacity:.55; cursor:not-allowed; }
+.construction-controls label { display:block; margin-top:6px; }
+.construction-controls :is(fieldset,section,details) { min-width:0; border-color:var(--cc-line); }
+.construction-controls legend,.construction-controls summary { font-weight:500; font-size:13px; }
+.construction-controls summary { cursor:pointer; padding:5px 0; overflow-wrap:anywhere; }
+.construction-controls p { color:var(--cc-muted); margin:6px 0; }
+.construction-controls [role=alert] { color:#b42318; }
+.dark .construction-controls [role=alert] { color:#ffaaa1; }
+.construction-controls .cc-primary { background:#2563c9; border-color:#2563c9; color:#fff; }
+.construction-controls .cc-primary:hover:not(:disabled) { background:#1d54ae; }
+.construction-controls .cc-actions { position:sticky; bottom:0; padding:8px 0 2px; background:var(--cc-bg); border-top:1px solid var(--cc-line); }

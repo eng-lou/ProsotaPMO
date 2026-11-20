@@ -39,3 +39,11 @@ test('invalid schedules, chainages and insufficient tool travel fail closed',()=
 test('clipping is reversible and retains unrelated section planes',()=>{
  const root=new T.Group(),mat=new T.MeshStandardMaterial(),mesh=new T.Mesh(new T.BoxGeometry(),mat),existing=new T.Plane(new T.Vector3(0,1,0),10);root.add(mesh);mat.clippingPlanes=[existing];const clip=createWorkClip();clip.apply(root,new T.Plane(new T.Vector3(1,0,0),-5));assert.equal(mat.clippingPlanes.length,2);assert.equal(mat.clipShadows,true);clip.apply(root,new T.Plane(new T.Vector3(1,0,0),-2));assert.equal(mat.clippingPlanes.length,2);clip.dispose();assert.deepEqual(mat.clippingPlanes,[existing]);assert.equal(mat.clipShadows,false);mat.dispose();mesh.geometry.dispose()
 })
+
+test('prepared playback schedules avoid all activity scans during frame sampling',()=>{
+ const rows=workWindows(config,activities),unreadable=new Proxy([],{get(){throw Error('Activity scan in frame loop')}})
+ for(let i=0;i<1000;i++){
+  const time=base+(i%30)*h,sample=sampleWork(config,unreadable,time,origin,curve,rows),expected=sampleWork(config,activities,time,origin,curve)
+  near(sample.chainage,expected.chainage);workVisual(config,unreadable,'soila',time,curve,rows)
+ }
+})

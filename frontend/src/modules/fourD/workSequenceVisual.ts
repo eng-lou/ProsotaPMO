@@ -2,8 +2,8 @@ import * as T from 'three'
 import {bindAnimationShadows} from './animationRendering'
 import {workWindows,workProgress,type WorkSequence} from './workSequence'
 /** One target is one excavation volume or completed pile, never the whole terrain. */
-export function workVisual(config:WorkSequence,activities:Parameters<typeof workWindows>[1],target:string,time:number,curve?:T.Curve<T.Vector3>|null){
- const rows=workWindows(config,activities),r=rows.find(s=>s.excavation_id===target||s.pile_id===target);
+export function workVisual(config:WorkSequence,activities:Parameters<typeof workWindows>[1],target:string,time:number,curve?:T.Curve<T.Vector3>|null,resolved?:ReturnType<typeof workWindows>){
+ const rows=resolved??workWindows(config,activities),r=rows.find(s=>s.excavation_id===target||s.pile_id===target);
  if(!r||!Number.isFinite(time))return {visible:true,plane:null};
  const p=workProgress(r.startMs,r.finishMs,time);
  if(r.pile_id===target)return {visible:p>=.85,plane:null};

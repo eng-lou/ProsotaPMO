@@ -1,3 +1,4 @@
+import './constructionControls.css'
 import { useEffect, useState } from 'react'
 import type { SiteItem } from './siteScene'
 import { captureLoadEvent,loadRoots,slingEditors,validateLoadEvents,type LoadHandling } from './loadHandling'
@@ -10,7 +11,7 @@ export function LoadHandlingPanel({item,items,date,onSeek,onApply}:{item:SiteIte
   function record(release:boolean){try{const event=captureLoadEvent(item,release?null:parent,node,date(),slings);void save({...handling,events:[...handling.events,event]})}catch(e){setError((e as Error).message)}}
   useEffect(()=>()=>{slingEditors.clear()},[item.id])
   const cls='border rounded p-1 w-full dark:bg-prosota-panel2'
-  return <fieldset disabled={busy||!!item.work_sequence||!!item.climbing_formwork||!!item.attachment||!!item.path_motion} className="border rounded p-2 space-y-2">
+  return <fieldset disabled={busy||!!item.work_sequence||!!item.climbing_formwork||!!item.attachment||!!item.path_motion} className="construction-controls border rounded p-3 space-y-2">
     <legend>Load transfers & lifting slings</legend>
     <p>Pause at pickup, choose the carrier and record Attach. At set-down, record Release. Each event preserves the current placement. Repeat for delivery and installation.</p>
     {(item.attachment||item.path_motion)&&<p>Remove the single attachment or this load’s own route before authoring transfers. The carrier can follow a route.</p>}

@@ -9223,3 +9223,11 @@ Publication status: git staging could not create the worktree index lock. Elevat
 - Use explicit Save for draft sequence editing. Validate dates, overlap, chainage continuity, tool travel and exclusive ownership of machine motion and visual targets.
 - Keep this first version visual: drive volumes need splitting at sharp bends; piling uses straight travel and fixed presentation phases. No terrain boolean, tunnel lining, auger rotation or detailed installation cycle is implied.
 - Validation: 13 frontend and 13 backend tests; production build; isolated Chromium scene/rig integration. Preserve unrelated catalogue edits in the working tree and publish only the reviewed feature files/patch.
+
+## 2026-11-20 — Construction controls performance and theme polish
+
+- Prepare climb/work schedules when their data changes rather than parsing and sorting activities every playback frame; use activity-ID maps during preparation. Explicit resolved schedules preserve schedule-edit invalidation and reverse scrubbing.
+- Expand only the active lift/drive/pile editor; bound activity search results to 100 with a refine-search message and exclude already-added activities. Request equipment rigs only for piling setup.
+- Apply Prosota IBM Plex Sans, 13px controls, theme-specific fields/options/text, native dark date/select controls, visible keyboard focus and consistent button states to climbing, TBM/piling, actions and sling controls.
+- Add draft discard and saving feedback; skip unchanged climb field saves.
+- Validation: 14 frontend tests, Chromium scene/rig regression and construction-control checks in light/dark with the application stylesheet and a 320px sidebar. Production build checked separately.
