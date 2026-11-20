@@ -1,3 +1,4 @@
+import { paneCollectionIds, paneScopes } from './comparisonSelection'
 import { SafeCanvas as Canvas } from './SafeCanvas'
 import type { SiteItem } from './siteScene'
 import { SiteSceneLayer } from './SiteSceneLayer'
@@ -630,7 +631,7 @@ export function ComparisonViewportPane({
 
   return (
     <div ref={containerRef} className="relative flex-1 min-h-0">
-      <div className="absolute top-2 left-2 z-10 flex flex-col gap-1 max-w-[calc(100%-1rem)]">
+      <div data-viewport-toolbar className="absolute top-2 left-2 z-10 flex flex-col gap-1 max-w-[calc(100%-1rem)]">
         <div className="flex items-center gap-1 text-xs font-medium bg-white/90 border border-gray-300 dark:border-prosota-line rounded px-1.5 py-1 text-gray-600 dark:text-prosota-muted">
           <select
             value={config.contentMode}
@@ -651,26 +652,35 @@ export function ComparisonViewportPane({
           <button onClick={onClose} title="Close this view" className="px-1 py-0.5 rounded hover:bg-gray-100 dark:hover:bg-prosota-panel2 text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400 shrink-0">✕</button>
         </div>
         {config.contentMode === 'collection' && (
-          <select
-            value={config.collectionId ?? ''}
-            onChange={e => onConfigChange({ ...config, collectionId: e.target.value || null })}
-            className="text-xs border border-gray-300 dark:border-prosota-line dark:bg-prosota-panel2 dark:text-prosota-paper rounded px-1.5 py-1 bg-white/90 text-gray-600 dark:text-prosota-muted"
-          >
-            <option value="">Choose a collection…</option>
-            {collectionOptions.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+          <fieldset className="text-xs bg-white/95 dark:bg-prosota-panel border rounded p-2 max-h-52 overflow-auto">
+            <legend className="px-1">Collections � {paneCollectionIds(config).length} selected</legend>
+            {collectionOptions.map(collection => <label key={collection.id} className="flex items-center gap-2 py-1">
+              <input type="checkbox" checked={paneCollectionIds(config).includes(collection.id)} onChange={event => {
+                const ids = paneCollectionIds(config)
+                const collectionIds = event.target.checked ? [...ids, collection.id] : ids.filter(id => id !== collection.id)
+                onConfigChange({ ...config, collectionIds, collectionId: collectionIds[0] ?? null })
+              }} />{collection.name}
+            </label>)}
+            {!collectionOptions.length && <p>No collections available.</p>}
+          </fieldset>
         )}
         {config.contentMode === 'scope' && (
-          <div className="bg-white/90 border border-gray-300 dark:border-prosota-line rounded px-1.5 py-1">
-            <ScopeFilterFields
-              scope={config.scope}
-              activities={activities}
-              udfDefinitions={udfDefinitions}
-              getUdfValue={getUdfValue}
-              onChange={scope => onConfigChange({ ...config, scope })}
-            />
+          <div className="bg-white/95 dark:bg-prosota-panel border border-gray-300 dark:border-prosota-line rounded p-2 max-h-72 overflow-auto space-y-2">
+            <p className="text-xs text-gray-500">Show anything matching any selected scope.</p>
+            {paneScopes(config).map((scope, index) => <div key={index} className="border-b pb-2 space-y-1">
+              <ScopeFilterFields scope={scope} activities={activities} udfDefinitions={udfDefinitions} getUdfValue={getUdfValue}
+                onChange={value => {
+                  const scopes = paneScopes(config).map((entry, i) => i === index ? value : entry)
+                  onConfigChange({ ...config, scopes, scope: scopes[0] ?? config.scope })
+                }} />
+              <button className="text-xs text-red-600" onClick={() => {
+                const scopes = paneScopes(config).filter((_, i) => i !== index)
+                onConfigChange({ ...config, scopes, scope: scopes[0] ?? config.scope })
+              }}>Remove scope</button>
+            </div>)}
+            <button className="text-xs border rounded px-2 py-1" onClick={() => onConfigChange({ ...config, scopes: [...paneScopes(config), {
+              scope_mode: 'wbs', wbs_node_activity_id: null, udf_field_definition_id: null, udf_value: null,
+            }] })}>+ Add WBS / UDF scope</button>
           </div>
         )}
       </div>

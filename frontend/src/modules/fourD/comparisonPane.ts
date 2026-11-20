@@ -1,3 +1,4 @@
+import { paneCollectionIds, resolvePaneScopeIds } from './comparisonSelection'
 import { useEffect, useState } from 'react'
 import * as THREE from 'three'
 import type { Activity, UserDefinedFieldValue } from '@/modules/scheduling/types'
@@ -7,7 +8,7 @@ import { flattenCollectionMemberRefs } from './collections'
 import type { IfcModelHandle } from './ifcModel'
 import { resolveActivityLinksToIsolationTargets, resolveElementRefsToTargets, type LinkableSceneObject, type ResolvedIsolationTarget } from './linkedElements'
 import type { ModelElementLink } from './modelElementLinks'
-import { resolveScopeActivityIds, type ScopeFilter } from './scheduleScope'
+import { type ScopeFilter } from './scheduleScope'
 
 // A generalized "Compare Baseline" (2026-08-03, per Maro: "compare
 // baseline goes beyond just the one baseline view") — up to 3 extra
@@ -41,6 +42,8 @@ export type PaneContentMode = 'baseline' | 'collection' | 'scope'
 export interface PaneConfig {
   contentMode: PaneContentMode
   collectionId: string | null
+  collectionIds?: string[]
+  scopes?: ScopeFilter[]
   // 'udf'/'wbs' modes reuse ScopeFilter wholesale (scope_mode mirrors
   // contentMode, so this is redundant with the outer contentMode field
   // when contentMode is 'udf'/'wbs' — kept as one object rather than
@@ -84,11 +87,11 @@ export function useResolvedPaneIsolation(
     let cancelled = false
     const resolve = async () => {
       if (config.contentMode === 'collection') {
-        if (!config.collectionId) {
+        if (!paneCollectionIds(config).length) {
           setResolved({ objectIds: new Set(), expressIds: new Set(), expressKeys: new Set() })
           return
         }
-        const refs = flattenCollectionMemberRefs(config.collectionId, collections)
+        const refs = [...new Set(paneCollectionIds(config).flatMap(id => flattenCollectionMemberRefs(id, collections)))]
         const target = await resolveElementRefsToTargets(refs, sceneObjects, ifcHandles)
         if (!cancelled) setResolved(target)
         return
@@ -97,13 +100,13 @@ export function useResolvedPaneIsolation(
       // already uses (activities -> linked scene targets), just fed a
       // scope-filtered activity id set (config.scope's own All/UDF/WBS
       // sub-choice) instead of a hand-picked one.
-      const activityIds = resolveScopeActivityIds(activities, config.scope, getUdfValue)
+      const activityIds = resolvePaneScopeIds(config, activities, getUdfValue)
       const target = await resolveActivityLinksToIsolationTargets(activityIds, links, sceneObjects, ifcHandles)
       if (!cancelled) setResolved(target)
     }
     resolve()
     return () => { cancelled = true }
-  }, [config.contentMode, config.collectionId, config.scope, activities, collections, links, sceneObjects, ifcHandles, getUdfValue])
+  }, [config.contentMode, config.collectionId, config.collectionIds, config.scope, config.scopes, activities, collections, links, sceneObjects, ifcHandles, getUdfValue])
 
   return resolved
 }
