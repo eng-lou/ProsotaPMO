@@ -2,6 +2,7 @@ export interface UndoAction {
   label: string
   owner?: object
   group?: unknown
+  savedId?: string
   undo: () => void | Promise<void>
   redo: () => void | Promise<void>
 }
@@ -20,6 +21,24 @@ export class UndoHistory {
   setScope(scope: string) { if (scope !== this.scope) { this.scope = scope; this.clear() } }
   clear() { this.past = []; this.future = []; this.message = ''; this.emit() }
   remove(owner: object) { this.past = this.past.filter(x => x.owner !== owner); this.future = this.future.filter(x => x.owner !== owner); this.emit() }
+  restore(owner: object, past: UndoAction[], future: UndoAction[]) {
+    // Keep other tools' actions in place. Reuse live callbacks for mixed 3D edits.
+    const merge = (current: UndoAction[], saved: UndoAction[]) => {
+      const merged: UndoAction[] = []
+      let next = 0
+      for (const action of current) {
+        if (action.owner !== owner) { merged.push(action); continue }
+        const pos = saved.findIndex(entry => entry.savedId === action.savedId)
+        if (pos < next) continue
+        merged.push(...saved.slice(next, pos), action)
+        next = pos + 1
+      }
+      return (next ? [...merged, ...saved.slice(next)] : [...saved, ...merged]).slice(-10)
+    }
+    this.past = merge(this.past, past)
+    this.future = merge(this.future, future)
+    this.emit()
+  }
   record(action: UndoAction) {
     if (this.busy) return
     const last = this.past[this.past.length - 1]
@@ -41,7 +60,9 @@ export class UndoHistory {
     try {
       await (redo ? action.redo() : action.undo())
       if (scope === this.scope) {
-        source.pop(); (redo ? this.past : this.future).push(action)
+        const current = redo ? this.future : this.past
+        if (current[current.length - 1] !== action) return
+        current.pop(); (redo ? this.past : this.future).push(action)
         this.message = `${redo ? 'Redid' : 'Undid'} ${action.label}`
       }
     } catch (e) {

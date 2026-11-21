@@ -133,6 +133,8 @@ async def capture(db: AsyncSession, project_id: uuid.UUID):
             for column in TABLES[name].c:
                 if any(fk.column.table.name in ('users', 'organisations') for fk in column.foreign_keys):
                     row[column.name] = bool(row.get(column.name))
+            if name == 'site_scenes':
+                row.pop('history', None)
             if name == 'model3d_files' and row.get('ifc_revisions'):
                 row['ifc_revisions'] = [{k: v for k, v in revision.items() if k not in ('reviewer', 'upload_key')}
                                         for revision in row['ifc_revisions']]
@@ -163,6 +165,8 @@ def validate(snapshot):
         for row in rows:
             if not isinstance(row, dict) or set(row) - set(table.c.keys()):
                 raise ValueError(f'Unsupported fields in {name}; update the receiving app.')
+            if name == 'site_scenes' and 'history' in row:
+                raise ValueError('Edit history cannot be imported into another project.')
             if not isinstance(row.get(pk), str):
                 raise ValueError(f'Invalid identifier in {name}')
             record_id = str(uuid.UUID(row[pk]))

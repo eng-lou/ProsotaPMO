@@ -1,3 +1,4 @@
+import { restPose } from './gatePose'
 import type { Enclosure, FenceOpening, FenceStyle, SiteItem, TowerCover } from './siteScene'
 
 const field = 'w-full min-w-0 rounded border p-1.5 bg-white dark:bg-prosota-panel2 dark:text-prosota-paper dark:border-prosota-line'
@@ -48,14 +49,17 @@ export function FenceSettings({item, change}: {item:SiteItem; change:(patch:Part
       <legend>Opening {index+1}</legend>
       <label>Entrance type<select className={field} value={entry.kind} onChange={e=>{
         const kind=e.target.value as FenceOpening['kind']
-        opening(index,{kind,width:openingDefaults[kind]})
+        opening(index,{kind,width:openingDefaults[kind],pose:null,pose_keys:[]})
       }}>{Object.entries(entranceNames).map(([key,name])=><option key={key} value={key}>{name}</option>)}</select></label>
       <div className="grid grid-cols-2 gap-2">
         <Measure label="Start along path (m)" value={entry.start} onChange={start=>opening(index,{start})}/>
         <Measure label="Opening width (m)" value={entry.width} onChange={width=>opening(index,{width})}/>
       </div>
-      {(entry.kind==='vehicle'||entry.kind==='pedestrian') && <Measure label="Gate swing (degrees)" value={entry.angle} onChange={angle=>opening(index,{angle})}/>}
+      {(entry.kind==='vehicle'||entry.kind==='pedestrian') && <Measure label={entry.pose != null || entry.pose_keys?.length ? "Full swing (degrees, 0 uses 90)" : "Gate swing (degrees)"} value={entry.angle} onChange={angle=>opening(index,{angle})}/>}
       {entry.kind!=='gap' && <>
+        <label className="block">{entry.kind==='turnstile'?'Rotation':'Opening'} (0–1) · {restPose(entry).toFixed(2)}
+          <input className="w-full" type="range" min="0" max="1" step="0.01" value={restPose(entry)} onChange={e=>opening(index,{pose:Number(e.target.value)})}/>
+        </label>
         <label>Entrance board / branding<input className={field} maxLength={48} placeholder="Site or contractor name" value={entry.board} onChange={e=>opening(index,{board:e.target.value})}/></label>
         <label className="flex gap-2"><input type="checkbox" checked={entry.lights} onChange={e=>opening(index,{lights:e.target.checked})}/>Gatepost warning lights</label>
       </>}

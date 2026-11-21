@@ -9258,3 +9258,11 @@ Publication status: git staging could not create the worktree index lock. Elevat
 
 - Reproduced a 422 restoring a saved ground shape after its authoring path was deleted. A project-scoped fingerprint of the scene before removal permits the exact saved layout to be restored from the browser's Undo entry. For removals made on older builds, the server can verify the preceding saved command. Fresh geometry and live asset references continue through normal validation.
 - The Remove button names the selected object. Failed Undo and Redo actions display the action name and the server's validation detail and remain available for retry.
+
+## 2026-11-21 - Persisted site Undo and gate keyframes
+
+The server keeps the last ten site edits with the scene, including changed object recipes and list order. Undo and Redo survive a page reload. Project revisions protect concurrent edits. Portable project exports omit edit history.
+
+Saved fence entrances have a normalised rest pose and dated keys. Vehicle and pedestrian leaves rotate on their hinges. A turnstile advances one 120-degree passage. The renderer samples the 4D clock and updates the moving batches without rebuilding the fence. Older gates retain their authored swing.
+
+A disposable browser project exercised both sidebar buttons through hard reloads against the real API. Undo restored the entire ground recipe. Two gate keys at 0 and 0.8 produced 0.4 halfway through, and survived Undo, Redo and reopening.

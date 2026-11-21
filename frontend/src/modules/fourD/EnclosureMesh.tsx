@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo } from 'react'
-import { type ThreeEvent } from '@react-three/fiber'
+import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import * as T from 'three'
 import type { SiteItem } from './siteScene'
 import type { SiteLayerState } from './SiteSceneLayer'
@@ -9,7 +9,7 @@ import { primitiveMaterialKey, applySiteSurfaceOpacity, siteMaterialLook } from 
 import { disposeRealisticVariant } from './realisticMaterials'
 import { buildEnclosure } from './enclosureGeometry'
 
-export function EnclosureMesh({item,state,preview}:{item:SiteItem;state:SiteLayerState;preview:boolean}) {
+export function EnclosureMesh({item,state,preview,dateRef}:{item:SiteItem;state:SiteLayerState;preview:boolean;dateRef?: React.RefObject<Date | null>}) {
   const scope='site:'+item.id, textures=state.customTextures?.[scope]
   const opacity=state.customOpacity?.[scope] ?? 1
   const assembly=useMemo(()=>{
@@ -30,11 +30,13 @@ export function EnclosureMesh({item,state,preview}:{item:SiteItem;state:SiteLaye
       }
       mesh.material=look
     }
-    return {root:model.root,dispose(){
+    return {root:model.root,setPose:model.setPose,dispose(){
       looks.forEach((_,source)=>disposeRealisticVariant(source))
       model.dispose()
     }}
-  },[item.layout,item.enclosure,item.height,item.color,item.up_axis,item.id,scope,textures,opacity,preview,state.materialMapping,state.glassTransmission])
+  },[item.layout,item.enclosure?.style,item.enclosure?.perimeter_lights,item.height,item.color,item.up_axis,item.id,scope,textures,opacity,preview,state.materialMapping,state.glassTransmission])
+  useFrame(() => assembly.setPose(item.enclosure!.openings, dateRef?.current?.getTime() ?? null))
+  useLayoutEffect(() => { assembly.setPose(item.enclosure!.openings, dateRef?.current?.getTime() ?? null) }, [assembly,item.enclosure,dateRef])
   useEffect(()=>()=>assembly.dispose(),[assembly])
   useLayoutEffect(()=>{
     const white=new T.Color('white'),active=new T.Color('#4ac7ff')

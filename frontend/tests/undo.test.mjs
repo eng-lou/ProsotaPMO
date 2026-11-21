@@ -93,3 +93,21 @@ test('transform snapshots restore a group without copying its geometry',()=>{
  assert.deepEqual(a.position.toArray(),[0,0,0]);assert.deepEqual(b.position.toArray(),[4,5,6]);assert.deepEqual(b.scale.toArray(),[1,1,1])
  assert.equal(a.geometry,b.geometry)
 })
+
+test('reopens saved site history, preserves mixed tools and follows remote ordering', async () => {
+  const history = new UndoHistory(), owner = {}, seen = []
+  const saved = id => ({owner, savedId:id, label:id, undo:()=>seen.push(id), redo:()=>seen.push(id)})
+  const local = {label:'schedule',undo:()=>{},redo:()=>{}}
+  history.setScope('tower')
+  history.restore(owner,[saved('place'),saved('delete-ground')],[])
+  await history.run()
+  assert.deepEqual(seen,['delete-ground'])
+  history.remove(owner)
+  history.restore(owner,[saved('place')],[saved('delete-ground')])
+  await history.run(true)
+  history.record(local)
+  history.restore(owner,[saved('place'),saved('delete-ground'),saved('key-gate')],[])
+  assert.deepEqual(history.past.map(a=>a.label),['place','delete-ground','schedule','key-gate'])
+  history.setScope('other')
+  assert.equal(history.past.length,0)
+})

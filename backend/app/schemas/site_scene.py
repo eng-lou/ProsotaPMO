@@ -1,9 +1,10 @@
 from app.schemas.work_sequence import WorkSequence
 from app.schemas.climbing_formwork import ClimbingFormwork
 from app.schemas.load_handling import LoadHandling
+from datetime import timezone
 from typing import Literal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 from app.schemas.geographic_context import GeographicContext, FeatureReplacement, GroundFinish
 from app.schemas.path import PathPoint
 
@@ -144,17 +145,33 @@ class SiteSectionBox(BaseModel):
     visible: bool = True
 
 
+class GatePoseKey(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    date: AwareDatetime
+    value: float = Field(ge=0, le=1)
+
+
 class FenceOpening(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     kind: Literal["gap", "vehicle", "pedestrian", "turnstile"]
     start: float = Field(ge=0, le=100000)
     width: float = Field(gt=0, le=30)
     angle: float = Field(default=0, ge=-110, le=110)
+    pose: float | None = Field(default=None, ge=0, le=1)
+    pose_keys: list[GatePoseKey] = Field(default_factory=list, max_length=128)
     board: str = Field(default="", max_length=48)
     lights: bool = False
 
     @model_validator(mode="after")
     def usable_width(self):
+        if self.pose_keys:
+            if self.kind == "gap":
+                raise ValueError("A clear gap has no movable gate")
+            for key in self.pose_keys:
+                key.date = key.date.astimezone(timezone.utc)
+            if len({key.date for key in self.pose_keys}) != len(self.pose_keys):
+                raise ValueError("Use one pose per gate at each timeline position")
+            self.pose_keys.sort(key=lambda key: key.date)
         minimum = {"gap": 0, "vehicle": 2, "pedestrian": 0.7, "turnstile": 1.2}[self.kind]
         if self.width < minimum:
             raise ValueError(f"A {self.kind} entrance needs at least {minimum:g} m in this model")
@@ -291,11 +308,19 @@ class SiteItem(BaseModel):
         return self
 
 
+class HistoryEdit(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    command_id: UUID
+    expected_revision: int = Field(ge=0)
+    action_id: UUID
+
+
 class SceneEdit(BaseModel):
     model_config = ConfigDict(extra="forbid")
     command_id: UUID
     expected_revision: int = Field(ge=0)
     items: list[SiteItem]
+    label: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
     def unique_ids(self):

@@ -17,6 +17,7 @@ export type FenceStyle = 'plain' | 'edge' | 'mesh' | 'hoarding'
 export interface FenceOpening {
   kind: 'gap' | 'vehicle' | 'pedestrian' | 'turnstile'
   start: number; width: number; angle: number; board: string; lights: boolean
+  pose?: number | null; pose_keys?: {date: string; value: number}[]
 }
 export interface Enclosure {
   style: FenceStyle; openings: FenceOpening[]; levels: number[]; perimeter_lights: boolean
@@ -57,7 +58,9 @@ export interface SiteItem {
   placement_kind?: 'tree'|'person'|'context'|'cabin'|'arrow'|'asset'; align_to_path?: boolean; random_rotation?: boolean
   layout?: { openings?: (FenceOpening & { a: PathPoint; b: PathPoint; level: number })[]; footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
 }
-export interface SiteScene { revision: number; items: SiteItem[] }
+interface SavedEdit { id: string; label: string }
+export interface SiteScene { revision: number; items: SiteItem[]; history?: {past: SavedEdit[]; future: SavedEdit[]} }
+type Effects = { redo(): void; undo(): void }
 export interface SiteIllumination {
   type: 'point' | 'sun' | 'spot' | 'area'
   intensity: number
@@ -100,36 +103,84 @@ export function useSiteScene(projectId: string | undefined) {
       ? {...item, path_motion: {...item.path_motion, bind_origin: {...item.position}}} : item)}
     current.current = value; setScene(value)
   }
+  const owner = useRef({})
+  const generation = useRef(0)
+  const inProject = (id: string, version: number) => generation.current === version && project.current === id
+  function savedAction(id: string, entry: SavedEdit, effects?: Effects) {
+    const version = generation.current
+    let retry: { direction: 'undo' | 'redo'; revision: number; command: string } | undefined
+    async function travel(direction: 'undo' | 'redo') {
+      if (!inProject(id, version) || pending.current) throw new Error('Wait for the current site operation to finish.')
+      if (!retry || retry.direction !== direction || retry.revision !== current.current.revision) {
+        retry = { direction, revision: current.current.revision, command: crypto.randomUUID() }
+      }
+      pending.current = true; setBusy(true)
+      try {
+        const {data} = await api.post<SiteScene>(`/api/v1/site-scenes/${id}/history/${direction}`, {
+          command_id: retry.command, expected_revision: retry.revision, action_id: entry.id,
+        })
+        if (inProject(id, version)) { accept(data); setDraft(null); effects?.[direction]() }
+        retry = undefined
+      } finally { if (inProject(id, version)) { pending.current = false; setBusy(false) } }
+    }
+    return { owner: owner.current, savedId: entry.id, label: entry.label, undo: () => travel('undo'), redo: () => travel('redo') }
+  }
   async function reload() {
-    const id = projectId
-    if (!id) return
+    const id = projectId, version = generation.current
+    if (!id || pending.current) return
     setReady(false)
     try {
       const { data } = await api.get<SiteScene>(`/api/v1/site-scenes/${id}`)
-      if (project.current === id) { accept(data); setError(''); setReady(true) }
-    } catch (error) { if (project.current === id) setError(siteError(error)) }
+      if (inProject(id, version)) {
+        setReady(true)
+        if (data.revision < current.current.revision) return
+        accept(data); setError('')
+        if (data.history) undoHistory.restore(owner.current, data.history.past.map(e => savedAction(id,e)), data.history.future.map(e => savedAction(id,e)))
+      }
+    } catch (error) { if (inProject(id, version)) setError(siteError(error)) }
   }
-  useEffect(() => { accept({ revision: 0, items: [] }); setDraft(null); setSelected(null); setPlacing(false); setPlacement(null); setError(''); setReady(false); void reload() }, [projectId])
-  async function save(items: SiteItem[] | ((currentItems: SiteItem[]) => SiteItem[]), label: string, effects?: { redo(): void; undo(): void }) {
-    if (!projectId || pending.current || !ready) return false
-    const id = projectId, before = current.current.items.map(recipe)
-    let after = (typeof items === 'function' ? items(current.current.items) : items).map(recipe)
-    const apply = async (expected: SiteItem[], next: SiteItem[], effect?: () => void) => {
-      if (project.current !== id) throw new Error('Switch back to the original project')
-      if (stableRecipe(current.current.items.map(recipe)) !== stableRecipe(expected)) throw new Error('Site scene changed. Reload before undoing this operation.')
+  useEffect(() => {
+    pending.current = false; setBusy(false)
+    accept({ revision: 0, items: [] }); setDraft(null); setSelected(null); setPlacing(false); setPlacement(null); setError(''); setReady(false)
+    void reload()
+    return () => { generation.current++; undoHistory.remove(owner.current) }
+  }, [projectId])
+  async function save(items: SiteItem[] | ((currentItems: SiteItem[]) => SiteItem[]), label: string, effects?: Effects) {
+    if (!projectId || pending.current || undoHistory.busy || !ready) return false
+    const id = projectId, version = generation.current, before = current.current.items.map(recipe), command = crypto.randomUUID()
+    const after = (typeof items === 'function' ? items(current.current.items) : items).map(recipe)
+    async function put(next: SiteItem[], command_id: string, editLabel?: string) {
       const { data } = await api.put<SiteScene>(`/api/v1/site-scenes/${id}`, {
-        command_id: crypto.randomUUID(), expected_revision: current.current.revision, items: next,
+        command_id, expected_revision: current.current.revision, items: next,
+        ...(editLabel && current.current.history ? {label: editLabel.slice(0,512)} : {}),
       })
-      if (project.current === id) { accept(data); setDraft(null); effect?.() }
+      if (inProject(id, version)) { accept(data); setDraft(null) }
+      return data
     }
     pending.current = true; setBusy(true); setError('')
+    undoHistory.pending++; undoHistory.emit()
     try {
-      await apply(before, after, effects?.redo)
-      after = current.current.items.map(recipe)
-      if (project.current === id) undoHistory.record({ label, undo: () => apply(after, before, effects?.undo), redo: () => apply(before, after, effects?.redo) })
-      return project.current === id
-    } catch (error) { if (project.current === id) setError(siteError(error)); throw error }
-    finally { pending.current = false; setBusy(false) }
+      const data = await put(after, command, label)
+      if (!inProject(id, version)) return false
+      effects?.redo()
+      const saved = data.history?.past.find(entry => entry.id === command)
+      if (saved) undoHistory.record(savedAction(id, saved, effects))
+      if (!data.history) {
+        // Allow a rolling deployment where the API still uses the older contract.
+        const stored = data.items.map(recipe)
+        const apply = async (expected: SiteItem[], next: SiteItem[], effect?: () => void) => {
+          if (!inProject(id, version) || stableRecipe(current.current.items.map(recipe)) !== stableRecipe(expected)) throw new Error('Site scene changed. Reload before undoing this operation.')
+          await put(next, crypto.randomUUID())
+          if (inProject(id, version)) effect?.()
+        }
+        undoHistory.record({owner: owner.current, label, undo: () => apply(stored, before, effects?.undo), redo: () => apply(before, stored, effects?.redo)})
+      }
+      return true
+    } catch (error) { if (inProject(id, version)) setError(siteError(error)); throw error }
+    finally {
+      undoHistory.pending--; undoHistory.emit()
+      if (inProject(id, version)) { pending.current = false; setBusy(false) }
+    }
   }
   useEffect(() => { transforms.current.clear() }, [projectId])
   useEffect(() => {

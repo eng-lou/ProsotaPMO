@@ -88,7 +88,32 @@ export async function run(){
     gateOnly.root.updateMatrixWorld(true)
     ray.set(new T.Vector3(2.5,1,3),new T.Vector3(0,0,-1));ray.far=6
     check(!ray.intersectObject(gateOnly.root,true).length,'Open gate still crosses entrance')
+    const opening = gateOnly.root.children.find(n => n.name.startsWith('hinge-1|'))!
+    const otherLeaf = gateOnly.root.children.find(n => n.name.startsWith('hinge-2|'))!
+    const post = gateOnly.root.children.find(n => !n.name.startsWith('hinge-'))!
+    const fixed = post.matrix.clone()
+    const track = [{...gate('vehicle',0,5),angle:90,pose:.25,pose_keys:[
+      {date:'2026-11-21T08:00:00Z',value:0},{date:'2026-11-21T10:00:00Z',value:1}]}]
+    const start = Date.parse(track[0].pose_keys[0].date)
+    gateOnly.setPose(track,start + 3600000)
+    const halfway = opening.matrix.clone()
+    check(Math.abs(halfway.elements[0]-Math.SQRT1_2)<1e-8,'Gate did not interpolate to 45 degrees')
+    check(Math.abs(otherLeaf.matrix.elements[2]+halfway.elements[2])<1e-8,'Vehicle hinges rotate in opposite directions')
+    gateOnly.setPose(track,start); gateOnly.root.updateMatrixWorld(true)
+    ray.set(new T.Vector3(1.15,1.0,3),new T.Vector3(0,0,-1));ray.far=6
+    check(opening.matrix.elements[0]===1,'Reverse scrub did not close the gate')
+    gateOnly.setPose(track,start+3600000);check(opening.matrix.equals(halfway),'Scrubbing is not repeatable')
+    gateOnly.setPose(track,null)
+    check(Math.abs(opening.matrix.elements[0]-Math.cos(Math.PI/8))<1e-8,'Rest pose did not survive outside playback')
+    check(post.matrix.equals(fixed),'Gatepost moved with the leaf')
     gateOnly.dispose()
+    const turn = example('mesh',[],2,[gate('turnstile',0,1.5)])
+    turn.up_axis='z'
+    const rotor = buildEnclosure(turn)
+    const arm = rotor.root.children.find(n=>n.name.startsWith('hinge-'))!
+    rotor.setPose([{...turn.enclosure!.openings[0],pose:0.5}],null)
+    check(Math.abs(arm.matrix.elements[0]-.5)<1e-8 && Math.abs(arm.matrix.elements[1]-Math.sqrt(3)/2)<1e-8,'Z-up turnstile did not rotate 60 degrees')
+    rotor.dispose()
     const panel=assembly.root.children.find(m=>m.name.startsWith('infill-')) as T.InstancedMesh
     check(panel.count===6&&assembly.root.children.length<12,'Repeated levels must share geometry')
     const sampleId=panel.userData.enclosureOwners[0]
@@ -125,7 +150,7 @@ export async function run(){
     }
     ;(window as any).enclosureProofs=images
     renderer.dispose()
-    return {passed:true,checks:['gate swing and clear opening','two-level instancing and selection','GLB board roundtrip','six open tower bridges','net and sheet loading','dark narrow controls','whole-site and close WebGL views']}
+    return {passed:true,checks:['gate swing and clear opening','hinge pivots, reverse seek, rest pose and Z-up turnstile travel','two-level instancing and selection','GLB board roundtrip','six open tower bridges','net and sheet loading','dark narrow controls','whole-site and close WebGL views']}
   }finally{
     live.unmount();viewport.remove();root.unmount();ui.remove();document.documentElement.classList.remove('dark')
     for(const part of [assembly,entrance,perimeter])part.dispose()

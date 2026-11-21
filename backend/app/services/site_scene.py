@@ -177,7 +177,8 @@ def fence_layout(item):
             cursor = end
             if config:
                 for level in levels:
-                    entrances.append({**cut, "level": level, "a": at(start, level), "b": at(end, level)})
+                    opening = {key: value for key, value in cut.items() if key != "pose_keys"}
+                    entrances.append({**opening, "level": level, "a": at(start, level), "b": at(end, level)})
         intervals.append((cursor, hi))
         for start, end in intervals:
             span = end - start

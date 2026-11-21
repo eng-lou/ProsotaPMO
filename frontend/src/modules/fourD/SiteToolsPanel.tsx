@@ -2,6 +2,7 @@ import { WorkSequencePanel } from './WorkSequencePanel'
 import { ClimbingFormworkPanel } from './ClimbingFormworkPanel'
 import { GROUND_FINISHES, REALISTIC_CLASS_LABELS } from './realisticMaterials'
 import { LightSettings, defaultSiteIllumination } from './LightSettings'
+import { GatePosePanel } from './GatePosePanel'
 import { AssetPartsPanel } from './AssetPartsPanel'
 import { splitSiteAsset } from './assetParts'
 import { loadSiteAsset } from './siteAssets'
@@ -265,6 +266,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
       <button className={button} disabled={busy} onClick={() => void update(chosen, { locked: !chosen.locked })}>{chosen.locked ? 'Unlock' : 'Lock'}</button>
       <button className={button} disabled={chosen.locked || busy} onClick={() => void update(chosen, null)}>Remove {chosen.name}</button>
     </div>}
+    {chosen?.enclosure?.openings.some(g=>g.kind!=='gap') && !edit && <GatePosePanel key={chosen.id} item={chosen} state={state} dateRef={timelineDateRef} format={timelineFormat} onSeek={onSeek}/>}
     {chosen && <p>Selected: {selected?.includes(':panel:') ? 'panel at ' + selected.split(':panel:')[1] + ' m' : chosen.name}. Use Frame Selected in the viewport.</p>}
     {scene.items.length>0&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.map(i=>i.id))}>Generate schedule from 3D objects…</button>}
     {chosen?.assembly_id&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.filter(i=>i.assembly_id===chosen.assembly_id).map(i=>i.id))}>Schedule this assembly’s parts…</button>}
@@ -282,6 +284,6 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
         onLink={(activityId, profileId) => onLink(chosen, activityId, profileId)} onUnlink={onUnlink} onAssignProfile={onAssignProfile} />
       {linkError && <p role="alert" className="text-red-600 dark:text-red-400">{linkError}</p>}
     </section>}
-    <p className="text-gray-500">Use the main Undo / Redo controls to reverse a saved operation.</p>
+    <p className="text-gray-500">{scene.history ? 'The last 10 saved site edits can be undone after reopening this project.' : 'Use the main Undo / Redo controls to reverse a saved operation.'}</p>
   </div>
 }

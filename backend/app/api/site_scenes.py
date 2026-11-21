@@ -1,5 +1,6 @@
 import hashlib
 import json
+from typing import Literal
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -12,7 +13,8 @@ from app.models.zone import Zone
 from app.models.activity import Activity
 from app.models.site_asset import SiteAsset
 from app.models.site_scene import SiteScene, SiteSceneCommand
-from app.schemas.site_scene import SiteItem, SceneEdit
+from app.schemas.site_scene import SiteItem, SceneEdit, HistoryEdit
+from app.services import site_history
 from app.services.clash_access import owned_project
 from app.services.site_scene import evaluate, zone_points
 
@@ -27,9 +29,25 @@ class StaleLayoutSource(HTTPException):
     """The stored boundary can render independently of its authoring path or zone."""
 
 
+def signature_opening(opening):
+    return {key: value for key, value in opening.items()
+            if not (key == "pose" and value is None or key == "pose_keys" and not value)}
+
+
 async def previously_saved_scene(db, project_id, revision, items, signature_data):
     receipts = select(SiteSceneCommand).where(SiteSceneCommand.project_id == project_id)
-    prior = await db.execute(receipts.where(SiteSceneCommand.before_removal_hash == fingerprint(items)).limit(1))
+    hashes = {fingerprint(items)}
+    # Receipts saved before gate poses did not include empty pose fields.
+    if any(item.get("enclosure") for item in items):
+        legacy = []
+        for item in items:
+            enclosure = item.get("enclosure")
+            if enclosure:
+                openings = [signature_opening(gate) for gate in enclosure["openings"]]
+                item = {**item, "enclosure": {**enclosure, "openings": openings}}
+            legacy.append(item)
+        hashes.add(fingerprint(legacy))
+    prior = await db.execute(receipts.where(SiteSceneCommand.before_removal_hash.in_(hashes)).limit(1))
     if prior.scalar_one_or_none() is not None:
         return True
     # Old browser tabs can retry their pending Undo after a backend deployment.
@@ -40,7 +58,21 @@ async def previously_saved_scene(db, project_id, revision, items, signature_data
 
 
 def result(row):
-    return {"revision": row.revision if row else 0, "items": [evaluate(i) for i in row.items] if row else []}
+    return {"revision": row.revision if row else 0, "items": [evaluate(i) for i in row.items] if row else [],
+            "history": site_history.summaries(row.history if row else None)}
+
+
+def pose_only(before, after):
+    if not before or not before.get("enclosure") or not after.get("enclosure"):
+        return False
+
+    def fixed(item):
+        enclosure = item["enclosure"]
+        openings = [{k: v for k, v in opening.items() if k not in ("pose", "pose_keys")}
+                    for opening in enclosure["openings"]]
+        return {**item, "enclosure": {**enclosure, "openings": openings}}
+
+    return fixed(before) == fixed(after)
 
 
 async def validate_item(db, project_id, item, references=None, *, restore_layout=False):
@@ -113,23 +145,21 @@ async def preview(project_id: UUID, item: SiteItem, db: AsyncSession = Depends(g
 @router.put("/{project_id}")
 async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
     await owned_project(db, project_id, user)
-    # Serialize initial creation and every command against the same parent row.
-    await db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
-    row = await db.get(SiteScene, project_id)
     signature_data = data.model_dump(mode="json")
+    if signature_data["label"] is None:
+        del signature_data["label"]
     # A retry sent across this release must match its pre-enclosure command.
     for recipe in signature_data["items"]:
+        if recipe.get("enclosure"):
+            enclosure = recipe["enclosure"]
+            enclosure["openings"] = [signature_opening(gate) for gate in enclosure["openings"]]
         for field in ("enclosure", "tower_cover"):
             if recipe[field] is None:
                 del recipe[field]
     signature = fingerprint(signature_data)
-    previous = await db.get(SiteSceneCommand, data.command_id)
-    if previous:
-        if previous.project_id != project_id or previous.request_hash != signature:
-            raise HTTPException(409, "Command ID already used for a different operation")
+    row, repeated = await checked_scene(db, project_id, data, signature)
+    if repeated:
         return result(row)
-    if (row.revision if row else 0) != data.expected_revision:
-        raise HTTPException(409, "Site scene changed. Reload before saving")
     old = {i["id"]: SiteItem.model_validate(i).model_dump(mode="json") for i in row.items} if row else {}
     items = [i.model_dump(mode="json") for i in data.items]
     references = {}
@@ -141,7 +171,7 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
         if before and before.get("locked") and encoded.get("locked"):
             raise HTTPException(409, "Unlock this object before changing it")
         try:
-            await validate_item(db, project_id, item, references)
+            await validate_item(db, project_id, item, references, restore_layout=pose_only(before, encoded))
         except StaleLayoutSource:
             if before is not None or not row:
                 raise
@@ -160,9 +190,46 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
     if not row:
         row = SiteScene(project_id=project_id, revision=0, items=[])
         db.add(row)
+    row.history = site_history.record(row.history, data.command_id, data.label, row.items, items)
     row.items = items
     row.revision += 1
     db.add(SiteSceneCommand(id=data.command_id, project_id=project_id, request_hash=signature, revision=row.revision,
                             before_removal_hash=fingerprint(list(old.values())) if old.keys() - new_ids else None))
+    await db.commit()
+    return result(row)
+
+
+async def checked_scene(db, project_id, data, signature):
+    await db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+    row = await db.get(SiteScene, project_id)
+    receipt = await db.get(SiteSceneCommand, data.command_id)
+    if receipt:
+        if receipt.project_id != project_id or receipt.request_hash != signature:
+            raise HTTPException(409, "Command ID already used for a different operation")
+        return row, True
+    if (row.revision if row else 0) != data.expected_revision:
+        raise HTTPException(409, "Site scene changed. Reload the site objects before continuing.")
+    return row, False
+
+
+@router.post("/{project_id}/history/{direction}")
+async def travel(project_id: UUID, direction: Literal["undo", "redo"], data: HistoryEdit,
+                 db: AsyncSession = Depends(get_db), user=Depends(get_db_user)):
+    await owned_project(db, project_id, user)
+    signature = fingerprint({"operation": direction, **data.model_dump(mode="json")})
+    row, repeated = await checked_scene(db, project_id, data, signature)
+    if repeated:
+        return result(row)
+    if not row:
+        raise HTTPException(409, "There are no saved site edits for this project.")
+    try:
+        items, history = site_history.replay(row.history, row.items, data.action_id, direction)
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    # Only database-held recipes, previously saved in this project, can reach here.
+    row.items, row.history = items, history
+    row.revision += 1
+    db.add(SiteSceneCommand(id=data.command_id, project_id=project_id,
+                            request_hash=signature, revision=row.revision))
     await db.commit()
     return result(row)

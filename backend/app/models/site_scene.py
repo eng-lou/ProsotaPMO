@@ -11,6 +11,7 @@ class SiteScene(Base):
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     items: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    history: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class SiteSceneCommand(Base):

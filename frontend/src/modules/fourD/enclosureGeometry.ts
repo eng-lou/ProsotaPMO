@@ -1,9 +1,11 @@
 import * as T from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import type { SiteItem } from './siteScene'
+import { gateTrack } from './gatePose'
+import type { FenceOpening, SiteItem } from './siteScene'
 import type { PathPoint } from './paths'
 
-type Batch = { geometry:T.BufferGeometry; material:T.MeshStandardMaterial; matrices:T.Matrix4[]; owners:string[] }
+type Pivot = { origin: T.Matrix4; station: number; sign: number; meshes: T.InstancedMesh[]; lastAngle: number }
+type Batch = { pivot?: Pivot; geometry:T.BufferGeometry; material:T.MeshStandardMaterial; matrices:T.Matrix4[]; owners:string[] }
 type Finish = 'paint'|'zinc'|'dark'|'board'|'amber'|'white'
 const finishes: Record<Exclude<Finish,'paint'>, string> = {zinc:'#adbbbc',dark:'#354249',board:'#d6a641',amber:'#ff9b14',white:'#eeeccf'}
 
@@ -49,6 +51,15 @@ export function buildEnclosure(item:SiteItem) {
   const basis=new T.Matrix4(), local=new T.Matrix4(), position=new T.Vector3(), size=new T.Vector3()
   const quaternion=new T.Quaternion(), identity=new T.Quaternion(), hinge=new T.Matrix4(), base=new T.Matrix4()
   const point=(p:PathPoint)=>new T.Vector3(p.x,p.y,p.z)
+  const pivots: Pivot[] = []
+  let moving: Pivot | undefined
+  function startPivot(station: number, x: number, sign: number) {
+    moving = {origin: new T.Matrix4().multiplyMatrices(basis, hinge.makeTranslation(x,0,0)),
+      station, sign, meshes: [], lastAngle: NaN}
+    pivots.push(moving)
+    base.identity()
+  }
+  function endPivot() { moving = undefined; base.copy(basis) }
   let owner=item.id
   function frame(a:PathPoint,b:PathPoint) {
     const from=point(a),delta=point(b).sub(from),length=delta.length()
@@ -59,10 +70,10 @@ export function buildEnclosure(item:SiteItem) {
   }
   function part(g:keyof typeof geometries,finish:string,x:number,y:number,z:number,w:number,h:number,d:number,q=identity) {
     if(Math.min(w,h,d)<=0) return
-    const key=g+'|'+finish
+    const key=(moving ? 'hinge-'+pivots.length+'|' : '')+g+'|'+finish
     let batch=batches.get(key)
     if(!batch) {
-      batch={geometry:geometries[g],material:materials.get(finish)!,matrices:[],owners:[]}
+      batch={pivot:moving,geometry:geometries[g],material:materials.get(finish)!,matrices:[],owners:[]}
       batches.set(key,batch)
     }
     local.compose(position.set(x,y,z),q,size.set(w,h,d))
@@ -176,11 +187,13 @@ export function buildEnclosure(item:SiteItem) {
         for(const z of [-.45,-.25,0,.25,.45])part('round','zinc',x,1.12,z,.019,2.2,.019)
       }
       part('round','zinc',mid,1.1,0,.11,2.18,.11)
+      startPivot(gate.start,mid,1)
       for(let arm=0;arm<3;arm++){
         const angle=arm*2*Math.PI/3
         quaternion.setFromAxisAngle(new T.Vector3(0,1,0),angle)
-        for(let row=0;row<7;row++)part('box','zinc',mid+Math.cos(angle)*rad/2,.34+row*.235,-Math.sin(angle)*rad/2,rad,.028,.033,quaternion)
+        for(let row=0;row<7;row++)part('box','zinc',Math.cos(angle)*rad/2,.34+row*.235,-Math.sin(angle)*rad/2,rad,.028,.033,quaternion)
       }
+      endPivot()
       box('dark',.09,1.05,.67,.13,.24,.09);box('amber',.09,1.1,.721,.065,.025,.009)
       addEntranceBoard(gate.board,true,mid,2.42,.695,Math.min(span-.1,.94))
     } else {
@@ -188,8 +201,7 @@ export function buildEnclosure(item:SiteItem) {
       const width=(span-.25)/leaves-.016
       for(let i=0;i<leaves;i++) {
         const right=i===1,sign=right?-1:1,pivot=right?span-.125:.125
-        hinge.makeRotationY((right?1:-1)*gate.angle*Math.PI/180).setPosition(pivot,0,0)
-        base.multiplyMatrices(basis,hinge)
+        startPivot(gate.start,pivot,right?1:-1)
         const centre=sign*width/2
         framedMesh(centre,.13,top-.045,width,'paint',0,.048)
         if(config.style==='hoarding') {
@@ -202,19 +214,52 @@ export function buildEnclosure(item:SiteItem) {
         box('zinc',sign*(width-.12),.99,.048,.16,.025,.045)
         if(leaves===2)box('dark',sign*(width-.06),.21,-.04,.024,.31,.024)
       }
-      base.copy(basis)
+      endPivot()
     }
   }
   for(const [key,batch] of batches){
     const mesh=new T.InstancedMesh(batch.geometry,batch.material,batch.matrices.length)
     mesh.name=key;mesh.userData.enclosureOwners=batch.owners
+    if(batch.pivot) { batch.pivot.meshes.push(mesh); mesh.matrixAutoUpdate=false }
     batch.matrices.forEach((matrix,i)=>mesh.setMatrixAt(i,matrix))
     mesh.castShadow=true;mesh.receiveShadow=true;mesh.computeBoundingSphere()
     // Static exports should retain authored finishes when a panel is highlighted.
     batch.material.userData.exportInstanceColour='#ffffff'
     root.add(mesh)
   }
-  return {root,dispose(){
+  let lastOpenings: FenceOpening[] | undefined
+  let lastTime: number | null | undefined
+  const tracks = new Map<number, {travel: number; angle: number; sample: ReturnType<typeof gateTrack>}>()
+  let animated = false
+  function setPose(openings: FenceOpening[], time: number | null) {
+    if (openings === lastOpenings && (!animated || lastTime === time)) return
+    if (openings !== lastOpenings) {
+      tracks.clear()
+      animated = openings.some(gate => gate.pose_keys?.length)
+      for (const gate of openings) {
+        if (gate.kind !== 'gap') tracks.set(gate.start, {
+          travel: (gate.kind === 'turnstile' ? 120 : gate.angle || 90) * Math.PI / 180, angle: 0, sample: gateTrack(gate),
+        })
+      }
+      lastOpenings = openings
+    }
+    lastTime = time
+    for (const track of tracks.values()) track.angle = track.travel * track.sample(time)
+    for (const pivot of pivots) {
+      const track = tracks.get(pivot.station)
+      if (!track) continue
+      const angle = pivot.sign * track.angle
+      if (pivot.lastAngle === angle) continue
+      pivot.lastAngle = angle
+      hinge.makeRotationY(angle)
+      for (const mesh of pivot.meshes) {
+        mesh.matrix.multiplyMatrices(pivot.origin,hinge)
+        mesh.matrixWorldNeedsUpdate=true
+      }
+    }
+  }
+  setPose(config.openings,null)
+  return {root,setPose,dispose(){
     for(const mesh of root.children as T.InstancedMesh[])mesh.dispose()
     Object.values(geometries).forEach(g=>g.dispose())
     boardMaps.forEach(texture=>texture.dispose())
