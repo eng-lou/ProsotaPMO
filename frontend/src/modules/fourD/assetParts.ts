@@ -54,6 +54,7 @@ export function siteAssetPlacement(item:SiteItem){
 }
 export function splitSiteAsset(item:SiteItem,root:THREE.Object3D,mode:'groups'|'meshes'='groups'):SiteItem[]{
   if(item.kind!=='asset'||!item.asset_id||item.asset_part)throw Error('Select a complete imported asset.')
+  if(item.tower_cover)throw Error('Switch the access tower cover to Bare before extracting parts, or import a covered GLB to extract the fabric as a part.')
   if(item.locked||item.path_motion)throw Error('Unlock the assembly and remove its movement path before extracting parts.')
   if(item.attachment||item.motion_actions?.length)throw Error('Remove timed actions and attachments before extracting construction parts.')
   const parts=inspectAssetParts(root,mode)

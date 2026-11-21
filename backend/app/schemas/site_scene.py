@@ -144,6 +144,46 @@ class SiteSectionBox(BaseModel):
     visible: bool = True
 
 
+class FenceOpening(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    kind: Literal["gap", "vehicle", "pedestrian", "turnstile"]
+    start: float = Field(ge=0, le=100000)
+    width: float = Field(gt=0, le=30)
+    angle: float = Field(default=0, ge=-110, le=110)
+    board: str = Field(default="", max_length=48)
+    lights: bool = False
+
+    @model_validator(mode="after")
+    def usable_width(self):
+        minimum = {"gap": 0, "vehicle": 2, "pedestrian": 0.7, "turnstile": 1.2}[self.kind]
+        if self.width < minimum:
+            raise ValueError(f"A {self.kind} entrance needs at least {minimum:g} m in this model")
+        return self
+
+
+class FenceEnclosure(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    style: Literal["plain", "edge", "mesh", "hoarding"] = "edge"
+    openings: list[FenceOpening] = Field(default_factory=list, max_length=32)
+    levels: list[float] = Field(default_factory=lambda: [0], min_length=1, max_length=64)
+    perimeter_lights: bool = False
+
+    @model_validator(mode="after")
+    def distinct_levels(self):
+        if len(set(self.levels)) != len(self.levels) or any(abs(n) > 2000 for n in self.levels):
+            raise ValueError("Use distinct level offsets within 2,000 m of the source path")
+        return self
+
+
+class TowerCover(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    style: Literal["netted", "sheeted"]
+    width: float = Field(default=3.16, gt=0, le=100)
+    depth: float = Field(default=2.86, gt=0, le=100)
+    height: float = Field(default=19.2, gt=0, le=500)
+    offset: Point = Field(default_factory=lambda: Point(x=0, y=0, z=0))
+
+
 class SiteItem(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     id: UUID
@@ -196,6 +236,8 @@ class SiteItem(BaseModel):
     placement_kind: Literal["tree", "person", "cabin", "context", "arrow", "asset"] = "tree"
     points: list[RoutePoint] = Field(default_factory=list, max_length=512)
     closed: bool = False
+    enclosure: FenceEnclosure | None = None
+    tower_cover: TowerCover | None = None
     module_length: float = Field(default=2, ge=0.1, le=20)
     gate_start: float = Field(default=0, ge=0, le=100000)
     gate_width: float = Field(default=0, ge=0, le=30)
@@ -233,6 +275,10 @@ class SiteItem(BaseModel):
             raise ValueError('Load open geographic data before saving context')
         if self.kind == "asset" and not self.asset_id:
             raise ValueError("Choose a library asset")
+        if self.enclosure and self.kind != "fence":
+            raise ValueError("Enclosure settings require a fence")
+        if self.tower_cover and (self.kind != "asset" or self.asset_part):
+            raise ValueError("A tower cover requires a complete imported asset")
         if self.kind == "fence" and (not self.path_id or len(self.points) < 2):
             raise ValueError("Choose an existing path with at least two points")
         if self.kind in ("shape", "array", "scatter"):

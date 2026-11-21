@@ -24,6 +24,7 @@ import { recipe, siteError, type SiteItem, type useSiteScene } from './siteScene
 import { SiteAnimationControls } from './SiteAnimationControls'
 import { WorkerActionsPanel } from './WorkerActionsPanel'
 import type { TimelineFormat } from './TimelinePointInput'
+import { FenceSettings, TowerCoverSettings, fencePresets } from './EnclosureSettings'
 import { SiteAssetLibrary } from './SiteAssetLibrary'
 import { useSiteAssetInventory, importSiteAsset, type SiteAsset } from './siteAssets'
 import { ElementLinkFields } from './ElementLinkFields'
@@ -104,6 +105,10 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     const item: SiteItem = { id: crypto.randomUUID(), kind, ...presets[kind], generator_version: 1, up_axis: upAxis, units: 'm',
       position: { x: 0, y: 0, z: 0 }, yaw: 0, locked: false, activity_id: null, path_id: null,
       points: [], closed: false, module_length: 2, gate_start: 4, gate_width: 0, spacing:3, count:20, seed:1, placement_kind:'tree', panel_fit:'fit' }
+    if (kind === 'fence') {
+      const {color,height,module_length} = fencePresets.edge
+      Object.assign(item,{color,height,module_length,enclosure:{style:'edge',openings:[],levels:[0],perimeter_lights:false}})
+    }
     if (kind === 'light') {
       item.name = 'Spot light'
       item.illumination = defaultSiteIllumination('spot')
@@ -204,6 +209,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     {!library && !edit && <><p>Place site object</p><div className="grid grid-cols-2 gap-1">{Object.entries(presets).map(([kind, value]) => <button key={kind} className={button} disabled={!state.ready || busy} onClick={() => start(kind as Exclude<SiteItem['kind'], 'asset'|'geographic'>)}>+ {value.name}</button>)}</div>{inventory.assets.some(a=>a.category==='Fences') && <button className={button} onClick={()=>startShape('fence')}>Draw fence run from path</button>}</>}
     {!edit && <ShapeOperationsPanel projectId={projectId} upAxis={upAxis} sources={sceneSources.filter(s=>!scene.items.some(i=>i.kind==='geographic'&&s.id==='site:'+i.id))} state={state} selectedSources={shapeSources} hideSources={hideShapeSources}/> }
     {edit && <div className="space-y-2 border-t pt-2 dark:border-prosota-line">
+      {edit.kind==='asset'&&!edit.asset_part&&<TowerCoverSettings item={edit} change={change}/>}
       {edit.kind==='asset'&&!edit.asset_part&&<label className="flex gap-2"><input type="checkbox" checked={placeAsParts} onChange={e=>setPlaceAsParts(e.target.checked)}/>Save as independent construction parts</label>}
       <label>Name<input className={input} value={edit.name} onChange={e => change({ name: e.target.value })} /></label>
       {edit.kind==='geographic' && edit.geographic ? <GeographicEditor data={edit.geographic} onChange={geographic=>change({geographic})}/> : ['fence','shape','array','scatter'].includes(edit.kind) ? <>
@@ -224,8 +230,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
           {edit.kind==='scatter'?<>{number('Object count','count')}{number('Random seed','seed')}<label><input type="checkbox" checked={edit.random_rotation!==false} onChange={e=>change({random_rotation:e.target.checked})} /> Random rotation</label></>:<label><input type="checkbox" checked={edit.align_to_path!==false} onChange={e=>change({align_to_path:e.target.checked})} /> Align to path</label>}
           <div className="grid grid-cols-2 gap-2">{number('Width (m)','width')}{number('Depth (m)','depth')}{number('Height (m)','height')}{number('Heading offset (°)','yaw')}</div>
         </>}
-        {edit.kind==='fence' && <><label>Panel fitting<select className={input} value={edit.panel_fit || 'fit'} onChange={e=>change({panel_fit:e.target.value as SiteItem['panel_fit']})}><option value="fit">Fit equal panels to each span</option><option value="trim">Trim the final panel</option><option value="strict">Whole panels only</option></select></label>
-        <div className="grid grid-cols-2 gap-2">{number('Panel length (m)', 'module_length')}{number('Height (m)', 'height')}{number('Gate start (m)', 'gate_start')}{number('Gate opening (m)', 'gate_width')}</div></>}
+        {edit.kind==='fence' && <FenceSettings item={edit} change={change}/>}
       </> : <>
         <button className={`${button} w-full bg-blue-600 text-white`} disabled={!confirmed || busy} onClick={beginPlacement}>{state.placing ? 'Click a surface to place' : 'Place in viewport'}</button>
         {state.placing && <p className="rounded bg-blue-50 text-blue-800 p-2">Move to preview · click to position · right-drag to navigate · Esc to cancel</p>}
@@ -242,7 +247,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
       {edit.activity_id && <label>Previous visibility setting<select className={input} value={edit.activity_id} onChange={e => change({ activity_id: e.target.value || null })}><option value="">Clear setting</option>{activities.filter(a => a.start && a.finish).map(a => <option value={a.id} key={a.id}>{a.code} · {a.task_name}</option>)}</select><span className="block">Activity links and profiles take precedence.</span></label>}
       {edit.kind !== 'light' && <label className="flex gap-2"><input type="checkbox" checked={confirmed} onChange={e => { generation.current++; sequence.current?.abort(); setPreviewing(false); setConfirmed(e.target.checked); setDraft(null); state.setPlacing(false) }} />Model coordinates are in metres</label>}
       <div className="flex gap-2">{edit.kind !== 'light' && <button className={button} disabled={!confirmed || busy || previewing || capturing || state.placing} onClick={() => void preview()}>{previewing ? 'Preparing…' : 'Preview'}</button>}<button className={`${button} bg-blue-600 text-white`} disabled={!draft || busy || state.placing || previewing || capturing} onClick={() => void commit()}>Save</button><button className={button} disabled={busy} onClick={cancel}>Cancel</button></div>
-      {draft?.layout?.panels && <p>{draft.layout.panel_count} panels · {draft.layout.length?.toFixed(2)} m run · {draft.layout.gate_width?.toFixed(2)} m gate opening</p>}
+      {draft?.layout?.panels && <p>{draft.layout.panel_count} panels · {draft.layout.length?.toFixed(2)} m run · {draft.layout.gate_width?.toFixed(2)} m openings per level</p>}
     </div>}
     {draft?.layout?.placements && <p>{draft.layout.count} objects prepared</p>}
     {error && <p role="alert" className="text-red-600 dark:text-red-400">{error}</p>}

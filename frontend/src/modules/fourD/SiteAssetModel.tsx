@@ -1,3 +1,6 @@
+import { Suspense } from 'react'
+import { TowerWrap } from './TowerWrap'
+import type { TowerCover } from './siteScene'
 import { useContextDetail } from './useContextDetail'
 import { setImportedLightsEnabled } from './importedLights'
 import { bindAnimationShadows } from './animationRendering'
@@ -21,7 +24,7 @@ import type { AssetPart } from './assetParts'
 import { applySiteTextureCutout, applySiteSurfaceOpacity, siteMaterialSlots, siteMaterialLook } from './siteAssetMaterials'
 import { disposeRealisticVariant, type RealisticMaterialMap } from './realisticMaterials'
 
-export function SiteAssetModel({ showStatus = true, adaptiveDetail = false, captureDetail = false, id, part, preview = false, selected = false, fit = false, mapping, importedLights = true, transmission = false, onLoaded, textures, opacity, playing=true, clip=0, speed=1, motionTime, pathBound=false, actions=[], actionDateRef, daysPerSecond=1 }: { showStatus?: boolean; adaptiveDetail?: boolean; captureDetail?: boolean; actions?:WorkerAction[]; actionDateRef?:React.MutableRefObject<Date|null>; daysPerSecond?:number; part?: AssetPart | null; pathBound?: boolean; motionTime?: React.MutableRefObject<number|null>; playing?:boolean; clip?:number; speed?:number; textures?:CustomTextureSet; opacity?:number; id: string; preview?: boolean; selected?: boolean; fit?: boolean; mapping?: RealisticMaterialMap; importedLights?: boolean; transmission?: boolean; onLoaded?(): void }) {
+export function SiteAssetModel({ cover, showStatus = true, adaptiveDetail = false, captureDetail = false, id, part, preview = false, selected = false, fit = false, mapping, importedLights = true, transmission = false, onLoaded, textures, opacity, playing=true, clip=0, speed=1, motionTime, pathBound=false, actions=[], actionDateRef, daysPerSecond=1 }: { cover?: TowerCover | null; showStatus?: boolean; adaptiveDetail?: boolean; captureDetail?: boolean; actions?:WorkerAction[]; actionDateRef?:React.MutableRefObject<Date|null>; daysPerSecond?:number; part?: AssetPart | null; pathBound?: boolean; motionTime?: React.MutableRefObject<number|null>; playing?:boolean; clip?:number; speed?:number; textures?:CustomTextureSet; opacity?:number; id: string; preview?: boolean; selected?: boolean; fit?: boolean; mapping?: RealisticMaterialMap; importedLights?: boolean; transmission?: boolean; onLoaded?(): void }) {
   const [object, setObject] = useState<THREE.Object3D | null>(null)
   useLayoutEffect(() => {
     if (!object || importedLights) return
@@ -111,7 +114,7 @@ export function SiteAssetModel({ showStatus = true, adaptiveDetail = false, capt
     }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : 'Asset unavailable') })
     return () => { active = false; materials.forEach(material => { disposeRealisticVariant(material); material.dispose() }) }
   }, [id, JSON.stringify(part), preview, selected, mapping, transmission, textures, opacity, retry])
-  return object ? <><group position={pathAnchor}><primitive object={object} dispose={null} /></group>{fit && <FitAsset object={object} />}</> : <group>
+  return object ? <><group position={pathAnchor}><primitive object={object} dispose={null} />{cover && !part && <Suspense fallback={null}><TowerWrap cover={cover} asset={object} opacity={preview ? .45 : opacity} onLoaded={onLoaded}/></Suspense>}</group>{fit && <FitAsset object={object} />}</> : <group>
     <mesh position={[0, .5, 0]}><boxGeometry /><meshBasicMaterial color={error ? '#ef4444' : '#94a3b8'} wireframe /></mesh>
     {showStatus && (selected || preview || fit) && <Html center position={[0, 1.1, 0]}>
       <div className="bg-white text-slate-800 px-2 py-1 text-xs rounded shadow max-w-64" onPointerDown={event => event.stopPropagation()}>

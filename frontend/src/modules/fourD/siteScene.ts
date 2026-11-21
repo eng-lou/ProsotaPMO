@@ -13,7 +13,21 @@ export interface SiteObjectState {
 }
 export interface SitePathKey { date: string; progress: number; interpolation: 'linear' | 'smooth' | 'hold' }
 export interface PathMotion { activity_id?: string | null; bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
+export type FenceStyle = 'plain' | 'edge' | 'mesh' | 'hoarding'
+export interface FenceOpening {
+  kind: 'gap' | 'vehicle' | 'pedestrian' | 'turnstile'
+  start: number; width: number; angle: number; board: string; lights: boolean
+}
+export interface Enclosure {
+  style: FenceStyle; openings: FenceOpening[]; levels: number[]; perimeter_lights: boolean
+}
+export interface TowerCover {
+  style: 'netted' | 'sheeted'; width: number; depth: number; height: number
+  offset: { x: number; y: number; z: number }
+}
 export interface SiteItem {
+  enclosure?: Enclosure | null
+  tower_cover?: TowerCover | null
   work_sequence?: import("./workSequence").WorkSequence | null
   climbing_formwork?: import("./climbingFormwork").ClimbingFormwork | null
   load_handling?: import("./loadHandling").LoadHandling | null
@@ -41,7 +55,7 @@ export interface SiteItem {
   zone_id?: string | null; curve_mode?: 'straight'|'curved'; panel_fit?: 'fit'|'trim'|'strict'
   tag?: string; finish?: 'default'|'water'|GroundFinish; spacing?: number; count?: number; seed?: number
   placement_kind?: 'tree'|'person'|'context'|'cabin'|'arrow'|'asset'; align_to_path?: boolean; random_rotation?: boolean
-  layout?: { footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
+  layout?: { openings?: (FenceOpening & { a: PathPoint; b: PathPoint; level: number })[]; footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
 }
 export interface SiteScene { revision: number; items: SiteItem[] }
 export interface SiteIllumination {

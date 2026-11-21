@@ -90,7 +90,13 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
     # Serialize initial creation and every command against the same parent row.
     await db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     row = await db.get(SiteScene, project_id)
-    signature = hashlib.sha256(json.dumps(data.model_dump(mode="json"), sort_keys=True).encode()).hexdigest()
+    signature_data = data.model_dump(mode="json")
+    # A retry sent across this release must match its pre-enclosure command.
+    for recipe in signature_data["items"]:
+        for field in ("enclosure", "tower_cover"):
+            if recipe[field] is None:
+                del recipe[field]
+    signature = hashlib.sha256(json.dumps(signature_data, sort_keys=True).encode()).hexdigest()
     previous = await db.get(SiteSceneCommand, data.command_id)
     if previous:
         if previous.project_id != project_id or previous.request_hash != signature:

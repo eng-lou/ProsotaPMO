@@ -7,9 +7,58 @@ import math
 import random
 
 
+def enclosure_path(item):
+    """Retain authored corners and the straight/curved provenance of each chord."""
+    controls = item["points"]
+    sampled = sample_path(item)
+    closed = item.get("closed", False)
+    if closed:
+        sampled.append(sampled[0])
+    points, curved_edges = [sampled[0]], []
+    cursor = 0
+    for i in range(len(controls) if closed else len(controls) - 1):
+        dest = controls[(i + 1) % len(controls)]
+        curved = (dest.get("segment_mode") or item.get("curve_mode", "straight")) == "curved"
+        edges = (24 if dest.get("segment_controls") else 16) if curved else 1
+        section = sampled[cursor:cursor + edges + 1]
+        cursor += edges
+        if curved and len(controls) == 2 and not dest.get("segment_controls") and not closed:
+            curved = False
+        if not curved:
+            if curved_edges and not curved_edges[-1]:
+                first, middle, last = points[-2], points[-1], section[-1]
+                before = [middle[k] - first[k] for k in "xyz"]
+                after = [last[k] - middle[k] for k in "xyz"]
+                lengths = math.hypot(*before) * math.hypot(*after)
+                if lengths and math.isclose(sum(a*b for a,b in zip(before, after)), lengths, rel_tol=1e-13):
+                    points[-1] = last
+                    continue
+            points.append(section[-1])
+            curved_edges.append(False)
+            continue
+        lengths = [math.dist([a[k] for k in "xyz"], [b[k] for k in "xyz"]) for a,b in zip(section, section[1:])]
+        length = sum(lengths)
+        count = max(1, math.ceil(length / item["module_length"]))
+        if count + len(curved_edges) > 2000:
+            raise ValueError("Limit this fence to 2,000 panels.")
+        j, distance = 0, 0
+        for n in range(1, count + 1):
+            station = length * n / count
+            while j < len(lengths) - 1 and distance + lengths[j] < station:
+                distance += lengths[j]
+                j += 1
+            t = (station - distance) / lengths[j] if lengths[j] else 0
+            points.append(section[-1] if n == count else {k: section[j][k] + t*(section[j+1][k]-section[j][k]) for k in "xyz"})
+            curved_edges.append(True)
+    return points, curved_edges
+
+
 def fence_layout(item):
-    points = sample_path(item)
-    if (item.get('curve_mode') == 'curved' or any(p.get('segment_mode') == 'curved' for p in item['points'])) and len(points)>2:
+    if item.get("enclosure"):
+        points, curved_edges = enclosure_path(item)
+    else:
+        points = sample_path(item)
+    if not item.get("enclosure") and (item.get('curve_mode') == 'curved' or any(p.get('segment_mode') == 'curved' for p in item['points'])) and len(points)>2:
         # Follow the curve with practical panel-length chords, not one panel per tessellation edge.
         route=points+([points[0]] if item.get('closed') else [])
         lengths=[math.dist([a[k] for k in 'xyz'],[b[k] for k in 'xyz']) for a,b in zip(route,route[1:])]
@@ -49,35 +98,68 @@ def fence_layout(item):
             raise ValueError("Remove repeated path points before generating a fence.")
         segments.append((a, b, chainage, chainage + length))
         chainage += length
-    gs, gw = item["gate_start"], item["gate_width"]
-    ge = gs + gw
-    if gw and ge > chainage + 1e-6:
-        raise ValueError("The gate opening extends beyond the path.")
-    if gw and not any(gs >= lo - 1e-6 and ge <= hi + 1e-6 for _, _, lo, hi in segments):
-        raise ValueError("Place the gate opening within one straight segment, not across a corner.")
-    panels = []
-    module = item["module_length"]
-    for a, b, lo, hi in segments:
-        intervals = [(lo, hi)]
-        if gw and gs < hi and ge > lo:
-            intervals = [(lo, max(lo, gs)), (min(hi, ge), hi)]
+    config = item.get("enclosure")
+    levels = config["levels"] if config else [0]
+    if config:
+        openings = sorted(config["openings"], key=lambda entry: entry["start"])
+    elif item["gate_width"]:
+        openings = [dict(kind="gap", start=item["gate_start"], width=item["gate_width"])]
+    else:
+        openings = []
+
+    spans = [[] for _ in segments]
+    previous_end = 0
+    for opening in openings:
+        start, end = opening["start"], opening["start"] + opening["width"]
+        if start < previous_end - 1e-8:
+            raise ValueError("Fence openings overlap. Adjust the start or width.")
+        if end > chainage + 1e-8:
+            raise ValueError("The gate opening extends beyond the path.")
+        index = next((i for i, (_, _, lo, hi) in enumerate(segments)
+                      if start >= lo - 1e-8 and end <= hi + 1e-8), None)
+        if index is None or (config and curved_edges[index]):
+            raise ValueError("Place each opening on one straight segment, clear of any curve or corner.")
+        spans[index].append(opening)
+        previous_end = end
+
+    panels, entrances = [], []
+    module, fit = item["module_length"], item.get("panel_fit", "fit")
+    for (a, b, lo, hi), cuts in zip(segments, spans):
+        def at(station, level):
+            t = (station - lo) / (hi - lo)
+            return {k: a[k] + (b[k] - a[k]) * t + (level if k == up else 0) for k in "xyz"}
+
+        intervals, cursor = [], lo
+        for cut in cuts:
+            start, end = cut["start"], cut["start"] + cut["width"]
+            intervals.append((cursor, start))
+            cursor = end
+            if config:
+                for level in levels:
+                    entrances.append({**cut, "level": level, "a": at(start, level), "b": at(end, level)})
+        intervals.append((cursor, hi))
         for start, end in intervals:
             span = end - start
-            if span < 1e-6: continue
-            fit = item.get("panel_fit", "fit")
+            if span < 1e-6:
+                continue
             count = max(1, math.ceil(span / module - 1e-9)) if fit != "strict" else round(span / module)
+            if fit == "strict" and (count < 1 or abs(span - count * module) > 0.001):
+                raise ValueError(f"Unresolved span of {span:.3f} m. Each straight span beside a gate must fit whole {module:g} m panels.")
+            if len(panels) + count * len(levels) > 2000:
+                raise ValueError("Limit this fence to 2,000 panels across all levels.")
             step = span / count if fit == "fit" else module
-            if fit == "strict" and abs(span - count * module) > 0.001:
-                raise ValueError(f"Unresolved span of {end-start:.3f} m. Each straight span beside a gate must fit whole {module:g} m panels.")
-            if len(panels) + count > 2000:
-                raise ValueError("Limit this fence to 2,000 panels.")
-            for n in range(count):
-                station = start + n * step
-                def at(distance):
-                    t = (distance - lo) / (hi - lo)
-                    return {k: a[k] + (b[k] - a[k]) * t for k in "xyz"}
-                panels.append({"id": f"{item['id']}:panel:{station:.6f}", "a": at(station), "b": at(min(end, station + step))})
-    return {"panels": panels, "length": chainage, "panel_count": len(panels), "gate_width": gw}
+            for level in levels:
+                for n in range(count):
+                    station = start + n * step
+                    panel_id = f"{item['id']}:panel:{station:.6f}"
+                    if level:
+                        panel_id += f"@{level}"
+                    panels.append({"id": panel_id, "a": at(station, level), "b": at(min(end, station + step), level)})
+    layout = {"panels": panels, "length": chainage, "panel_count": len(panels),
+              "gate_width": sum(cut["width"] for cut in openings)}
+    if config:
+        layout["openings"] = entrances
+    return layout
 
 
 def evaluate(item):

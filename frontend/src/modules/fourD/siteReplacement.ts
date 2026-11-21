@@ -28,7 +28,7 @@ export function replaceSiteObjects(items:SiteItem[],selection:ReplacementSelecti
     }
     if(item.kind==='geographic'||!(all?templateKey(item)===key:item.id===selected.id))return item
     if(item.locked){locked++;return item}count++
-    return {...item,kind:'asset' as const,asset_id:asset.id,asset_part:null,name:asset.name,geographic:null,...(fit?{}:asset.dimensions),color:'#ffffff',object_state:null,path_motion:null,motion_actions:[],attachment:null,animation_playing:false,animation_clip:0,animation_speed:1,rig_disabled:true,instance_overrides:{},path_id:null,zone_id:null,points:[],closed:false}
+    return {...item,kind:'asset' as const,asset_id:asset.id,asset_part:null,enclosure:null,tower_cover:null,name:asset.name,geographic:null,...(fit?{}:asset.dimensions),color:'#ffffff',object_state:null,path_motion:null,motion_actions:[],attachment:null,animation_playing:false,animation_clip:0,animation_speed:1,rig_disabled:true,instance_overrides:{},path_id:null,zone_id:null,points:[],closed:false}
   })
   const replaced=new Set(next.filter((n,i)=>n.asset_id!==items[i].asset_id).map(i=>i.id))
   return {items:next.map(i=>i.attachment&&replaced.has(i.attachment.parent_id)?{...i,attachment:null}:i),count,locked}

@@ -9244,3 +9244,11 @@ Publication status: git staging could not create the worktree index lock. Elevat
 - Added rigging editor, sagging slack visuals, per-hook rings and world-pose release. Secondary carriers participate in schema graph/missing-reference checks. Existing simple attachment modes remain available.
 - Validation: 16 frontend solver/attachment tests, nine backend schema tests, real viewport two-crane motion/reverse/release and editor save fixture, production TypeScript/Vite build.
 - Limits: quasi-static approximate equilibrium, bounds-derived mass centre/contact, nonunique multi-leg force distributions; no dynamic sway, detailed collision, or crane load-chart evaluation.
+
+
+## 2026-11-21 - Fencing, site entrances and access tower covers
+
+- Fit instanced framed panels to the remaining straight spans after subtracting sorted openings. Keep corners and curve boundaries and validate overlap, chainage and the combined per-fence panel count across level offsets. Legacy recipes retain the single-gap layout and renderer.
+- Use physical mesh, shoes, sockets and toe boards for slab edges, weighted feet for perimeter mesh, and capped panels for hoarding. Gate leaves, boards, hardware and lights share the hinge frame. The rotating-arm turnstile is a fixed visual assembly.
+- Mount the detachable net or sheet in the same normalised asset frame as the imported tower. Cache cover geometry and own each placement’s materials. Export complete covered GLBs by appending the cover to the original source buffers. Preserve the bridges, six landing openings, cage nodes and animation tracks.
+- Verified six enclosure backend tests, browser checks for the real wrap and fence components, gate swing, bridge clearance, level instancing, dark controls and GLB sign export. In-process HTTP tests used disposable SQLite sessions to check preview, commit, reload, command retry and atomic rejection. Studio and WebGL close-ups were reviewed. The existing path-motion test still expects a recipe without its optional activity_id field.
