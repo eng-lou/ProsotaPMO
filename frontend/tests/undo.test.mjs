@@ -27,6 +27,21 @@ test('failed undo remains retryable; overlapping undo is ignored', async () => {
  assert.equal(h.past.length,1);assert.equal(h.future.length,0);assert.match(h.message,/offline/)
  h.setScope('new');assert.equal(h.past.length,0)
 })
+test('failed removal undo shows the object and server validation reason and can retry', async () => {
+ const history = new UndoHistory()
+ let detail = 'The source path is missing'
+ history.record({ label: 'Remove Site ground', undo: () => {
+   if (detail) throw Object.assign(new Error('Request failed with status code 422'), { response: { data: { detail } } })
+ }, redo: () => {} })
+ await history.run()
+ assert.match(history.message, /Remove Site ground.*source path is missing/)
+ detail = [{ loc: ['body', 'items', 0, 'points'], msg: 'Too few points' }]
+ await history.run()
+ assert.match(history.message, /items\.0\.points: Too few points/)
+ detail = null
+ await history.run()
+ assert.equal(history.message, 'Undid Remove Site ground')
+})
 function server(resource, initial) {
  undoHistory.clear();undoHistory.setScope('project')
  let row=structuredClone(initial), fail=false, writes=0

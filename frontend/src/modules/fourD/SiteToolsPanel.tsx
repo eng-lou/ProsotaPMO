@@ -263,7 +263,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     {chosen && !edit && <div className="flex flex-wrap gap-2">
       {chosen.kind!=='geographic'&&<button className={button} disabled={chosen.locked || busy} onClick={() => { setPlaceAsParts(false); setEdit(recipe(chosen)); if (chosen.kind === 'light') setDraft(recipe(chosen)); setConfirmed(true) }}>{chosen.kind === 'light' ? 'Edit light' : 'Edit / regenerate'}</button>}
       <button className={button} disabled={busy} onClick={() => void update(chosen, { locked: !chosen.locked })}>{chosen.locked ? 'Unlock' : 'Lock'}</button>
-      <button className={button} disabled={chosen.locked || busy} onClick={() => void update(chosen, null)}>Remove</button>
+      <button className={button} disabled={chosen.locked || busy} onClick={() => void update(chosen, null)}>Remove {chosen.name}</button>
     </div>}
     {chosen && <p>Selected: {selected?.includes(':panel:') ? 'panel at ' + selected.split(':panel:')[1] + ' m' : chosen.name}. Use Frame Selected in the viewport.</p>}
     {scene.items.length>0&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.map(i=>i.id))}>Generate schedule from 3D objects…</button>}

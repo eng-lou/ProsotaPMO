@@ -18,4 +18,5 @@ class SiteSceneCommand(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    before_removal_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False)

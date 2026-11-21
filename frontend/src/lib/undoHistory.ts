@@ -45,7 +45,16 @@ export class UndoHistory {
         this.message = `${redo ? 'Redid' : 'Undid'} ${action.label}`
       }
     } catch (e) {
-      if (scope === this.scope) this.message = `Could not ${redo ? 'redo' : 'undo'}: ${e instanceof Error ? e.message : String(e)}`
+      if (scope === this.scope) {
+        const detail = (e as { response?: { data?: { detail?: unknown } } } | null)?.response?.data?.detail
+        const validation = Array.isArray(detail) ? detail.flatMap(issue => {
+          if (typeof issue?.msg !== 'string') return []
+          const location = Array.isArray(issue.loc) ? issue.loc.filter((part: unknown) => part !== 'body').join('.') : ''
+          return [location ? `${location}: ${issue.msg}` : issue.msg]
+        }).join(' · ') : ''
+        const reason = typeof detail === 'string' && detail ? detail : validation || (e instanceof Error ? e.message : String(e))
+        this.message = `Could not ${redo ? 'redo' : 'undo'} “${action.label}”. ${reason}`
+      }
     } finally { this.busy = false; this.emit() }
   }
 }

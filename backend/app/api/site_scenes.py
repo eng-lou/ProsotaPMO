@@ -19,11 +19,31 @@ from app.services.site_scene import evaluate, zone_points
 router = APIRouter(prefix="/site-scenes", tags=["site-scenes"])
 
 
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+class StaleLayoutSource(HTTPException):
+    """The stored boundary can render independently of its authoring path or zone."""
+
+
+async def previously_saved_scene(db, project_id, revision, items, signature_data):
+    receipts = select(SiteSceneCommand).where(SiteSceneCommand.project_id == project_id)
+    prior = await db.execute(receipts.where(SiteSceneCommand.before_removal_hash == fingerprint(items)).limit(1))
+    if prior.scalar_one_or_none() is not None:
+        return True
+    # Old browser tabs can retry their pending Undo after a backend deployment.
+    # For deletions made before removal fingerprints, check the exact prior PUT.
+    prior = await db.execute(receipts.where(SiteSceneCommand.revision == revision - 1))
+    return any(command.request_hash == fingerprint({**signature_data, "command_id": str(command.id),
+               "expected_revision": command.revision - 1}) for command in prior.scalars())
+
+
 def result(row):
     return {"revision": row.revision if row else 0, "items": [evaluate(i) for i in row.items] if row else []}
 
 
-async def validate_item(db, project_id, item, references=None):
+async def validate_item(db, project_id, item, references=None, *, restore_layout=False):
     # A split assembly can have thousands of items sharing one library asset.
     # Retain lookups for this request only, including missing references.
     if references is None:
@@ -55,17 +75,23 @@ async def validate_item(db, project_id, item, references=None):
             raise HTTPException(422, "Choose a movement path in this project with at least two points")
     if item.kind in ("fence", "shape", "array", "scatter") and item.path_id:
         path = await lookup(Path, item.path_id)
-        if not path or path.project_id != project_id:
+        if path and path.project_id != project_id:
             raise HTTPException(422, "The source path is missing or belongs to another project")
-        if path.points != [p.model_dump(mode="json") for p in item.points] or path.closed != item.closed or (getattr(path, "curve_mode", "curved") != item.curve_mode):
-            raise HTTPException(409, "The source path changed. Preview it again before saving")
+        if not restore_layout:
+            if not path:
+                raise StaleLayoutSource(422, "The source path is missing")
+            if path.points != [p.model_dump(mode="json") for p in item.points] or path.closed != item.closed or (getattr(path, "curve_mode", "curved") != item.curve_mode):
+                raise StaleLayoutSource(409, "The source path changed. Preview it again before saving")
     if item.zone_id and item.kind in ("shape", "array", "scatter"):
         zone = await lookup(Zone, item.zone_id)
-        if not zone or zone.project_id != project_id:
+        if zone and zone.project_id != project_id:
             raise HTTPException(422, "Choose a zone in this project")
-        expected = zone_points(zone, item.up_axis)
-        if len(expected) != len(item.points) or any(abs(a[k]-getattr(b,k))>1e-7 for a,b in zip(expected,item.points) for k in "xyz"):
-            raise HTTPException(409, "The source zone changed. Preview again before saving")
+        if not restore_layout:
+            if not zone:
+                raise StaleLayoutSource(422, "The source zone is missing")
+            expected = zone_points(zone, item.up_axis)
+            if len(expected) != len(item.points) or any(abs(a[k]-getattr(b,k))>1e-7 for a,b in zip(expected,item.points) for k in "xyz"):
+                raise StaleLayoutSource(409, "The source zone changed. Preview again before saving")
     try:
         return evaluate(item.model_dump(mode="json"))
     except ValueError as error:
@@ -96,7 +122,7 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
         for field in ("enclosure", "tower_cover"):
             if recipe[field] is None:
                 del recipe[field]
-    signature = hashlib.sha256(json.dumps(signature_data, sort_keys=True).encode()).hexdigest()
+    signature = fingerprint(signature_data)
     previous = await db.get(SiteSceneCommand, data.command_id)
     if previous:
         if previous.project_id != project_id or previous.request_hash != signature:
@@ -107,13 +133,23 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
     old = {i["id"]: SiteItem.model_validate(i).model_dump(mode="json") for i in row.items} if row else {}
     items = [i.model_dump(mode="json") for i in data.items]
     references = {}
+    restoring = None
     for item, encoded in zip(data.items, items):
         before = old.get(str(item.id))
         if before == encoded:
             continue
         if before and before.get("locked") and encoded.get("locked"):
             raise HTTPException(409, "Unlock this object before changing it")
-        await validate_item(db, project_id, item, references)
+        try:
+            await validate_item(db, project_id, item, references)
+        except StaleLayoutSource:
+            if before is not None or not row:
+                raise
+            if restoring is None:
+                restoring = await previously_saved_scene(db, project_id, row.revision, items, signature_data)
+            if not restoring:
+                raise
+            await validate_item(db, project_id, item, references, restore_layout=True)
     if sum(len((evaluate(i).get("layout") or {}).get("panels", [])) for i in items) > 5000:
         raise HTTPException(422, "This site scene is limited to 5,000 fence panels")
     if sum(len((evaluate(i).get("layout") or {}).get("placements", [])) for i in items) > 1000:
@@ -126,6 +162,7 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
         db.add(row)
     row.items = items
     row.revision += 1
-    db.add(SiteSceneCommand(id=data.command_id, project_id=project_id, request_hash=signature, revision=row.revision))
+    db.add(SiteSceneCommand(id=data.command_id, project_id=project_id, request_hash=signature, revision=row.revision,
+                            before_removal_hash=fingerprint(list(old.values())) if old.keys() - new_ids else None))
     await db.commit()
     return result(row)

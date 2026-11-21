@@ -9253,3 +9253,8 @@ Publication status: git staging could not create the worktree index lock. Elevat
 - Mount the detachable net or sheet in the same normalised asset frame as the imported tower. Cache cover geometry and own each placement’s materials. Export complete covered GLBs by appending the cover to the original source buffers. Preserve the bridges, six landing openings, cage nodes and animation tracks.
 - Verified six enclosure backend tests, browser checks for the real wrap and fence components, gate swing, bridge clearance, level instancing, dark controls and GLB sign export. In-process HTTP tests used disposable SQLite sessions to check preview, commit, reload, command retry and atomic rejection. Studio and WebGL close-ups were reviewed. The existing path-motion test still expects a recipe without its optional activity_id field.
 - Fence preview and save now accept repeated corner clicks and paths drawn back to the starting point. The derived layout uses the existing 1 mm tolerance and retains authored closing curves. Genuine intersections report both distances along the run. Verified a hoarding perimeter with a 5 m vehicle gate through preview, save and reload.
+
+## 2026-11-21 — Undo a site object removal
+
+- Reproduced a 422 restoring a saved ground shape after its authoring path was deleted. A project-scoped fingerprint of the scene before removal permits the exact saved layout to be restored from the browser's Undo entry. For removals made on older builds, the server can verify the preceding saved command. Fresh geometry and live asset references continue through normal validation.
+- The Remove button names the selected object. Failed Undo and Redo actions display the action name and the server's validation detail and remain available for retry.
