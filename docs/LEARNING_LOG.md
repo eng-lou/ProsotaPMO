@@ -9231,3 +9231,16 @@ Publication status: git staging could not create the worktree index lock. Elevat
 - Apply Prosota IBM Plex Sans, 13px controls, theme-specific fields/options/text, native dark date/select controls, visible keyboard focus and consistent button states to climbing, TBM/piling, actions and sling controls.
 - Add draft discard and saving feedback; skip unchanged climb field saves.
 - Validation: 14 frontend tests, Chromium scene/rig regression and construction-control checks in light/dark with the application stylesheet and a 320px sidebar. Production build checked separately.
+
+## 2026-11-21 — Suspended-load hanging pose
+- One/two active lifting points now drive a static hanging pose after restoring the recorded attachment transform; support positions remain fixed.
+- Added fixed-orientation override and optional load-local centre of gravity. Automatic centre uses geometry bounds, not mass properties.
+- Release captures the resulting tilt. Three or more supports retain the authored pose; no dynamic or multi-crane tension solver is implied.
+- Validated: nine frontend unit tests, seven backend tests, browser load fixture (tilt, release, reverse seek), and production build.
+
+## 2026-11-21 — Multi-hook quasi-static lifting solver
+- Added event-scoped rigging: up to eight fixed-length pull-only sling legs, independent hook assignments/offsets, load mass, optional leg capacities and landing elevation.
+- Deterministic rigid-body relaxation and nonnegative wrench fitting report constraint error, residual, slack/tension and resultant hook forces. Explicit invalid/missing-input states; unchanged configurations cache the result.
+- Added rigging editor, sagging slack visuals, per-hook rings and world-pose release. Secondary carriers participate in schema graph/missing-reference checks. Existing simple attachment modes remain available.
+- Validation: 16 frontend solver/attachment tests, nine backend schema tests, real viewport two-crane motion/reverse/release and editor save fixture, production TypeScript/Vite build.
+- Limits: quasi-static approximate equilibrium, bounds-derived mass centre/contact, nonunique multi-leg force distributions; no dynamic sway, detailed collision, or crane load-chart evaluation.

@@ -2,12 +2,14 @@ import * as T from 'three'
 import type { SiteItem } from './siteScene'
 import { attachmentNode } from './workerActions'
 
+export interface SlingLeg { point:number; parent_id:string; node:string; length:number; offset?:[number,number,number]; capacity_kn?:number }
+export interface LiftRig { legs:SlingLeg[]; mass_kg:number; floor?:number|null }
 export interface LoadEvent {
-  id:string; date:string; parent_id:string|null; node:string
+  id:string; date:string; parent_id:string|null; node:string; rigging?:LiftRig|null
   // Metre-based anchor-relative pose for attachment; world pose for release.
   matrix:number[]; slings:boolean; sling_offset?:[number,number,number]; sling_ring_angle?:number
 }
-export interface LoadHandling { events:LoadEvent[]; lifting_points:[number,number,number][]; lifting_nodes?:string[] }
+export interface LoadHandling { balance_mode?:'gravity'|'fixed'; center_of_gravity?:[number,number,number]|null; events:LoadEvent[]; lifting_points:[number,number,number][]; lifting_nodes?:string[] }
 export const loadRoots=new Map<string,T.Object3D>()
 export const loadDates=new Map<string,number>()
 export function anchorFrame(anchor:T.Object3D){

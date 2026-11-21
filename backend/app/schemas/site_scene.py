@@ -275,7 +275,7 @@ class SceneEdit(BaseModel):
             if item_id in done:
                 return
             item=by_id[item_id]
-            parents=([item.attachment.parent_id] if item.attachment else [])+[e.parent_id for e in (item.load_handling.events if item.load_handling else []) if e.parent_id]
+            parents=([item.attachment.parent_id] if item.attachment else [])+[e.parent_id for e in (item.load_handling.events if item.load_handling else []) if e.parent_id]+[leg.parent_id for e in (item.load_handling.events if item.load_handling else []) if e.rigging for leg in e.rigging.legs]
             for parent in parents:
                 if parent not in by_id:
                     raise ValueError('Remove load transfers before removing their carrier')
