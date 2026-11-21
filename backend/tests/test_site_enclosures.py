@@ -60,6 +60,54 @@ class EnclosureTests(unittest.TestCase):
         self.assertEqual(layout["openings"][-1]["b"],dict(x=0,y=0,z=4))
         self.assertEqual(layout["panel_count"],12)
 
+    def test_hoarding_closure_and_repeated_corner_clicks(self):
+        for up, horizontal in [("y", "z"), ("z", "y")]:
+            corners = [{"x": x, horizontal: y, up: 3} for x, y in [(0, 0), (12, 0), (12, 8), (0, 8)]]
+            item = fence(up_axis=up, points=corners, closed=True, module_length=2.4, height=2.4,
+                         enclosure=dict(style="hoarding", levels=[0], openings=[
+                             dict(kind="vehicle", start=0, width=5, angle=0, lights=True)])).model_dump(mode="json")
+            expected = evaluate(item)["layout"]
+            self.assertEqual(expected["length"], 40)
+            self.assertEqual(expected["openings"][0]["b"]["x"], 5)
+            for closed in (False, True):
+                for delta in (0, 0.0004):
+                    with self.subTest(up=up, closed=closed, delta=delta):
+                        points = [corners[0], corners[1], {**corners[1], horizontal: delta},
+                                  *corners[2:], {**corners[0], "x": delta}]
+                        variant = {**item, "closed": closed, "points": points}
+                        original = copy.deepcopy(variant)
+                        self.assertEqual(evaluate(variant)["layout"], expected)
+                        self.assertEqual(variant, original)
+
+    def test_repeated_end_preserves_authored_closing_curve(self):
+        corners = [dict(x=x, y=0, z=z, segment_mode="straight") for x, z in [(0, 0), (12, 0), (12, 8), (0, 8)]]
+        end = {**corners[0], "segment_mode": "curved",
+               "segment_controls": [dict(x=-3, y=0, z=0), dict(x=-3, y=0, z=0)]}
+        item = fence(points=[end, *corners[1:]], closed=True, enclosure=dict(openings=[])).model_dump(mode="json")
+        expected = evaluate(item)["layout"]
+        self.assertGreater(expected["length"], 40)
+        self.assertEqual(evaluate({**item, "points": [*corners, end]})["layout"], expected)
+        loop = {**end, "segment_controls": [dict(x=12, y=0, z=0), dict(x=0, y=0, z=12)]}
+        two_points = {**item, "points": [corners[0], loop]}
+        self.assertGreater(evaluate(two_points)["layout"]["length"], 10)
+        self.assertEqual(evaluate(two_points)["layout"], evaluate({**two_points, "closed": False})["layout"])
+
+    def test_crossings_degenerate_paths_and_overlaps(self):
+        def layout(coords, closed=False):
+            return evaluate(fence(points=[dict(x=x, y=y, z=z) for x, y, z in coords],
+                                  closed=closed, enclosure=dict(openings=[])).model_dump(mode="json"))
+
+        with self.assertRaisesRegex(ValueError, r"intersects itself.*0\.00–10\.00 m and 18\.00–28\.00 m"):
+            layout([(0,0,0), (8,0,6), (0,0,6), (8,0,0)])
+        with self.assertRaisesRegex(ValueError, "level path"):
+            layout([(0,0,0), (8,0,6), (0,3,6), (8,3,0)])
+        with self.assertRaisesRegex(ValueError, "distinct points"):
+            layout([(0,0,0), (0,0,0)], closed=True)
+        with self.assertRaisesRegex(ValueError, "intersects|doubles back"):
+            layout([(0,0,0), (8,0,0), (8,0,8), (2,0,8), (2,0,0), (0,0,0)])
+        with self.assertRaisesRegex(ValueError, "intersects"):
+            layout([(0,0,0), (8,0,0), (8,0,8), (4,0,0)])
+
     def test_old_fence_and_explicitly_empty_openings(self):
         old=fence(enclosure=None,gate_start=4,gate_width=2).model_dump(mode="json")
         old.pop("enclosure"); old.pop("tower_cover")

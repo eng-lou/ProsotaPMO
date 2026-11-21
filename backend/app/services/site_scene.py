@@ -7,6 +7,38 @@ import math
 import random
 
 
+def normalized_fence_path(item):
+    """Coalesce repeated clicks in the derived fence without editing its source."""
+    def same_position(a, b):
+        return math.dist(tuple(a[k] for k in "xyz"), tuple(b[k] for k in "xyz")) < 0.001
+
+    def has_curve_handles(point):
+        mode = point.get("segment_mode") or item.get("curve_mode", "straight")
+        return mode == "curved" and bool(point.get("segment_controls"))
+
+    points = []
+    for point in item["points"]:
+        if points and same_position(points[-1], point) and not has_curve_handles(point):
+            continue
+        points.append(point)
+    if len(points) < 2:
+        raise ValueError("Place at least two distinct points on the fence path.")
+    closed = item.get("closed", False)
+    if same_position(points[-1], points[0]):
+        # Segment settings belong to the destination. Preserve the authored
+        # closing segment, even if the first click used a different mode.
+        end = {**points[-1], **{k: points[0][k] for k in "xyz"}}
+        if closed and not has_curve_handles(points[0]) and len(points) > 2:
+            points.pop()
+            points[0] = end
+        else:
+            points[-1] = end
+            if len(points) == 2 and not has_curve_handles(points[0]):
+                # The authored Bézier already closes the entire run.
+                closed = False
+    return {**item, "points": points, "closed": closed}
+
+
 def enclosure_path(item):
     """Retain authored corners and the straight/curved provenance of each chord."""
     controls = item["points"]
@@ -54,6 +86,7 @@ def enclosure_path(item):
 
 
 def fence_layout(item):
+    item = normalized_fence_path(item)
     if item.get("enclosure"):
         points, curved_edges = enclosure_path(item)
     else:
@@ -71,33 +104,41 @@ def fence_layout(item):
                 start+=lengths[segment];segment+=1
             a,b=route[segment:segment+2]; t=(distance-start)/lengths[segment] if lengths[segment]>0 else 0
             points.append({k:a[k]+(b[k]-a[k])*t for k in 'xyz'})
+        if not item.get("closed") and route[0] == route[-1]:
+            points[-1] = route[-1]
     if item.get("closed") and points[-1] != points[0]:
         points.append(points[0])
+    if len(points) < 2:
+        raise ValueError("The fence path is too short for this panel length.")
+    loop = points[-1] == points[0]
     up = item["up_axis"]
     horizontal = [k for k in "xyz" if k != up]
     def orient(a, b, c):
         x, y = horizontal
         return (b[x]-a[x])*(c[y]-a[y]) - (b[y]-a[y])*(c[x]-a[x])
-    edges = list(zip(points, points[1:]))
-    for a, b, c in zip(points, points[1:], points[2:]):
-        if abs(orient(a, b, c)) < 1e-9 and sum((b[k]-a[k])*(c[k]-b[k]) for k in horizontal) < 0:
-            raise ValueError("The fence path doubles back on itself. Adjust the source path first.")
-    for i, (a, b) in enumerate(edges):
-        for j, (c, d) in enumerate(edges[i+2:], i+2):
-            if item.get("closed") and i == 0 and j == len(edges)-1:
-                continue
-            if orient(a,b,c) * orient(a,b,d) <= 0 and orient(c,d,a) * orient(c,d,b) <= 0:
-                if all(max(min(a[k],b[k]),min(c[k],d[k])) <= min(max(a[k],b[k]),max(c[k],d[k])) + 1e-9 for k in horizontal):
-                    raise ValueError("The fence path intersects itself. Adjust the source path first.")
     segments, chainage = [], 0.0
     for a, b in zip(points, points[1:]):
         if abs(a[up] - b[up]) > 0.001:
-            raise ValueError("This first fence tool needs a level path. Stepped/sloping fencing is not yet supported.")
+            raise ValueError(f"The fence path changes elevation after {chainage:.2f} m. Use a level path for each fence run.")
         length = math.dist([a[k] for k in "xyz"], [b[k] for k in "xyz"])
         if length < 0.001:
             raise ValueError("Remove repeated path points before generating a fence.")
         segments.append((a, b, chainage, chainage + length))
         chainage += length
+
+    for i, (a, b, lo, hi) in enumerate(segments):
+        if i + 1 < len(segments) or loop:
+            c = segments[(i + 1) % len(segments)][1]
+            if abs(orient(a, b, c)) < 1e-9 and sum((b[k]-a[k])*(c[k]-b[k]) for k in horizontal) < 0:
+                raise ValueError(f"The fence path doubles back on itself at {hi:.2f} m from the start. Check the path at that turn.")
+        for j in range(i + 2, len(segments)):
+            if loop and i == 0 and j == len(segments)-1:
+                continue
+            c, d, other_lo, other_hi = segments[j]
+            if orient(a,b,c) * orient(a,b,d) <= 0 and orient(c,d,a) * orient(c,d,b) <= 0:
+                if all(max(min(a[k],b[k]),min(c[k],d[k])) <= min(max(a[k],b[k]),max(c[k],d[k])) + 1e-9 for k in horizontal):
+                    raise ValueError(f"The fence path intersects itself. Check the spans {lo:.2f}–{hi:.2f} m and "
+                                     f"{other_lo:.2f}–{other_hi:.2f} m from the start in the path editor.")
     config = item.get("enclosure")
     levels = config["levels"] if config else [0]
     if config:
