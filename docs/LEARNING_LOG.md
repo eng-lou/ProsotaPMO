@@ -9276,3 +9276,7 @@ Fences and repeated objects now share a path-layout entry. Switching the layout 
 ## 2026-11-22 - Articulated climbing formwork and placing boom
 
 One erection activity defines a lift. Its climb, pour and strip are phase links on that same lift. Generated tower schedules may reserve an explicit climb between consecutive core levels. Date overrides and earlier whole-assembly schedules remain supported. The core rig samples absolute dates for both platforms, panel travel and the placing boom, including reverse scrubs. The standalone GLB uses separate named pivots and demonstration clips. The original four-sided Prosota assembly can use the same rig per placement.
+
+## 2026-11-22 - Climbing platform connections
+
+The boom rig has pinned lift cylinders and wall brackets on all four faces. Inner guides overlap the lower gallery rails throughout the two-stage climb. Previously placed version-one boom rigs receive the connections on import using their existing material slots, placement dimensions and clip timing. Regression tests check both pin centres and the exported cylinder surfaces at intermediate poses, maximum extension and on reverse scrubs.

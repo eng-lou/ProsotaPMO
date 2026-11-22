@@ -1,13 +1,14 @@
 import { Box3, BufferGeometry, Float32BufferAttribute, Group, Matrix4, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three'
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { addCoreHardware } from './coreRigGeometry'
+import { installCoreConnections } from './coreRigConnections'
 import type { CorePose } from './coreCycle'
 
 export function coreFrame(root?:Object3D|null) {
   let found:Object3D|undefined
   root?.traverse(n=>{
     if (found) return
-    if (n.userData.coreRigVersion===1 || (/CLIMBING.FORMWORK.*12m.*8m.*clear.opening/i.test(n.name) &&
+    if (n.userData.coreRigVersion===2 || n.userData.coreRigVersion===1 || (/CLIMBING.FORMWORK.*12m.*8m.*clear.opening/i.test(n.name) &&
         ['North','South','East','West'].every(side=>n.children.some(c=>c.name.startsWith(side))))) found=n
   })
   return found
@@ -75,9 +76,10 @@ export function articulateLegacy(frame:Object3D) {
     mesh.removeFromParent()
   }
   const hardware=addCoreHardware(frame)
+  frame.userData.coreRigVersion=1
+  installCoreConnections(frame)
   const materials=new Set<MeshStandardMaterial>()
   hardware.traverse(n=>{if(n instanceof Mesh){generated.push(n.geometry);materials.add(n.material)}})
-  frame.userData.coreRigVersion=1
   return ()=>{generated.forEach(g=>g.dispose());materials.forEach(m=>m.dispose())}
 }
 
@@ -87,6 +89,8 @@ export function bindCoreRig(frame:Object3D) {
   frame.traverse(n=>{const key=n.userData.coreRigPart;if(!key)return
     const nodes=parts.get(key)??[];nodes.push(n);parts.set(key,nodes);rest.set(n,n.position.clone())})
   const vec=new Vector3(),inverse=new Matrix4(), localDelta=new Map<Object3D,Vector3>()
+  const down=new Vector3(0,-1,0), direction=new Vector3()
+  const slides=[...(parts.get('ram')??[]),...(parts.get('ramHousing')??[])]
   const turn=(role:string,angle:number,axis:'y'|'z')=>{for(const n of parts.get(role)??[])n.rotation[axis]=angle}
   return (pose:CorePose,axis:'y'|'z'='y')=>{
     const gap=pose.lower-pose.upper
@@ -103,9 +107,13 @@ export function bindCoreRig(frame:Object3D) {
     }
     for(const n of parts.get('lower')??[])n.position.copy(rest.get(n)!).add(delta(n.parent!))
     for(const n of parts.get('panel')??[])n.position.copy(rest.get(n)!).z-=pose.panels*.62
-    for(const n of parts.get('ram')??[]){
-      const end=vec.copy(delta(n.parent!)).add(new Vector3(0,-1.8,0))
-      n.scale.y=end.length();n.quaternion.setFromUnitVectors(new Vector3(0,-1,0),end.normalize())
+    for(const n of slides){
+      direction.copy(delta(n.parent!))
+      direction.y-=1.8
+      const span=direction.length()
+      if(n.userData.coreRigPart==='ram')n.scale.y=span
+      if(span>1e-9)n.quaternion.setFromUnitVectors(down,direction.divideScalar(span))
+      else n.quaternion.identity()
     }
     const t=pose.deployment, shoulder=(8+48*t)*rad, elbow=(166-216*t)*rad, tip=(-163+116*t)*rad
     turn('slew',pose.slew*rad,'y');turn('shoulder',shoulder,'z');turn('elbow',elbow,'z');turn('tip',tip,'z')
@@ -117,6 +125,6 @@ export function createCoreDisplay(source:Object3D) {
   const object=source.clone(true), frame=coreFrame(object)
   if(!frame)return null
   frame.traverse(n=>{const rest=n.userData.coreRigRest;if(Array.isArray(rest)&&rest.length===3)n.position.fromArray(rest)})
-  const dispose=frame.userData.coreRigVersion===1 ? ()=>{} : articulateLegacy(frame)
+  const dispose=frame.userData.coreRigVersion ? ()=>{} : articulateLegacy(frame)
   return {object,apply:bindCoreRig(frame),dispose}
 }

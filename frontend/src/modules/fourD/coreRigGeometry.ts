@@ -4,15 +4,10 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 const V=(x:number,y:number,z:number)=>new Vector3(x,y,z)
 const up=V(0,1,0)
 const colours={frame:0x9e3026,steel:0xbac0c4,grip:0x43464a,deck:0xac865d,boom:0xe29a28,hydraulic:0x5c8052,mesh:0xc98443}
-type Finish=keyof typeof colours
+export type Finish=keyof typeof colours
 
 // Batch fixed hardware by finish under each pivot. All geometry is in authored glTF metres.
-export function addCoreHardware(frame:Object3D) {
-  const materials = Object.fromEntries(Object.entries(colours).map(([name,color])=>{
-    const material=new MeshStandardMaterial({color,metalness:name==='deck'?.03:.44,roughness:name==='deck'?.83:.48})
-    material.name='Core rig '+name
-    return [name,material]
-  })) as Record<Finish,MeshStandardMaterial>
+export function coreHardwareBuilder(materials:Record<Finish,MeshStandardMaterial>) {
   const batches=new Map<Object3D,Map<Finish,BufferGeometry[]>>()
   const add=(parent:Object3D,finish:Finish,geo:BufferGeometry)=>{
     let group=batches.get(parent);if(!group){group=new Map();batches.set(parent,group)}
@@ -27,6 +22,24 @@ export function addCoreHardware(frame:Object3D) {
     const q=new Quaternion().setFromUnitVectors(up,dir.normalize())
     add(p,m,g.applyMatrix4(new Matrix4().compose(a.clone().lerp(b,.5),q,V(1,1,1))))
   }
+  function finish() {
+    for(const [parent,group] of batches)for(const [finish,geometries] of group){
+      const merged=mergeGeometries(geometries)!
+      const mesh=new Mesh(merged,materials[finish]);mesh.name=parent.name+'_'+finish
+      mesh.castShadow=mesh.receiveShadow=true;parent.add(mesh)
+      geometries.forEach(g=>g.dispose())
+    }
+  }
+  return {box,member,finish}
+}
+
+export function addCoreHardware(frame:Object3D) {
+  const materials = Object.fromEntries(Object.entries(colours).map(([name,color])=>{
+    const material=new MeshStandardMaterial({color,metalness:name==='deck'?.03:.44,roughness:name==='deck'?.83:.48})
+    material.name='Core rig '+name
+    return [name,material]
+  })) as Record<Finish,MeshStandardMaterial>
+  const {box,member,finish}=coreHardwareBuilder(materials)
   function pivot(parent:Object3D,name:string,x=0,y=0,z=0){
     const g=new Group();g.name='CoreRig_'+name;g.userData.coreRigPart=name;g.position.set(x,y,z);parent.add(g);return g
   }
@@ -104,11 +117,6 @@ export function addCoreHardware(frame:Object3D) {
   }
   member(hose,'grip',V(0,0,.18),V(.07,-.86,.18),.105,true)
   member(hose,'grip',V(.07,-.86,.18),V(.22,-1.66,.16),.10,true)
-  for(const [parent,group] of batches)for(const [finish,geometries] of group){
-    const merged=mergeGeometries(geometries)!
-    const mesh=new Mesh(merged,materials[finish]);mesh.name=parent.name+'_'+finish
-    mesh.castShadow=mesh.receiveShadow=true;parent.add(mesh)
-    geometries.forEach(g=>g.dispose())
-  }
+  finish()
   return top
 }

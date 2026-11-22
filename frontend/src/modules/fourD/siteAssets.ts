@@ -6,6 +6,7 @@ import { api, downloadLargeBlob } from '@/lib/api'
 import { uploadDirectToStorage } from '@/lib/directUpload'
 import { restoreLegacyCutFinish } from './legacyCutFinish'
 import { prepareCutoutRendering } from './cutoutRendering'
+import { installCoreConnections } from './coreRigConnections'
 import { extractAssetPart, type AssetPart } from './assetParts'
 
 export interface SiteAsset {
@@ -33,6 +34,12 @@ export async function parseAsset(bytes: ArrayBuffer) {
   // Flat OBJ surfaces still need a finite normalization scale.
   size.max(new THREE.Vector3(.001,.001,.001))
   const dimensions = { width: size.x, height: size.y, depth: size.z }
+  // Keep the original normalization, material slot IDs and project placement of saved rigs.
+  if (gltf.parser.json.nodes?.some((node:{extras?:{coreRigVersion?:number}}) => node.extras?.coreRigVersion===1)) {
+    gltf.scene.traverse(node => {
+      if (node.userData.coreRigVersion===1) installCoreConnections(node,gltf.animations)
+    })
+  }
   const group = new THREE.Group(); group.userData.siteAssetRigRoot = true
   // Keep authored materials, hierarchy and static pose; place from base centre.
   const offset=new THREE.Group()
