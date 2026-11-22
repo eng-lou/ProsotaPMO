@@ -1,3 +1,4 @@
+import { SiteToolSection } from './SiteToolSection'
 import './constructionControls.css'
 import { LoadHandlingPanel } from "./LoadHandlingPanel"
 import { useEffect, useState, type MutableRefObject } from 'react'
@@ -36,8 +37,7 @@ export function WorkerActionsPanel({item,items,paths,disabled,format,dateRef,onS
     if(!motion||!curve)return
     try{void save({path_motion:routeStopForAction(motion,curve,action,format.speedDaysPerSecond)})}catch(e){setError(e instanceof Error?e.message:String(e))}
   }
-  return <fieldset disabled={disabled||saving} className="construction-controls border rounded p-3 space-y-3">
-    <legend>Construction actions & attachments</legend>
+  return <SiteToolSection title="Construction actions & attachments" disabled={disabled||saving}>
     <div className="rounded bg-blue-50 dark:bg-prosota-panel2 p-2 flex flex-wrap gap-2" aria-label="Action sequence guide"><span>Follow route</span><span>→</span><span>Work / operate</span><span>→</span><span>Continue</span></div>
     <p>Actions use the animation timeline. Changes save immediately and remain when you close this panel.</p>
     {!!clips.length&&<>
@@ -75,5 +75,5 @@ export function WorkerActionsPanel({item,items,paths,disabled,format,dateRef,onS
       {item.path_motion&&<p>Unbind this object’s own route before attaching it. The parent’s route will carry it.</p>}
     </details>
     {saving&&<p role="status">Saving…</p>}{error&&<p role="alert" className="text-red-500">{error}</p>}
-  </fieldset>
+  </SiteToolSection>
 }

@@ -1,3 +1,4 @@
+import { SiteToolSection } from './SiteToolSection'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { gateTrack, keyGatePose, restPose } from './gatePose'
 import { siteError, type FenceOpening, type SiteItem, type useSiteScene } from './siteScene'
@@ -62,8 +63,7 @@ export function GatePosePanel({item, state, dateRef, format, onSeek}: {
     void persist({...gate, pose_keys:keyGatePose(gate,when,manual ?? sample!(when.getTime()))}, 'Set gate keyframe')
   }
   function discard() { setManual(null); setDraft(null); preview.current=null }
-  return <fieldset className="min-w-0 space-y-2 border-t pt-2 dark:border-prosota-line" disabled={disabled}>
-    <legend>Gate pose</legend>
+  return <SiteToolSection title="Gate pose" disabled={disabled}>
     <label>Entrance<select className="w-full rounded border bg-white p-1 dark:bg-prosota-panel2" value={index} onChange={e=>{discard(); setIndex(Number(e.target.value))}}>
       {gates.map((entry,i) => entry.kind !== 'gap' && <option key={i} value={i}>{i+1} · {names[entry.kind]} · {entry.start} m</option>)}
     </select></label>
@@ -85,5 +85,5 @@ export function GatePosePanel({item, state, dateRef, format, onSeek}: {
       </button>
       <button className={button} onClick={()=>void persist({...gate,pose_keys:keys.filter(k=>k.date !== key.date)},'Remove gate keyframe')}>Remove key</button>
     </li>)}</ul>}
-  </fieldset>
+  </SiteToolSection>
 }

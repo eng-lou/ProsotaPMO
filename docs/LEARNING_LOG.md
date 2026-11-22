@@ -9266,3 +9266,9 @@ The server keeps the last ten site edits with the scene, including changed objec
 Saved fence entrances have a normalised rest pose and dated keys. Vehicle and pedestrian leaves rotate on their hinges. A turnstile advances one 120-degree passage. The renderer samples the 4D clock and updates the moving batches without rebuilding the fence. Older gates retain their authored swing.
 
 A disposable browser project exercised both sidebar buttons through hard reloads against the real API. Undo restored the entire ground recipe. Two gate keys at 0 and 0.8 produced 0.4 halfway through, and survived Undo, Redo and reopening.
+
+## 2026-11-22 - Site object selection and layout tools
+
+The Site objects list reads the viewport selection. Search and range selection operate on the visible rows. Remove uses a single revision-checked scene edit for the selected unlocked placements. A browser test with 50 placements removed 30 at once, kept the locked placement, reloaded the project and restored the complete ordered scene with one Undo.
+
+Fences and repeated objects now share a path-layout entry. Switching the layout keeps the source path and each layout's draft settings. Animation, climbing, construction actions, slings, gate posing and activity links open on demand.

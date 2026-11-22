@@ -129,6 +129,7 @@ import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoin
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
 import { SiteScheduleWizard } from './SiteScheduleWizard'
+import { changeSiteSelection, type SiteSelectionMode } from './siteObjectSelection'
 import { SiteToolsPanel } from './SiteToolsPanel'
 import { loadSiteAsset, importSiteAsset } from './siteAssets'
 import { siteMaterialInfo, primitiveMaterialInfo } from './siteAssetMaterials'
@@ -5932,6 +5933,29 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     return targets.length + lockedCount === selectedObjectIds.size ? { targets, lockedCount } : null
   }, [activeObjectId, selectedObjectIds, selectedExpressIds, siteScene.scene.items, siteViewportObjects, viewportObjects])
 
+  // Prune removed placements after any accepted edit, including Undo/Redo and reload.
+  // A mixed selection may also contain IFC models or imported meshes.
+  useEffect(() => {
+    if (!siteScene.ready) return
+    const present = new Set(siteScene.scene.items.map(item => 'site:' + item.id))
+    const missing = (id: string) => id.startsWith('site:') && !present.has(id)
+    setSelectedObjectIds(previous => {
+      if (![...previous].some(missing)) return previous
+      return new Set([...previous].filter(id => !missing(id)))
+    })
+    setActiveObjectId(previous => previous && missing(previous) ? null : previous)
+    siteScene.setSelected(previous => previous && !present.has('site:' + previous.split(':panel:')[0]) ? null : previous)
+  }, [siteScene.ready, siteScene.scene.items])
+
+  function pickSiteItems(ids: string[], mode: SiteSelectionMode, detail?: string) {
+    const next = changeSiteSelection(selectedObjectIds,ids,mode)
+    if (mode === 'replace') { setIfcPick(new Map()); setActiveIfcModelId(null) }
+    const only = next.size === 1 ? next.values().next().value ?? null : null
+    setSelectedObjectIds(next)
+    setActiveObjectId(only)
+    siteScene.setSelected(only?.startsWith('site:') ? (detail && only === 'site:'+detail.split(':panel:')[0] ? detail : only.slice(5)) : null)
+  }
+
   const activeSiteItem = siteScene.scene.items.find(item => 'site:' + item.id === activeObjectId)
   const activeSiteRoot = activeSiteItem ? siteRoots.get(activeSiteItem.id) : null
   useEffect(() => {
@@ -5942,7 +5966,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }, [activeObjectId])
   useEffect(() => {
     const owner = siteScene.selected?.split(':panel:')[0]
-    if (owner && siteRoots.has(owner) && activeObjectId !== 'site:' + owner) {
+    if (owner && siteRoots.has(owner) && siteScene.scene.items.some(item => item.id === owner) && !selectedObjectIds.has('site:' + owner)) {
       setSelectedExpressId(null); setSelectedExpressIds(new Set());
       setSelectedObjectIds(new Set(['site:' + owner])); setActiveObjectId('site:' + owner)
     }
@@ -7346,10 +7370,9 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           setModelElementLinks(previous => [...previous.filter(l => l.id !== link.id), link])
         } catch (error) { setLinkError(error instanceof Error ? error.message : 'Unable to link site object') }
       }}
-      upAxis={settings.upAxis} state={siteScene} onPickItem={id => {
-        handleSelectExpressId(null)
-        handleSelectObject('site:' + id)
-        siteScene.setSelected(id)
+      upAxis={settings.upAxis} state={siteScene} selectedObjectIds={selectedObjectIds} onPickItems={(ids, mode) => {
+        setAddingPointsForPathId(null); setAddingPointsForZoneId(null); setAddingAnnotationKind(null); setMeasuringTool(null); setPivotPicking(false)
+        pickSiteItems(ids, mode)
       }} openPaths={() => {
         setPathsPanelOpen(true)
         localStorage.setItem(PATHS_PANEL_OPEN_KEY, 'true')
@@ -7805,10 +7828,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const viewport3DElement = (
     <Viewport3D
       siteScene={{ detailSelection:siteScene.detailSelection,onDetailSelect:siteScene.setDetailSelection, customTextures, customOpacity, onSourceRegister:registerSiteSourceRoot, onGeometryReady: siteGeometryReady, objects: siteViewportObjects, onRegister: registerSiteRoot, selectedIds: selectedObjectIds, hiddenIds, isolate: isolateMode, isolatedIds: isolatedObjectIds, materialMapping: settings.renderMode === 'realistic' ? renderMaterialMapping : undefined, glassTransmission: settings.realisticGlassTransmission, placing: siteScene.placing, onPlace: point => siteScene.place(sitePlacementPoint(siteScene.draft, point)), onMove: point => siteScene.setDraft(old => old ? { ...old, position: sitePlacementPoint(old, point) } : null), items: siteScene.scene.items, preview: siteScene.draft, selected: siteScene.selected, onSelect: (id, additive) => {
-        const owner = 'site:' + id.split(':panel:')[0]
-        if (!additive) handleSelectExpressId(null)
-        handleSelectObject(owner, additive)
-        siteScene.setSelected(additive && selectedObjectIds.has(owner) ? null : id)
+        pickSiteItems([id.split(':panel:')[0]], additive ? 'toggle' : 'replace', id)
         setPropertiesOpen(true); setEditPivot(false); setSiteToolsOpen(true)
       } }}
       onDuplicate={duplicateSelection} canDuplicate={canDuplicate} duplicating={duplicating}

@@ -12,7 +12,7 @@ let treePromise: Promise<T.Group> | null=null
 export function loadContextTree() {
   return treePromise ||= new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL || '/'}context/tree-small.glb`).then(g=>g.scene).catch(e=>{treePromise=null;throw e})
 }
-export function GeographicModel({data,onLoaded,itemId,mapping,selected,onSelect}:{data:GeographicContext;onLoaded():void;itemId?:string;mapping?:RealisticMaterialMap;selected?:string;onSelect?(featureId:string,surface:string):void}) {
+export function GeographicModel({data,onLoaded,itemId,mapping,selected,onSelect}:{data:GeographicContext;onLoaded():void;itemId?:string;mapping?:RealisticMaterialMap;selected?:string;onSelect?(featureId:string,surface:string,additive?:boolean):void}) {
   const [tree,setTree]=useState<T.Group|null>(null),invalidate=useThree(s=>s.invalidate)
   const [assets,setAssets]=useState(new Map<string,T.Object3D>())
   const assetIds=JSON.stringify([...new Set(data.features.flatMap(f=>f.replacement?[f.replacement.asset_id]:[]))].sort())
@@ -38,5 +38,5 @@ export function GeographicModel({data,onLoaded,itemId,mapping,selected,onSelect}
     const planes=(root.userData.studyPlanes as T.Plane[]).map(p=>p.clone().applyMatrix4(root.matrixWorld))
     root.traverse(o=>{if(o instanceof T.Mesh)for(const m of Array.isArray(o.material)?o.material:[o.material]){m.clippingPlanes=planes;m.clipIntersection=false;m.clipShadows=true}})
   })
-  return <group onClick={e=>{if(e.delta>4)return;const hit=geographicHit(e.object,e.faceIndex,e.instanceId);if(hit&&onSelect){e.stopPropagation();onSelect(hit.featureId,hit.surface)}}}><primitive object={root}/>{highlight&&<primitive object={highlight} raycast={()=>null}/>}</group>
+  return <group onClick={e=>{if(e.delta>4)return;const hit=geographicHit(e.object,e.faceIndex,e.instanceId);if(hit&&onSelect){e.stopPropagation();onSelect(hit.featureId,hit.surface,e.ctrlKey||e.metaKey||e.shiftKey)}}}><primitive object={root}/>{highlight&&<primitive object={highlight} raycast={()=>null}/>}</group>
 }

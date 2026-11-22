@@ -69,9 +69,10 @@ export interface SiteLayerState {
   onSelect(id: string, additive?: boolean): void
   placing?: boolean; onPlace?(point: PathPoint): void; onMove?(point: PathPoint): void
 }
-function Fence({ item, selected, preview, select, state }: { state: SiteLayerState; item: SiteItem; selected: string | null; preview: boolean; select(id: string): void }) {
+function Fence({ item, selected, preview, select, state }: { state: SiteLayerState; item: SiteItem; selected: string | null; preview: boolean; select(id: string, additive?: boolean): void }) {
   const mesh = useRef<THREE.InstancedMesh>(null)
   const panels = item.layout?.panels || []
+  const whole = state.selectedIds?.has('site:'+item.id) && !selected?.startsWith(item.id+':panel:')
   useLayoutEffect(() => {
     if (!mesh.current) return
     const up = new THREE.Vector3(0, item.up_axis === 'y' ? 1 : 0, item.up_axis === 'z' ? 1 : 0)
@@ -81,14 +82,14 @@ function Fence({ item, selected, preview, select, state }: { state: SiteLayerSta
       const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, up, z))
       const position = a.clone().add(b).multiplyScalar(.5).addScaledVector(up, item.height / 2)
       mesh.current!.setMatrixAt(index, new THREE.Matrix4().compose(position, q, new THREE.Vector3(a.distanceTo(b), item.height, .08)))
-      mesh.current!.setColorAt(index, new THREE.Color(!preview && (selected === item.id || selected === panel.id) ? '#38bdf8' : item.color))
+      mesh.current!.setColorAt(index, new THREE.Color(!preview && (whole || selected === item.id || selected === panel.id) ? '#38bdf8' : item.color))
     })
     mesh.current.instanceMatrix.needsUpdate = true
     if (mesh.current.instanceColor) mesh.current.instanceColor.needsUpdate = true
     mesh.current.computeBoundingSphere()
-  }, [item, selected, preview])
+  }, [item, whole, selected, preview])
   return <instancedMesh ref={mesh} args={[undefined, undefined, panels.length]} castShadow receiveShadow
-    onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); if (!state.boxSelecting && !preview && event.delta <= 4 && event.instanceId !== undefined) select(panels[event.instanceId].id) }}>
+    onClick={(event: ThreeEvent<MouseEvent>) => { event.stopPropagation(); if (!state.boxSelecting && !preview && event.delta <= 4 && event.instanceId !== undefined) select(panels[event.instanceId].id, event.ctrlKey || event.metaKey || event.shiftKey) }}>
     <boxGeometry args={[1, 1, 1]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={state.materialMapping && materialScope(state.materialMapping, 'site:' + item.id)} transmission={state.glassTransmission} preview={preview} colour="#ffffff" />
   </instancedMesh>
 }
@@ -148,7 +149,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const registered = !preview && !instance
   useLayoutEffect(() => { if (selectable.current) restoreSiteObjectState(selectable.current, item.object_state) }, [item.object_state])
   const geometryReady = useCallback(() => { if (registered) state.onGeometryReady?.() }, [registered, state.onGeometryReady])
-  const selected = registered && state.selectedIds ? state.selectedIds.has('site:' + item.id) : state.selected === item.id
+  const selected = !preview && state.selectedIds ? state.selectedIds.has('site:' + item.id) : state.selected === item.id
   useLayoutEffect(() => {
     if (!registered) return
     state.onRegister?.(item.id, selectable.current)
@@ -175,7 +176,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   })
   const rotation = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), item.up_axis === 'z' ? Math.PI / 2 : 0)
     .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), item.yaw * Math.PI / 180)), [item.up_axis, item.yaw])
-  const colour = !preview && state.selected === item.id ? '#38bdf8' : item.color
+  const colour = !preview && selected ? '#38bdf8' : item.color
   const arrowShape = useMemo(() => new THREE.Shape([
     new THREE.Vector2(-item.width / 2, item.depth * .1),
     new THREE.Vector2(item.width / 2, item.depth * .1),
@@ -191,7 +192,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     <group ref={workVisualRoot}>
     <group ref={root} userData={{ isSitePreview: preview }} visible={preview || !item.activity_id || presentAt(activity, dateRef.current)}>
     <group key={item.kind==='geographic'||item.kind==='asset'||item.enclosure?item.id:item.color + ':' + state.selected + ':' + preview}>
-    {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={mapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface)=>{if(state.boxSelecting)return;state.onSelect(item.id);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :
+    {item.kind === 'geographic' && item.geographic ? <group rotation={item.up_axis==='y'?[-Math.PI/2,0,0]:[0,0,0]}><GeographicModel data={item.geographic} itemId={item.id} mapping={mapping} selected={state.detailSelection?.itemId===item.id?state.detailSelection.featureId:undefined} onLoaded={geometryReady} onSelect={(featureId,surface,additive)=>{if(preview||state.boxSelecting)return;state.onSelect(item.id,additive);state.onDetailSelect?.({itemId:item.id,featureId,surface})}}/></group> :
     item.kind === 'shape' ? <mesh castShadow receiveShadow onClick={e=>{e.stopPropagation();if(!state.boxSelecting && !preview && e.delta <= 4)state.onSelect(item.id,e.shiftKey||e.ctrlKey||e.metaKey)}}><FootprintGeometry item={item}/>{material}</mesh> :
     (item.kind==='array'||item.kind==='scatter') ? <group>{item.layout?.placements?.map((placement,index)=>{const override=item.instance_overrides?.[index];return <Item key={index} instance instanceIndex={index} item={{...item,...override,kind:override?'asset':item.placement_kind || 'tree',position:placement.position,yaw:placement.yaw+item.yaw,layout:null,activity_id:null,object_state:null,rotation:undefined,scale:undefined,animation_playing:override?false:item.animation_playing}} state={state} preview={preview} dateRef={dateRef} links={[]} activities={[]} profiles={[]} />})}</group> :
     item.kind === 'fence' && item.enclosure ? <EnclosureMesh item={item} state={state} preview={preview} dateRef={state.pathDateRef || dateRef}/> :

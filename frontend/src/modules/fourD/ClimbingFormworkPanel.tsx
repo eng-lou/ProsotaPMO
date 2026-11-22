@@ -1,3 +1,4 @@
+import { SiteToolSection } from './SiteToolSection'
 import './constructionControls.css'
 import {useMemo,useState} from 'react'
 import {Box3} from 'three'
@@ -17,7 +18,7 @@ export function ClimbingFormworkPanel({item,activities,axis,format,onSeek,onAppl
  const change=(id:string,patch:Partial<ClimbLift>)=>{if(config)void save({...config,lifts:config.lifts.map(l=>l.id===id?{...l,...patch}:l)})}
  function selectedTop(){const sources=selectedSources().filter(s=>s.id!=='site:'+item.id);try{if(!sources.length)throw Error('Select the core geometry in the viewport first.');const bounds=new Box3();for(const source of sources){source.object.updateWorldMatrix(true,true);bounds.union(new Box3().setFromObject(source.object))}if(bounds.isEmpty())throw Error('Selected geometry has no bounds.');return bounds.max[config?.axis||axis]}finally{sources.forEach(s=>s.dispose?.())}}
  function readHeight(id?:string){try{if(!config)return;const top=selectedTop();if(id)change(id,{height:top-config.reference_elevation});else void save({...config,reference_elevation:top})}catch(e){setError((e as Error).message)}}
- return <fieldset disabled={disabled||busy||blocked} className="construction-controls border rounded p-3 space-y-2"><legend>Climbing formwork</legend>
+ return <SiteToolSection title="Climbing formwork" disabled={disabled||busy||blocked}>
  <p>Place the whole assembly at its first working level. It holds between climbs and moves as one object.</p>
  {blocked&&<p>Remove this object's work sequence, route or attachment before enabling climbing.</p>}
  {!config?<button onClick={()=>void save({axis,reference_elevation:0,lifts:[]})}>Enable simple climb</button>:<>
@@ -43,5 +44,5 @@ export function ClimbingFormworkPanel({item,activities,axis,format,onSeek,onAppl
  </>}
  {busy&&<p role="status">Saving climb settings…</p>}
  {(error||warning)&&<p role="alert" className="text-red-500">{error||warning}</p>}
- </fieldset>
+ </SiteToolSection>
 }

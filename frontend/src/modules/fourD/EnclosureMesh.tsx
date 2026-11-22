@@ -38,14 +38,15 @@ export function EnclosureMesh({item,state,preview,dateRef}:{item:SiteItem;state:
   useFrame(() => assembly.setPose(item.enclosure!.openings, dateRef?.current?.getTime() ?? null))
   useLayoutEffect(() => { assembly.setPose(item.enclosure!.openings, dateRef?.current?.getTime() ?? null) }, [assembly,item.enclosure,dateRef])
   useEffect(()=>()=>assembly.dispose(),[assembly])
+  const wholeSelected = state.selectedIds?.has('site:'+item.id) && !state.selected?.startsWith(item.id+':panel:')
   useLayoutEffect(()=>{
     const white=new T.Color('white'),active=new T.Color('#4ac7ff')
     for(const mesh of assembly.root.children as T.InstancedMesh<T.BufferGeometry,T.MeshStandardMaterial>[]){
       const owners=mesh.userData.enclosureOwners as string[]
-      for(let i=0;i<owners.length;i++)mesh.setColorAt(i,!preview&&(state.selected===item.id||state.selected===owners[i])?active:white)
+      for(let i=0;i<owners.length;i++)mesh.setColorAt(i,!preview&&(wholeSelected||state.selected===item.id||state.selected===owners[i])?active:white)
       if(mesh.instanceColor)mesh.instanceColor.needsUpdate=true
     }
-  },[assembly,state.selected,item.id,preview])
+  },[assembly,state.selected,wholeSelected,item.id,preview])
   function select(event:ThreeEvent<MouseEvent>){
     event.stopPropagation()
     if(preview||state.boxSelecting||event.delta>4||event.instanceId===undefined)return
