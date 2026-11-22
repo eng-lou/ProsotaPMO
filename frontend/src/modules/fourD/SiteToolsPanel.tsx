@@ -14,7 +14,7 @@ import { editableMapFeatures } from './geographicSelection'
 import { buildGeographicContext, disposeGeographicContext } from './geographicGeometry'
 import { ToolVisualGuide } from './ToolVisualGuide'
 import { ShapeOperationsPanel, type ShapeSource } from './ShapeOperationsPanel'
-import type { Object3D } from 'three'
+import type { Box3, Object3D } from 'three'
 import { arraySourceSnapshot, disposeArraySnapshot } from './arraySourceSnapshot'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
@@ -50,7 +50,7 @@ const presets: Record<Exclude<SiteItem['kind'], 'asset'|'geographic'>, { name: s
   person: { name: 'Static person', width: .5, depth: .3, height: 1.75, color: '#f59e0b' },
   arrow: { name: 'Road arrow', width: 1, depth: 2.5, height: .02, color: '#ffffff' },
 }
-export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timelineFormat, timelineDateRef, onSeek, onEditAttachment, selectedShapeSources, hideShapeSources, importRequest, projectId, paths, zones, sceneSources, activities, riggedIds, extractionBlocks, onGenerateSchedule, upAxis, state, openPaths, focusSite, selectedObjectIds, onPickItems, links, profiles, onLink, onUnlink, onAssignProfile, linkError }: {
+export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timelineFormat, timelineDateRef, onSeek, onEditAttachment, selectedShapeSources, readPileBounds, hideShapeSources, importRequest, projectId, paths, zones, sceneSources, activities, riggedIds, extractionBlocks, onGenerateSchedule, upAxis, state, openPaths, focusSite, selectedObjectIds, onPickItems, links, profiles, onLink, onUnlink, onAssignProfile, linkError }: {
   sceneLightsEnabled: boolean; enableSceneLights(): void
   timelineFormat?: TimelineFormat
   timelineDateRef?: React.MutableRefObject<Date|null>
@@ -59,6 +59,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   riggedIds?: Set<string>
   extractionBlocks?: Record<string,string>
   onGenerateSchedule(ids:string[]):void
+  readPileBounds(machineId: string): Box3
   selectedShapeSources():ShapeSource[]
   hideShapeSources(ids:string[]):()=>void
   importRequest?: number
@@ -220,7 +221,17 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     const label = single ? `Remove ${single.name}` : `Remove ${targets.size} site objects`
     try { await save(items => removeSitePlacements(items,targets),label) } catch (error) { setError(siteError(error)) }
   }
-  const chosen = selectedObjectIds.size === 1 ? scene.items.find(i => selectedObjectIds.has('site:'+i.id)) : undefined
+  const selectedSites = scene.items.filter(item => selectedObjectIds.has('site:' + item.id))
+  const onlySite = selectedSites.length === 1 ? selectedSites[0] : undefined
+  const chosen = selectedObjectIds.size === 1 ? onlySite : undefined
+  const singleMachine = chosen?.kind === 'asset' && !chosen.asset_part ? chosen : undefined
+  const [lastMachineId, setLastMachineId] = useState<string | null>(null)
+  useEffect(() => {
+    setLastMachineId(previous => singleMachine?.id ?? (previous && selectedObjectIds.has('site:' + previous) ? previous : null))
+  }, [singleMachine?.id, selectedObjectIds])
+  const sequenceOwner = singleMachine ?? selectedSites.find(item => item.id === lastMachineId)
+    ?? (onlySite?.work_sequence?.kind === 'piling' ? onlySite : undefined)
+  const sequenceMachine = sequenceOwner?.kind === 'asset' && !sequenceOwner.asset_part ? sequenceOwner : undefined
   const source=chosen?sceneSources.find(s=>s.id==='site:'+chosen.id)?.object:undefined
   const shapeSources=()=>{
     const selectedFeature=chosen?.geographic&&state.detailSelection?.itemId===chosen.id?editableMapFeatures(chosen.geographic).find(f=>f.id===state.detailSelection?.featureId):null
@@ -313,7 +324,12 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     {chosen?.geographic&&!edit&&<GeographicWorkbench key={'geography:'+chosen.id} item={chosen} state={state} source={source} projectId={projectId} assets={inventory.assets}/>}
     {chosen&&chosen.kind!=='light'&&!chosen.geographic&&!edit&&<><ReplacementPanel key={chosen.id} state={state} assets={inventory.assets} selection={{itemId:chosen.id,instanceIndex:state.detailSelection?.itemId===chosen.id?state.detailSelection.instanceIndex:undefined}}/><button className={button} disabled={!source||busy||capturing} onClick={async()=>{if(!source)return;setCapturing(true);try{await downloadObjectGlb(source,chosen.name,upAxis)}catch(e){setError(siteError(e))}finally{setCapturing(false)}}}>Export object GLB (static pose)</button></>}
     {chosen?.asset_id && !chosen.asset_part && !edit && <SiteAnimationControls item={chosen} projectId={projectId} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} onApplyMotion={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Import motion for ${chosen.name}`)}} />}
-    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<WorkSequencePanel key={'work:'+chosen.id} item={chosen} items={scene.items} activities={activities} paths={paths} projectId={projectId} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Work sequence for ${chosen.name}`)}}/>}
+    {sequenceMachine && !edit && timelineFormat && onSeek && <WorkSequencePanel key={'work:'+sequenceMachine.id}
+      item={sequenceMachine} items={scene.items} activities={activities} paths={paths} projectId={projectId}
+      format={timelineFormat} onSeek={onSeek} disabled={sequenceMachine.locked || busy} mixedSelection={!singleMachine}
+      readPileBounds={readPileBounds} onApply={async patch=>{
+        await save(items=>items.map(i=>i.id===sequenceMachine.id?{...i,...patch}:i), `Work sequence for ${sequenceMachine.name}`)
+      }}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
     {chosen && !edit && <SiteToolSection key={chosen.id} title="Activity links & profiles">

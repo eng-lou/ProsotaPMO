@@ -9288,3 +9288,7 @@ A reusable sweep follows each linked pour. Per-lift slew and deployment keys sto
 ## 2026-11-22 - Schedule-driven crane rig sweeps
 
 Crane rig sweeps store a calibrated hinge, an activity ID and round trips or percentage keys. Playback resolves the dates from the current schedule or simulation scenario. A rig geometry test checks two round trips, manual controls and backward scrubbing after retiming. A browser test linked a beam installation activity, saved the rig through the API, reloaded it, moved and stretched the activity and switched back to manual control.
+
+## 2026-11-22 - Selecting a pile while editing its rig
+
+Ctrl-clicking an IFC pile added its model to the selection, which unmounted the rig editor and discarded the open draft. The piling editor now retains the selected rig and measures the picked IFC element in world coordinates. A browser regression covers an unsaved pile row, a transformed IFC pile, ambiguous picks, a site marker and saving the sequence to the rig.
