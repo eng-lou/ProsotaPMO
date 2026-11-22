@@ -260,7 +260,13 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
           <button className={button} disabled={!sourceId || capturing} onClick={()=>void useSceneSource()}>{capturing?'Preparing source…':'Use object as source'}</button>
           <p>Creates a reusable copy of its current geometry and pose. The original stays in place; copies survive unloading it.</p>
 
-          <label>Object<select className={input} value={edit.placement_kind==='asset'?'asset:'+edit.asset_id:edit.placement_kind || 'tree'} onChange={e=>{const a=inventory.assets.find(a=>'asset:'+a.id===e.target.value);change(a?{placement_kind:'asset',asset_id:a.id,...a.dimensions}:{placement_kind:e.target.value as SiteItem['placement_kind'],asset_id:null,...presets[e.target.value as keyof typeof presets]})}}>{['tree','person','cabin','context','arrow'].map(k=><option key={k} value={k}>{presets[k as keyof typeof presets].name}</option>)}{inventory.assets.map(a=><option key={a.id} value={'asset:'+a.id}>{a.name}</option>)}</select></label>
+          <label>Object<select className={input} value={edit.placement_kind==='asset'?'asset:'+edit.asset_id:edit.placement_kind || 'tree'} onChange={e=>{
+            const asset = inventory.assets.find(a => 'asset:'+a.id === e.target.value)
+            if (asset) { change({placement_kind:'asset', asset_id:asset.id, ...asset.dimensions}); return }
+            const kind = e.target.value as 'tree'|'person'|'cabin'|'context'|'arrow'
+            const { width, depth, height, color } = presets[kind]
+            change({placement_kind:kind, asset_id:null, width, depth, height, color})
+          }}>{['tree','person','cabin','context','arrow'].map(k=><option key={k} value={k}>{presets[k as keyof typeof presets].name}</option>)}{inventory.assets.map(a=><option key={a.id} value={'asset:'+a.id}>{a.name}</option>)}</select></label>
           {number(edit.kind==='array'?'Spacing (m)':'Minimum centre spacing (m)','spacing')}
           {edit.kind==='scatter'?<>{number('Object count','count')}{number('Random seed','seed')}<label><input type="checkbox" checked={edit.random_rotation!==false} onChange={e=>change({random_rotation:e.target.checked})} /> Random rotation</label></>:<label><input type="checkbox" checked={edit.align_to_path!==false} onChange={e=>change({align_to_path:e.target.checked})} /> Align to path</label>}
           <div className="grid grid-cols-2 gap-2">{number('Width (m)','width')}{number('Depth (m)','depth')}{number('Height (m)','height')}{number('Heading offset (°)','yaw')}</div>
