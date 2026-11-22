@@ -26,3 +26,11 @@ Existing placements of the original Prosota 12 x 8 m assembly can opt in through
 4. A linked climb activity supplies its own start and finish. Otherwise the existing duration counts backwards from the erection activity start. Manual date overrides take precedence. Overlapping strip, climb and erection dates are flagged in the panel.
 
 For a new generated tower programme, the advanced **Schedule a separate formwork climb between core lifts** option inserts one activity per transition and reserves the chosen working hours between the preceding strip and the next erection. It defaults off. Existing programmes can link an activity they already contain.
+
+### Pour-driven boom animation
+
+In **Placing boom pose**, enable **Sweep automatically during linked pours** and set the rig's start and finish angles. During each linked pour the boom unfolds and turns towards the start angle over the first 15%, sweeps to the finish angle over the middle 70%, then folds and returns to its resting heading over the last 15%. The working pose sets its reach.
+
+To customise one lift, expand **Boom animation for this pour** inside the lift. Scrub **Pour progress** to a percentage, adjust the angle and click **Key slew**. Use **Key deployment** to control reach independently. The lift stores each key as a fraction of the elapsed interval between its pour's start and finish. Moving or resizing the activity moves the keys with it. Each keyed channel takes precedence for that lift's pour. Removing its last key restores the rig's usual movement.
+
+**Fixed-date keys** still follow the project clock and supply both channels between climbs. A pour-relative key takes precedence for its own channel during that pour. An enabled automatic sweep takes precedence over fixed-date slew during linked pours. Every scheduled climb stows the boom.

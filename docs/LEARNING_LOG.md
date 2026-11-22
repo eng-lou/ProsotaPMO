@@ -9280,3 +9280,7 @@ One erection activity defines a lift. Its climb, pour and strip are phase links 
 ## 2026-11-22 - Climbing platform connections
 
 The boom rig has pinned lift cylinders and wall brackets on all four faces. Inner guides overlap the lower gallery rails throughout the two-stage climb. Previously placed version-one boom rigs receive the connections on import using their existing material slots, placement dimensions and clip timing. Regression tests check both pin centres and the exported cylinder surfaces at intermediate poses, maximum extension and on reverse scrubs.
+
+## 2026-11-22 - Schedule-relative placing boom animation
+
+A reusable sweep follows each linked pour. Per-lift slew and deployment keys store pour progress and are sampled independently from the current activity dates. Re-timing a pour requires no scene write. The existing fixed-date track remains available. A browser check exercised percentage authoring, schedule changes, save, reload, Undo and Redo through the site scene API.

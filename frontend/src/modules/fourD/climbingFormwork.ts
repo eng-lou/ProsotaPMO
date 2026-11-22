@@ -1,6 +1,7 @@
 export interface BoomKey { date:string; deployment:number; slew:number }
-export interface ClimbLift { climb_activity_id?:string|null; pour_activity_id?:string|null; strip_activity_id?:string|null; id:string; activity_id:string|null; height:number; duration_hours:number; start:string|null; finish:string|null }
-export interface ClimbingFormwork { mode?:"simple"|"articulated"; boom_deployment?:number|null; boom_slew?:number; boom_keys?:BoomKey[]; axis:'y'|'z'; reference_elevation:number; lifts:ClimbLift[] }
+export interface PourBoomKey { progress:number; deployment?:number|null; slew?:number|null }
+export interface ClimbLift { climb_activity_id?:string|null; pour_activity_id?:string|null; pour_keys?:PourBoomKey[]; strip_activity_id?:string|null; id:string; activity_id:string|null; height:number; duration_hours:number; start:string|null; finish:string|null }
+export interface ClimbingFormwork { mode?:"simple"|"articulated"; boom_deployment?:number|null; boom_slew?:number; boom_keys?:BoomKey[]; pour_sweep?:{start_angle:number;finish_angle:number}|null; axis:'y'|'z'; reference_elevation:number; lifts:ClimbLift[] }
 type ActivityDate={id:string;start?:string|null;finish?:string|null}
 export function climbWindows(config:ClimbingFormwork,activities:ActivityDate[]){
  const activityById=new Map(activities.map(a=>[a.id,a]));

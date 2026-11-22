@@ -1,6 +1,6 @@
 import { SiteToolSection } from './SiteToolSection'
 import './constructionControls.css'
-import {useMemo,useState} from 'react'
+import {useId,useMemo,useState} from 'react'
 import { coreFrame } from './coreRig'
 import { corePhases, cycleWarnings } from './coreCycle'
 import { CoreBoomControls, CoreLiftTiming } from './CoreCycleControls'
@@ -15,6 +15,7 @@ export function ClimbingFormworkPanel({source,dateRef,item,activities,axis,forma
  const [selected,setSelected]=useState<string[]>([]),[query,setQuery]=useState(''),[rise,setRise]=useState(3),[hours,setHours]=useState(24),[error,setError]=useState(''),[busy,setBusy]=useState(false)
  const config=item.climbing_formwork,blocked=!!item.work_sequence||!!item.path_motion||!!item.attachment||!!item.load_handling?.events.length
  const articulated=config?.mode==='articulated'
+ const editorGroup=useId()
  const supported=!!coreFrame(source)
  const [expanded,setExpanded]=useState<string|null>(null)
  const available=useMemo(()=>activities.filter(a=>a.start && !(articulated && ['pour','strip','core_climb'].includes(a.schedule_phase_key??'')) && !config?.lifts.some(l=>l.activity_id===a.id)&&`${a.code} ${a.task_name}`.toLowerCase().includes(query.toLowerCase())),[activities,config?.lifts,query,articulated])
@@ -67,12 +68,13 @@ export function ClimbingFormworkPanel({source,dateRef,item,activities,axis,forma
  {config.lifts.map((l,i)=><details className="border rounded p-2" key={l.id} open={expanded===l.id} onToggle={e=>{if(e.currentTarget.open)setExpanded(l.id);else setExpanded(v=>v===l.id?null:v)}}><summary>{i+1}. {activities.find(a=>a.id===l.activity_id)?.task_name||'Missing activity'} <span className="font-normal">+{l.height} m</span></summary>{expanded===l.id&&<div className="space-y-1">
  <label>Height above first position (m)<input className={cls} aria-label={`Lift ${i+1} height`} type="number" step=".01" key={l.height} defaultValue={l.height} onBlur={e=>{if(Number.isFinite(e.target.valueAsNumber)&&e.target.valueAsNumber!==l.height)change(l.id,{height:e.target.valueAsNumber})}}/></label><button onClick={()=>readHeight(l.id)}>Read selected core top</button>
  {articulated&&<CoreLiftTiming lift={l} row={rows.find(r=>r.id===l.id)} activities={activities} onSeek={onSeek} change={patch=>change(l.id,patch)}/>}
+ {articulated&&(l.pour_activity_id||l.pour_keys?.length)?<CoreBoomControls editorGroup={editorGroup} lift={l} config={config} activities={activities} source={source} dateRef={dateRef} onSeek={onSeek} save={save}/>:null}
  <label>Climb duration (hours)<input className={cls} type="number" min=".01" step=".25" key={l.duration_hours} defaultValue={l.duration_hours} onBlur={e=>{if(e.target.valueAsNumber>0&&e.target.valueAsNumber!==l.duration_hours)change(l.id,{duration_hours:e.target.valueAsNumber})}}/></label>
  <label className="block">Start override <TimelinePointInput value={l.start?new Date(l.start):null} onChange={d=>change(l.id,{start:d?.toISOString()||null})} format={format} placeholder="From duration" dayEdge="start"/></label>
  <label className="block">Finish override <TimelinePointInput value={l.finish?new Date(l.finish):null} onChange={d=>change(l.id,{finish:d?.toISOString()||null})} format={format} placeholder="Activity start" dayEdge="start"/></label>
  <button onClick={()=>{try{onSeek(new Date(climbWindows(config,activities).find(r=>r.id===l.id)!.finishMs))}catch(e){setError((e as Error).message)}}}>Preview working position</button> <button onClick={()=>void save({...config,lifts:config.lifts.filter(r=>r.id!==l.id)})}>Remove lift</button>
  </div>}</details>)}
- {articulated&&<CoreBoomControls config={config} activities={activities} source={source} dateRef={dateRef} onSeek={onSeek} save={save}/>}
+ {articulated&&<CoreBoomControls editorGroup={editorGroup} config={config} activities={activities} source={source} dateRef={dateRef} onSeek={onSeek} save={save}/>}
  {warnings.map(message=><p role="alert" key={message}>{message}</p>)}
  <button onClick={()=>void save(null)}>Remove climb setup</button>
  </>}

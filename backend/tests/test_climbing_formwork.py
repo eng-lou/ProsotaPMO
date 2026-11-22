@@ -31,3 +31,17 @@ class ClimbTests(unittest.TestCase):
         value=ClimbingFormwork(axis='z',lifts=[self.row()]).model_dump(mode='json')
         self.assertEqual(set(value),{'axis','reference_elevation','lifts'})
         self.assertEqual(set(value['lifts'][0]),{'id','activity_id','height','duration_hours','start','finish'})
+
+    def test_pour_channels_roundtrip_and_validation(self):
+        row = self.row()
+        sweep = dict(start_angle=-55, finish_angle=80)
+        keys = [dict(progress=.2, slew=-40), dict(progress=.8, deployment=.65, slew=90)]
+        cfg = ClimbingFormwork(axis='y', mode='articulated', lifts=[{**row,'pour_keys':keys}], pour_sweep=sweep)
+        self.assertEqual(ClimbingFormwork.model_validate_json(cfg.model_dump_json()), cfg)
+        self.assertIsNone(cfg.lifts[0].pour_keys[0].deployment)
+        for invalid in ([keys[0],keys[0]], [dict(progress=.5)], [dict(progress=1.2,slew=0)],
+                        [dict(progress=0,deployment=-.1)], [dict(progress=.5,slew=200)]):
+            with self.subTest(keys=invalid), self.assertRaises(ValidationError):
+                ClimbingFormwork(axis='y', lifts=[{**row,'pour_keys':invalid}])
+        with self.assertRaises(ValidationError):
+            ClimbingFormwork(axis='y', pour_sweep={**sweep,'start_angle':float('nan')})

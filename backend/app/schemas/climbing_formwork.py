@@ -16,12 +16,32 @@ class BoomKey(BaseModel):
         return self
 
 
+class PourBoomKey(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    progress: float = Field(ge=0, le=1)
+    deployment: float | None = Field(default=None, ge=0, le=1)
+    slew: float | None = Field(default=None, ge=-180, le=180)
+
+    @model_validator(mode='after')
+    def has_channel(self):
+        if self.deployment is None and self.slew is None:
+            raise ValueError('A pour key needs a slew or deployment value')
+        return self
+
+
+class PourSweep(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    start_angle: float = Field(ge=-180, le=180)
+    finish_angle: float = Field(ge=-180, le=180)
+
+
 class ClimbLift(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     id: UUID
     activity_id: UUID | None = None
     climb_activity_id: UUID | None = None
     pour_activity_id: UUID | None = None
+    pour_keys: list[PourBoomKey] = Field(default_factory=list, max_length=128)
     strip_activity_id: UUID | None = None
     height: float = Field(ge=-10000, le=10000)
     duration_hours: float = Field(default=24, gt=0, le=87600)
@@ -29,6 +49,8 @@ class ClimbLift(BaseModel):
     finish: str | None = Field(default=None, max_length=40)
     @model_validator(mode='after')
     def valid_times(self):
+        if len({key.progress for key in self.pour_keys}) != len(self.pour_keys):
+            raise ValueError('Duplicate progress in pour keys')
         for value in (self.start,self.finish):
             if value and datetime.fromisoformat(value.replace('Z','+00:00')).tzinfo is None:
                 raise ValueError('Climb time must include timezone')
@@ -41,6 +63,8 @@ class ClimbLift(BaseModel):
     @model_serializer(mode='wrap')
     def recipe(self, handler):
         data = handler(self)
+        if not self.pour_keys:
+            data.pop('pour_keys', None)
         for key in ('climb_activity_id', 'pour_activity_id', 'strip_activity_id'):
             if data.get(key) is None:
                 data.pop(key, None)
@@ -52,6 +76,7 @@ class ClimbingFormwork(BaseModel):
     mode: Literal['simple', 'articulated'] = 'simple'
     boom_deployment: float | None = Field(default=None, ge=0, le=1)
     boom_slew: float = Field(default=0, ge=-180, le=180)
+    pour_sweep: PourSweep | None = None
     boom_keys: list[BoomKey] = Field(default_factory=list, max_length=128)
     axis: Literal['y','z']
     reference_elevation: float = Field(default=0, ge=-1000000, le=1000000)
@@ -68,7 +93,7 @@ class ClimbingFormwork(BaseModel):
     def recipe(self, handler):
         # Keep old command fingerprints and saved undo receipts valid for simple climbs.
         data = handler(self)
-        for key, default in [('mode', 'simple'), ('boom_deployment', None), ('boom_keys', []), ('boom_slew', 0)]:
+        for key, default in [('mode', 'simple'), ('boom_deployment', None), ('boom_keys', []), ('boom_slew', 0), ('pour_sweep', None)]:
             if data.get(key) == default:
                 data.pop(key, None)
         return data

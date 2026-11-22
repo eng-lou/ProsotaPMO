@@ -133,3 +133,36 @@ test('existing version-one boom rigs keep their baked clips and receive the same
  mixer.clipAction(gltf.animations[0]).play()
  for(const t of [0,.57,.88,.39,0]){mixer.setTime(t);checkLiftConnections(gltf.scene)}
 })
+
+test('pour sweeps and independently keyed channels follow a delayed and extended activity',()=>{
+ const sweep={start_angle:-60,finish_angle:100}
+ const first={...config.lifts[0],pour_activity_id:'firstPour'}
+ const cfg={...config,boom_slew:10,pour_sweep:sweep,lifts:[first,config.lifts[1]]}
+ const activities=[...tasks,activity('firstPour',2,5)]
+ const rescheduled=activities.map(a=>a.id==='pour'?{...a,start:at(182),finish:at(190)}:a)
+ const sampleAt=(settings,schedule)=>{
+   const pose=lib.prepareCoreCycle(settings,lib.climbWindows(settings,schedule))
+   return h=>pose(base+h*hour)
+ }
+ const automatic=sampleAt(cfg,activities)
+ near(automatic(3.5).slew,20);near(automatic(16).slew,20)
+ near(automatic(14.6).slew,-60);near(automatic(17.4).slew,100)
+ near(automatic(17.7).deployment,.5);near(automatic(18).slew,10)
+ const withKeys=keys=>({...cfg,lifts:[first,{...cfg.lifts[1],pour_keys:keys}]})
+ const keyed=withKeys([{progress:.8,slew:90},{progress:.2,slew:-30}])
+ const original=sampleAt(keyed,activities), changed=sampleAt(keyed,rescheduled)
+ for(const progress of [1,.8,.5,.2,.075,0,.5]){
+   const before=original(14+4*progress),after=changed(182+8*progress)
+   near(after.slew,before.slew);near(after.deployment,before.deployment)
+   near(after.deployment,automatic(14+4*progress).deployment)
+ }
+ near(changed(188.4).slew,90);near(changed(186).slew,30);near(changed(16).deployment,0)
+ near(changed(3.5).slew,20);near(changed(10).deployment,0)
+ const reachOnly=sampleAt(withKeys([{progress:.5,deployment:.4}]),rescheduled)
+ near(reachOnly(186).slew,20);near(reachOnly(186).deployment,.4)
+ near(reachOnly(182).deployment,0);near(reachOnly(190).deployment,0)
+ const dated=sampleAt({...keyed,boom_keys:[{date:at(16),deployment:.64,slew:42}]},activities)
+ near(dated(16).slew,30);near(dated(16).deployment,.64);near(dated(19).slew,42)
+ const missing=sampleAt(keyed,activities.filter(a=>a.id!=='pour'))
+ near(missing(16).slew,10);near(missing(16).deployment,0)
+})
