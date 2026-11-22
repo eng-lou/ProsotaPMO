@@ -1,15 +1,18 @@
 import type { EquipmentVisualState } from './EquipmentVisualEditor'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
-import { bindEquipment, equipmentNodes, type EquipmentRig } from './equipmentRig'
+import { bindEquipment, controlValue, equipmentNodes, type EquipmentRig } from './equipmentRig'
+import { craneSweepWindows, sampleCraneSweep } from './craneSweep'
+import type { Activity } from '@/modules/scheduling/types'
 import { createSoilPlayback } from './soilPlayback'
 import type { SiteLayerState } from './SiteSceneLayer'
 import type { Path } from './paths'
 import { buildPathCurve } from './pathCurve'
 import { applySitePath } from './sitePathMotion'
 
-export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError, visual, siteScene, paths=[], daysPerSecond=1, rendering=false }: {
+export function EquipmentPlayback({ rigs, activities, objects, dateRef, preview, onError, visual, siteScene, paths=[], daysPerSecond=1, rendering=false }: {
+  activities:Activity[]
   siteScene?: SiteLayerState; paths?: Path[]; daysPerSecond?: number; rendering?: boolean
   visual?: EquipmentVisualState | null
   rigs: EquipmentRig[]; objects: { name: string; kind: string; object: THREE.Object3D }[]
@@ -22,6 +25,8 @@ export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError, vi
   const lastVisual = useRef<typeof visual>(undefined)
   const sequenceDriven = useRef(new WeakSet<THREE.Object3D>())
   const { invalidate, scene } = useThree()
+  const sweeps=useMemo(()=>new Map(rigs.map(r=>[r.model_ref,craneSweepWindows(r.definition.crane_sweeps??[],activities)])),[rigs,activities])
+  useEffect(()=>{last.current=null;invalidate()},[sweeps,invalidate])
   useEffect(() => {
     const next: typeof bindings.current = []
     const errors: string[] = []
@@ -69,7 +74,12 @@ export function EquipmentPlayback({ rigs, objects, dateRef, preview, onError, vi
       if(changed||override||sequenceDriven.current.has(root)){
         if(override)sequenceDriven.current.add(root);else sequenceDriven.current.delete(root)
         if (visual?.model === rig.model_ref) runtime.evaluate(null, Object.fromEntries(rig.definition.controls.map(c=>[c.id,c.rest])), visual.joint && visual.mode==='pose' ? {[visual.joint]:visual.amount} : {})
-        else runtime.evaluate(time, preview?.model === rig.model_ref && preview.time === time ? preview.values : override||{})
+        else {
+          const windows=sweeps.get(rig.model_ref)
+          const automatic=windows?.length?sampleCraneSweep(windows,time,id=>controlValue(rig.definition.controls.find(c=>c.id===id)!,time)):{}
+          const manual=preview?.model===rig.model_ref && preview.time===time ? preview.values : undefined
+          runtime.evaluate(time,{...automatic,...override,...manual})
+        }
       }
       if(soil&&bucket){
         let visible=true;for(let n:THREE.Object3D|null=root;n;n=n.parent)if(!n.visible)visible=false

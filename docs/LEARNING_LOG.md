@@ -9284,3 +9284,7 @@ The boom rig has pinned lift cylinders and wall brackets on all four faces. Inne
 ## 2026-11-22 - Schedule-relative placing boom animation
 
 A reusable sweep follows each linked pour. Per-lift slew and deployment keys store pour progress and are sampled independently from the current activity dates. Re-timing a pour requires no scene write. The existing fixed-date track remains available. A browser check exercised percentage authoring, schedule changes, save, reload, Undo and Redo through the site scene API.
+
+## 2026-11-22 - Schedule-driven crane rig sweeps
+
+Crane rig sweeps store a calibrated hinge, an activity ID and round trips or percentage keys. Playback resolves the dates from the current schedule or simulation scenario. A rig geometry test checks two round trips, manual controls and backward scrubbing after retiming. A browser test linked a beam installation activity, saved the rig through the API, reloaded it, moved and stretched the activity and switched back to manual control.

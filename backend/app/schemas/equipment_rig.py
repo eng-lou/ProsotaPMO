@@ -124,6 +124,27 @@ class MotionDetail(Strict):
     threshold: float = Field(gt=0, le=1000000)
 
 
+class SweepKey(Strict):
+    progress: float = Field(ge=0, le=1)
+    value: float = Field(ge=0, le=1)
+
+
+class CraneSweep(Strict):
+    activity_id: UUID
+    control: str = Field(min_length=1, max_length=80)
+    start_value: float = Field(ge=0, le=1)
+    end_value: float = Field(ge=0, le=1)
+    cycles: int = Field(ge=1, le=200, strict=True)
+    enabled: bool = True
+    keys: list[SweepKey] = Field(default_factory=list, max_length=128)
+
+    @model_validator(mode='after')
+    def distinct_keys(self):
+        if len({k.progress for k in self.keys}) != len(self.keys):
+            raise ValueError('Each activity-relative slew key needs a distinct percentage')
+        return self
+
+
 class Definition(Strict):
     schema_version: Literal[1] = 1
     controls: list[Control] = Field(default_factory=list, max_length=100)
@@ -131,6 +152,7 @@ class Definition(Strict):
     followers: list[Follower] = Field(default_factory=list, max_length=100)
     motion_details: list[MotionDetail] = Field(default_factory=list, max_length=200)
     soil: Soil | None = None
+    crane_sweeps: list[CraneSweep] = Field(default_factory=list, max_length=300)
 
     @model_validator(mode='after')
     def validate_graph(self):
@@ -140,6 +162,11 @@ class Definition(Strict):
             if len({x.id for x in items}) != len(items):
                 raise ValueError('IDs must be unique')
         controls = {x.id for x in self.controls}
+        if len({s.activity_id for s in self.crane_sweeps}) != len(self.crane_sweeps):
+            raise ValueError('An activity can have only one sweep per rig')
+        hinges = {joint.control for joint in self.joints if joint.kind == 'hinge'}
+        if any(s.control not in hinges for s in self.crane_sweeps):
+            raise ValueError('A crane sweep needs a control with a calibrated hinge')
         joints = {x.id: x for x in self.joints}
         if len({d.node for d in self.motion_details}) != len(self.motion_details) or any(d.joint not in joints for d in self.motion_details):
             raise ValueError('Motion details need unique parts and existing joints')

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { validateSoil, type SoilDefinition } from './soilSimulation'
 import { bindFlexiblePart } from './equipmentFlex'
+import { validateCraneSweeps, type CraneSweep } from './craneSweep'
 
 export type Vec3 = [number, number, number]
 export interface EquipmentKey { date: string; value: number; interpolation: 'linear' | 'smooth' | 'hold' }
@@ -15,7 +16,7 @@ export interface EquipmentFollower { id: string; name: string; barrel: string; p
 // Optional visual fittings that would clash outside the authored rest pose.
 // Threshold is an absolute joint offset (degrees for hinges, metres for slides).
 export interface MotionDetail { node: string; joint: string; threshold: number }
-export interface EquipmentDefinition { schema_version: 1; controls: EquipmentControl[]; joints: EquipmentJoint[]; followers: EquipmentFollower[]; motion_details?: MotionDetail[]; soil?: SoilDefinition | null }
+export interface EquipmentDefinition { schema_version: 1; controls: EquipmentControl[]; joints: EquipmentJoint[]; followers: EquipmentFollower[]; motion_details?: MotionDetail[]; soil?: SoilDefinition | null; crane_sweeps?: CraneSweep[] }
 export interface EquipmentRig { id: string; project_id: string; model_ref: string; name: string; version: number; definition: EquipmentDefinition }
 export const emptyEquipment = (): EquipmentDefinition => ({ schema_version: 1, controls: [], joints: [], followers: [] })
 
@@ -107,6 +108,7 @@ export function validateEquipment(def: EquipmentDefinition, nodes?: Map<string, 
   const finite = (v: number) => typeof v === 'number' && Number.isFinite(v)
   const vector = (v: Vec3) => Array.isArray(v) && v.length === 3 && v.every(finite)
   const unit = (v: number) => finite(v) && v >= 0 && v <= 1
+  validateCraneSweeps(def.crane_sweeps??[], def.joints)
   for (const c of def.controls) {
     if (!unit(c.value) || !unit(c.rest) || !Array.isArray(c.keys) || c.keys.length > 10000) throw new Error('Control values must be between 0 and 1')
     if (new Set(c.keys.map(k => Date.parse(k.date))).size !== c.keys.length) throw new Error('Duplicate keyframe time')

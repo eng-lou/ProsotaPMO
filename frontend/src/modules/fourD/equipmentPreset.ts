@@ -8,6 +8,7 @@ export function importEquipmentPreset(definition: EquipmentDefinition, root: THR
   const def = structuredClone(definition)
   def.controls.forEach(c => { c.keys = []; c.value = c.rest })
   delete def.soil
+  delete def.crane_sweeps
   const nodes = equipmentNodes(root)
   const paths = [...new Set([
     ...def.joints.flatMap(jointNodes),

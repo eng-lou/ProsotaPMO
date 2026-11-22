@@ -2,8 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { fileURLToPath } from 'node:url'
-const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/equipmentRig'; export * from './src/modules/fourD/equipmentAssembly'; export * from './src/modules/fourD/equipmentPreset'; export * as THREE from 'three'; export { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'; export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
-const { THREE, GLTFExporter, GLTFLoader, assembleEquipment, bindEquipment, equipmentNodes, validateEquipment, controlValue, emptyEquipment, importEquipmentPreset, jointOffset, setJointTravel, sampleEquipmentNode } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
+const { outputFiles } = await build({ stdin: { contents: "export * from './src/modules/fourD/equipmentRig'; export * from './src/modules/fourD/equipmentAssembly'; export * from './src/modules/fourD/craneSweep'; export * from './src/modules/fourD/equipmentPreset'; export * as THREE from 'three'; export { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'; export { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'", resolveDir: fileURLToPath(new URL('../', import.meta.url)), loader: 'ts' }, bundle: true, write: false, format: 'esm', platform: 'node' })
+const { THREE, GLTFExporter, GLTFLoader, craneSweepWindows, sampleCraneSweep, assembleEquipment, bindEquipment, equipmentNodes, validateEquipment, controlValue, emptyEquipment, importEquipmentPreset, jointOffset, setJointTravel, sampleEquipmentNode } = await import('data:text/javascript;base64,' + Buffer.from(outputFiles[0].text).toString('base64'))
 const near = (a, b) => assert.ok(Math.abs(a-b)<1e-7, `${a} != ${b}`)
 function setup() {
  const root = new THREE.Group(); root.name = 'Backhoe'
@@ -245,4 +245,56 @@ test('minor fittings hide only outside the rest clearance and restore on seek, s
  for(const bad of [{node:'',joint:'boom',threshold:.5},{node:keys[1],joint:'unknown',threshold:.5},{node:keys[1],joint:'boom',threshold:-1}]){
   assert.throws(()=>validateEquipment({...def,motion_details:[bad]}))
  }
+})
+
+test('scheduled crane slew follows the rescheduled activity and preserves other keyed axes', () => {
+  const {root, def} = setup()
+  const start = Date.UTC(2027, 0, 1)
+  const hour = 3600000
+  const activity = (offset, duration) => ({
+    id: 'beams', start: new Date(start + offset*hour).toISOString(), finish: new Date(start + (offset+duration)*hour).toISOString(),
+  })
+  const sweep = {activity_id:'beams', control:'lift', start_value:0, end_value:1, cycles:2, enabled:true, keys:[]}
+  def.crane_sweeps = [sweep]
+  def.controls[0].value = .3
+  def.controls[1].keys = [{date:new Date(start).toISOString(), value:.6, interpolation:'linear'}]
+  validateEquipment(def, equipmentNodes(root))
+  const rig = bindEquipment(root, def)
+  for (const [offset, duration] of [[0,8], [48,16]]) {
+    const windows = craneSweepWindows(def.crane_sweeps, [activity(offset,duration)])
+    for (const [fraction, expected] of [[0,.3],[.275,1],[.5,0],[.725,1],[1,.3],[.275,1]]) {
+      const time = start + (offset + fraction*duration)*hour
+      const values = sampleCraneSweep(windows,time,id=>controlValue(def.controls.find(c=>c.id===id),time))
+      assert.deepEqual(Object.keys(values), ['lift'])
+      near(values.lift, expected)
+      rig.evaluate(time,values)
+      const tip = root.children[2].getWorldPosition(new THREE.Vector3())
+      const rotation = expected*Math.PI/2
+      near(tip.x, 2*Math.cos(rotation) + Math.cos(rotation+.6*Math.PI/2))
+      near(tip.y, 2*Math.sin(rotation) + Math.sin(rotation+.6*Math.PI/2))
+    }
+    assert.deepEqual(sampleCraneSweep(windows,start+offset*hour-1,()=>.3),{})
+    assert.deepEqual(sampleCraneSweep(windows,start+(offset+duration)*hour+1,()=>.3),{})
+  }
+  rig.dispose()
+  assert.equal(importEquipmentPreset(def,root).crane_sweeps, undefined)
+  assert.equal(def.crane_sweeps.length,1)
+})
+
+test('relative slew keys, disabled activities and overlapping crane assignments', () => {
+  const start = Date.UTC(2027,0,1), stamp=t=>new Date(start+t*1000).toISOString()
+  const task=(id,a,b)=>({id,start:stamp(a),finish:stamp(b)})
+  const key=(progress,value)=>({progress,value})
+  const sweep={activity_id:'a',control:'slew',cycles:1,start_value:0,end_value:1,enabled:true,keys:[key(.8,1),key(.2,0)]}
+  const second={...sweep,activity_id:'b',keys:[key(0,.35),key(1,.35)]}
+  const activities=[task('a',0,100),task('b',60,140)]
+  const value=(ws,t)=>sampleCraneSweep(ws,start+t*1000,()=>.5).slew
+  const windows=craneSweepWindows([sweep,second],activities)
+  for(const [t,v] of [[100,.35],[80,1],[50,.5],[90,.75],[20,0],[0,.5]]) near(value(windows,t),v)
+  near(value(craneSweepWindows([second,sweep],activities),80),.35)
+  near(value(craneSweepWindows([sweep,second],[task('a',0,60),task('b',60,140)]),60),.35)
+  near(value(craneSweepWindows([second],activities),140),.35)
+  assert.equal(sweep.keys[0].progress,.8)
+  assert.deepEqual(craneSweepWindows([{...sweep,enabled:false},second],[task('b',0,0)]),[])
+  assert.deepEqual(craneSweepWindows([sweep],[]),[])
 })

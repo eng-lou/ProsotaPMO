@@ -7753,7 +7753,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       onToggleDock: toggleRigPanelDock, onClose: toggleRigPanel,
       content: (
         <div className="flex-1 overflow-y-auto">
-        <EquipmentPanel upAxis={settings.upAxis} siteItems={siteScene.scene.items} paths={paths} onSaveRoute={async(model,motion)=>{
+        <EquipmentPanel activities={simulationActivities} upAxis={settings.upAxis} siteItems={siteScene.scene.items} paths={paths} onSaveRoute={async(model,motion)=>{
           const item=siteScene.scene.items.find(i=>'site:'+i.id===model)
           if(!item||item.locked)throw Error('Unlock the equipment before saving its route.')
           await siteScene.save(siteScene.scene.items.map(i=>i.id===item.id?{...i,path_motion:motion}:i),'Create equipment cycle route')
@@ -7763,7 +7763,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             const item=siteScene.scene.items.find(i=>'site:'+i.id===rig.model_ref)
             if(!item?.asset_id||item.asset_part)throw Error('Use a complete imported asset to save a reusable equipment rig.')
             const existing=equipment.rigs.find(r=>r.model_ref==='asset:'+item.asset_id)
-            const definition=structuredClone(rig.definition);delete definition.soil
+            const definition=structuredClone(rig.definition);delete definition.soil;delete definition.crane_sweeps
             const ok=await equipment.save({...rig,definition,id:existing?.id || '',version:existing?.version || 1,model_ref:'asset:'+item.asset_id})
             if(!ok)throw Error('Could not save the library equipment rig.')
             const assets=await api.get('/api/v1/site-assets/',{params:{project_id:selectedProject?.id}})

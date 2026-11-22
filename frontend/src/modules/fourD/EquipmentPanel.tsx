@@ -12,6 +12,9 @@ import { bucketOpeningAngle, calibrateBucketOpening } from './soilSimulation'
 import { importEquipmentPreset } from './equipmentPreset'
 import { useDockActive } from './SideDock'
 import { EquipmentCycleEditor } from './EquipmentCycleEditor'
+import { CraneSweepPanel } from './CraneSweepPanel'
+import { craneSweepWindows, sampleCraneSweep } from './craneSweep'
+import type { Activity } from '@/modules/scheduling/types'
 import type { Path } from './paths'
 import type { SiteItem, PathMotion } from './siteScene'
 import { buildPathCurve } from './pathCurve'
@@ -24,7 +27,8 @@ function VectorInput({ label, value, change }: { label: string; value: Vec3; cha
   return <label className="block">{label}<div className="flex gap-1">{value.map((v, i) => <input aria-label={`${label} ${'XYZ'[i]}`} key={i} className={input} type="number" step="any" value={v} onChange={e => { const next = [...value] as Vec3; next[i] = Number(e.target.value); change(next) }} />)}</div></label>
 }
 
-export function EquipmentPanel({ proposal, onProposalConsumed, projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset, upAxis='z', format, siteItems=[], paths=[], onSaveRoute }: {
+export function EquipmentPanel({ proposal, onProposalConsumed, projectId, objects, rigs, busy, error, runtimeError, dateRef, onSave, onRemove, onDraft, onPreview, onEditing, onSeek, onAssemble, onVisual, onSaveAsset, upAxis='z', format, siteItems=[], paths=[], onSaveRoute, activities=[] }: {
+  activities?:Activity[]
   siteItems?:SiteItem[];paths?:Path[];onSaveRoute?:(model:string,motion:PathMotion)=>Promise<void>
   upAxis?:'y'|'z'; format?:TimelineFormat|null
   proposal?: EquipmentProposal | null
@@ -166,6 +170,11 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
   const follower = draft?.definition.followers[followerIndex]
   const cycleItem=siteItems.find(i=>'site:'+i.id===model),cyclePath=paths.find(p=>p.id===cycleItem?.path_motion?.path_id)
   const cycleCurve=cyclePath?buildPathCurve(cyclePath.points,cyclePath.closed,cyclePath.curve_mode):null
+  const windows=useMemo(()=>craneSweepWindows(draft?.definition.crane_sweeps??[],activities),[draft?.definition.crane_sweeps,activities])
+  const automatic = sampleCraneSweep(windows, time, id => {
+    const control = draft?.definition.controls.find(c => c.id === id)
+    return control ? controlValue(control, time) : 0
+  })
   return <fieldset disabled={busy || assembling || savingCycle} className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper border-b border-gray-200 dark:border-prosota-line">
     <strong>Equipment Controls</strong>
     {poeRationale && <details open><summary>Poe rig proposal — review assumptions</summary><p className="whitespace-pre-wrap">{poeRationale}</p></details>}
@@ -203,6 +212,9 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
       {dirty && <p>Unsaved changes — kept when switching tabs. Save rig & keys before closing or refreshing.</p>}
       <div className="flex gap-2"><button className={button} aria-pressed={tab==='setup'} onClick={()=>{setTab('setup');setPreview({});onPreview(null)}}>Setup</button><button className={button} aria-pressed={tab==='animate'} onClick={()=>setTab('animate')}>Animate</button></div>
       <div hidden={tab!=='animate'}>
+      {tab==='animate'&&<CraneSweepPanel key={model} activities={activities} definition={draft.definition} windows={windows} time={time}
+        change={sweeps=>{edit(d=>{d.crane_sweeps=sweeps});setPreview({});onPreview(null)}} seek={onSeek}
+        preview={(id,value)=>{setPreview({[id]:value});onPreview({model,time,values:{[id]:value}})}}/>}
       {draft.definition.soil&&draft.definition.soil.mode!=='preloaded'&&format&&<EquipmentCycleEditor key={`${model}:${restoreRevision}`} rig={draft} time={time} format={format} route={cycleItem?.path_motion&&cycleCurve?{motion:cycleItem.path_motion,length:cycleCurve.getLength()}:undefined}
         onPending={setCycleEditing} onSeek={onSeek} onPose={values=>{setTab('animate');onVisual?.(null);setPreview(values);onPreview({model,values,time})}}
         active={active&&tab==='animate'} editing={cycleEditing}
@@ -238,7 +250,7 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
       {tab==='animate' && <details open={!draft.definition.soil}><summary className="font-semibold">Manual controls & keyframes</summary>
       <label className="block">Playhead (local time)<input aria-label="Equipment playhead" className={input} type="datetime-local" step="0.001" value={localTime(new Date(time))} onInput={e => { const d = new Date(e.currentTarget.value); if (Number.isFinite(d.getTime())) { dateRef.current = d; setTime(d.getTime()); onSeek(d) } }} /></label>
       {draft.definition.controls.map(c => {
-        const value = preview[c.id] ?? controlValue(c, time)
+        const value = preview[c.id] ?? automatic[c.id] ?? controlValue(c, time)
         return <div key={c.id} className="border rounded border-gray-200 dark:border-prosota-line p-2 space-y-1">
           {!draft.definition.joints.some(j=>j.control===c.id) && <p className="text-amber-700 dark:text-amber-300">Unconfigured — assign a group in Setup.</p>}
           <input aria-label="Control name" className={input} value={c.name} onChange={e => edit(d => { d.controls.find(x => x.id === c.id)!.name = e.target.value })} />
@@ -304,7 +316,7 @@ export function EquipmentPanel({ proposal, onProposalConsumed, projectId, object
       </details>}
       <div className="space-y-1"><button className={button} onClick={() => {
         try {
-          validate(); const def = structuredClone(draft.definition); def.controls.forEach(c => { c.keys = []; c.value = c.rest });delete def.soil
+          validate(); const def = structuredClone(draft.definition); def.controls.forEach(c => { c.keys = []; c.value = c.rest });delete def.soil;delete def.crane_sweeps
           const url = URL.createObjectURL(new Blob([JSON.stringify({ name: draft.name, definition: def }, null, 2)], { type: 'application/json' }))
           const a = document.createElement('a'); a.href = url; a.download = `${draft.name.replace(/[^\w-]/g, '_')}-equipment.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
         } catch (e) { setNotice((e as Error).message) }

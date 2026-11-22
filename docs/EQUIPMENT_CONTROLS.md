@@ -154,3 +154,11 @@ The complete XYZ orientation is saved with the joint so local axes survive reloa
 Choosing an X/Y/Z preset or an advanced axis value replaces this orientation.
 Save rig & keys persists pivot changes. Pose with gizmo still tests group travel;
 clicking Move or Rotate in Properties returns to editing the pivot at rest.
+
+### Schedule-driven crane sweeps
+
+In **Equipment Controls**, select the calibrated crane model. Open **Animate** and **Scheduled crane sweeps**. Choose the slew hinge, find one or more activities by name or code, and click **Link selected activities**. Expand an activity to set the two ends of the sweep and the number of round trips. The endpoints use the rig's calibrated 0 to 1 range. Click **Save rig & keys**.
+
+Scrub **Activity progress** to preview the motion. The crane eases into and out of the sweep at the activity boundaries. Custom slew keys let you pose the jib at specific activity percentages. Either choice follows changes to the activity dates and duration. Where linked activities overlap, the first enabled activity in the list has priority.
+
+For manual close-ups, clear **Use sweep during this activity**. The trolley and hoist keep their own controls. Fixed-date equipment keys and existing load attachment and release events retain their recorded dates.
