@@ -33,6 +33,17 @@ test('delivered GLB has independently moving decks, all four form faces and an a
  const bytes=await fs.readFile(new URL('../public/models/Prosota_Core_Formwork_with_Boom.glb',import.meta.url))
  const gltf=await new lib.GLTFLoader().parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'')
  assert.deepEqual(gltf.animations.map(a=>a.name),['Core climb - 3 m','Placing boom - deploy'])
+ const frame=lib.coreFrame(gltf.scene), moving=[]
+ frame.traverse(n=>{if(n.userData.coreRigPart)moving.push(n)})
+ const foot=moving.find(n=>n.userData.coreRigPart==='lower'), nozzle=moving.find(n=>n.userData.coreRigPart==='hose')
+ const point=n=>n.getWorldPosition(new lib.Vector3()), footAtRest=point(foot), hoseAtRest=point(nozzle)
+ const mixer=new lib.AnimationMixer(gltf.scene)
+ mixer.clipAction(gltf.animations[0]).play();mixer.setTime(.57)
+ near(frame.position.y,3);near(point(foot).y,footAtRest.y)
+ mixer.setTime(1);near(point(foot).y-footAtRest.y,3)
+ mixer.stopAllAction();mixer.clipAction(gltf.animations[1]).play();mixer.setTime(.95)
+ assert.ok(point(nozzle).distanceTo(hoseAtRest)>2)
+ mixer.setTime(0);near(point(nozzle).distanceTo(hoseAtRest),0);mixer.stopAllAction()
  for(const axis of ['y','z']){
    const anchor=new lib.Group(), model=gltf.scene.clone(true), frame=lib.coreFrame(model), apply=lib.bindCoreRig(frame)
    anchor.add(model);if(axis==='z')model.rotation.x=Math.PI/2
