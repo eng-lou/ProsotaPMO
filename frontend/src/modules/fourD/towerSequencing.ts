@@ -4,6 +4,7 @@ import type { CategoryGroup, StoreyGroup, StagedActivity, StagedRelationship } f
 
 export interface TowerSequencing {
   coreLeadFloors: number
+  coreClimbHours?: number
   facadeLagFloors: number
 }
 

@@ -1,6 +1,7 @@
 import { EnclosureMesh } from './EnclosureMesh'
 import { sampleWork, applyWorkPose, workWindows } from './workSequence'
 import { workVisual, createWorkClip } from './workSequenceVisual'
+import { prepareCoreCycle, type CorePose } from './coreCycle'
 import { climbHeight, climbWindows } from './climbingFormwork'
 import { LoadHandlingLayer } from "./LoadHandlingLayer"
 import { SiteLight } from './SiteLight'
@@ -111,6 +112,9 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const motionTime = useRef<number | null>(null)
   const workRows=useMemo(()=>{try{return item.work_sequence?workWindows(item.work_sequence,activities):null}catch{return null}},[item.work_sequence,activities])
   const climbRows=useMemo(()=>{try{return item.climbing_formwork?climbWindows(item.climbing_formwork,activities):null}catch{return null}},[item.climbing_formwork,activities])
+  const cycle=useMemo(()=>item.climbing_formwork?.mode==='articulated' ? prepareCoreCycle(item.climbing_formwork,climbRows??[]) : null,[item.climbing_formwork,climbRows])
+  const corePose=useRef<CorePose|null>(null)
+  const lastCoreSample=useRef<{cycle:typeof cycle;time:number;preview?:object}|null>(null)
   const workPath=state.paths?.find(p=>p.id===item.work_sequence?.path_id)
   const workCurve=useMemo(()=>workPath?buildPathCurve(workPath.points,workPath.closed,workPath.curve_mode):null,[workPath])
   const sourcePath = state.paths?.find(p => p.id === item.path_motion?.path_id)
@@ -138,8 +142,18 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
       const seconds = pathDate ? (pathDate.getTime() - Date.parse(fittedMotion.start)) / (86400000 * (state.daysPerSecond || 1)) : 0
       motionTime.current = applySitePath(parent, curve, fittedMotion, seconds, item.up_axis, new THREE.Vector3(item.position.x,item.position.y,item.position.z), state.daysPerSecond || 1).animationTime
     } else { parent.position.set(0,0,0); parent.quaternion.identity(); parent.scale.setScalar(1); motionTime.current=null
-      if(!preview&&!instance&&item.climbing_formwork&&climbRows){
-        try { const date=(state.pathDateRef||dateRef).current;parent.position[item.climbing_formwork.axis]=date?climbHeight(item.climbing_formwork,activities,date.getTime(),climbRows):0 }
+      if(!preview&&!instance&&item.climbing_formwork&&(climbRows||cycle)){
+        try {
+          const date=(state.pathDateRef||dateRef).current, time=date?.getTime()??NaN
+          const override=selectable.current?.userData.coreBoomPreview
+          const live=override && Object.is(override.time,time)?override:undefined
+          if (cycle && (lastCoreSample.current?.cycle!==cycle || !Object.is(lastCoreSample.current?.time,time) || lastCoreSample.current?.preview!==live)) {
+            const pose=cycle(time)
+            if(live){pose.deployment=live.deployment;pose.slew=live.slew}
+            corePose.current=pose;lastCoreSample.current={cycle,time,preview:live}
+          }
+          parent.position[item.climbing_formwork.axis]=cycle ? corePose.current?.upper??0 : date&&climbRows?climbHeight(item.climbing_formwork,activities,time,climbRows):0
+        }
         catch { parent.position.set(0,0,0) }
       }
     }
@@ -201,7 +215,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
         onClick={(e: ThreeEvent<MouseEvent>) => { e.stopPropagation(); if (!state.boxSelecting && !preview && e.delta <= 4) {state.onSelect(item.id, e.ctrlKey || e.metaKey || e.shiftKey);state.onDetailSelect?.({itemId:item.id,instanceIndex})} }}>
         {item.kind === 'light' && <SiteLight item={item} enabled={state.importedLights !== false}
           showHandle={!state.hideLightHandles} selected={selected || preview} />}
-        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel cover={item.tower_cover} showStatus={!instance} adaptiveDetail={instance && state.adaptiveDetail} captureDetail={state.captureDetail} importedLights={state.importedLights} actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={mapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
+        {item.kind === 'asset' && item.asset_id && <group scale={[item.width, item.height, item.depth]}><SiteAssetModel corePose={cycle&&!preview&&!instance?corePose:undefined} climbAxis={item.climbing_formwork?.axis} cover={item.tower_cover} showStatus={!instance} adaptiveDetail={instance && state.adaptiveDetail} captureDetail={state.captureDetail} importedLights={state.importedLights} actions={preview||instance?[]:item.motion_actions} actionDateRef={state.pathDateRef||dateRef} daysPerSecond={state.daysPerSecond} part={item.asset_part} pathBound={!!item.path_motion && !!curve && !preview && !instance} motionTime={motionTime} playing={item.animation_playing??true} clip={item.animation_clip??0} speed={item.animation_speed??1} textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} id={item.asset_id} mapping={mapping} transmission={state.glassTransmission} preview={preview} selected={selected} onLoaded={geometryReady} /></group>}
         {(item.kind === 'context' || item.kind === 'cabin') && <>
           <mesh position={[0, item.height / 2, 0]} castShadow receiveShadow><boxGeometry args={[item.width, item.height, item.depth]} />{material}</mesh>
           {item.kind === 'cabin' && <mesh position={[0, item.height * .6, item.depth / 2 + .005]}><planeGeometry args={[item.width * .65, item.height * .3]} /><ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} slot="windows" mapping={mapping} transmission={state.glassTransmission} preview={preview} colour="#334155" /></mesh>}

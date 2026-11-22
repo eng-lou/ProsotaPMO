@@ -5,7 +5,7 @@ import { useState } from 'react'
 
 export interface TowerSettings {
   enabled: boolean; coreIds: string[]; facadeIds: string[]; retainedIds: string[]; levelMap: Record<string, string>
-  coreLeadFloors: number; facadeLagFloors: number
+  coreLeadFloors: number; facadeLagFloors: number; coreClimbHours?:number
 }
 export const initialTowerSettings: TowerSettings = { enabled: false, coreIds: [], facadeIds: [], retainedIds: [], levelMap: {}, coreLeadFloors: 1, facadeLagFloors: 2 }
 const field = 'rounded border border-gray-300 dark:border-prosota-line bg-white dark:bg-prosota-panel2 text-gray-800 dark:text-prosota-paper p-1'
@@ -47,6 +47,8 @@ export function TowerSequenceControls({ value, onChange, elements, storeys, dete
       <details><summary className="cursor-pointer font-semibold">Advanced</summary><div className="space-y-2 pt-2">
         <label className="block">Core lead (floors) <input aria-label="Core lead in floors" className={`${field} w-14`} type="number" min={1} max={20} value={value.coreLeadFloors} onChange={e => update({ coreLeadFloors: Number(e.target.value) })} /></label>
         <label className="block">Façade lag (floors) <input aria-label="Facade lag in floors" className={`${field} w-14`} type="number" min={0} max={20} value={value.facadeLagFloors} onChange={e => update({ facadeLagFloors: Number(e.target.value) })} /></label>
+        <label className="block"><input type="checkbox" checked={!!value.coreClimbHours} onChange={e=>update({coreClimbHours:e.target.checked?2:undefined})}/> Schedule a separate formwork climb between core lifts</label>
+        {!!value.coreClimbHours&&<label>Climb duration (working hours) <input className={field} type="number" min=".25" max="8760" step=".25" value={value.coreClimbHours} onChange={e=>{const h=e.target.valueAsNumber;if(h>0&&h<=8760)update({coreClimbHours:h})}}/></label>}
         <p>{Object.keys(value.levelMap).length} intermediate levels grouped automatically. Core lifts rise from their supporting floor.</p>
         <details><summary>Adjust construction floors</summary><div className="max-h-40 overflow-y-auto">{storeys.map(s => <label key={s.storeyName} className="grid grid-cols-2 gap-1"><span>{s.storeyName}</span><select className={field} value={value.levelMap[s.storeyName] ?? s.storeyName} onChange={e => update({ levelMap: { ...value.levelMap, [s.storeyName]: e.target.value } })}>{storeys.map(t => <option key={t.storeyName}>{t.storeyName}</option>)}</select></label>)}</div></details>
         <p>Whole multi-storey façade objects wait for their highest supporting floor. Geometry is not split.</p>

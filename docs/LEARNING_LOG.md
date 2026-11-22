@@ -9272,3 +9272,7 @@ A disposable browser project exercised both sidebar buttons through hard reloads
 The Site objects list reads the viewport selection. Search and range selection operate on the visible rows. Remove uses a single revision-checked scene edit for the selected unlocked placements. A browser test with 50 placements removed 30 at once, kept the locked placement, reloaded the project and restored the complete ordered scene with one Undo.
 
 Fences and repeated objects now share a path-layout entry. Switching the layout keeps the source path and each layout's draft settings. Animation, climbing, construction actions, slings, gate posing and activity links open on demand.
+
+## 2026-11-22 - Articulated climbing formwork and placing boom
+
+One erection activity defines a lift. Its climb, pour and strip are phase links on that same lift. Generated tower schedules may reserve an explicit climb between consecutive core levels. Date overrides and earlier whole-assembly schedules remain supported. The core rig samples absolute dates for both platforms, panel travel and the placing boom, including reverse scrubs. The standalone GLB uses separate named pivots and demonstration clips. The original four-sided Prosota assembly can use the same rig per placement.

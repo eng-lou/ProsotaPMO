@@ -1,12 +1,28 @@
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from typing import Literal
+
+class BoomKey(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    date: datetime
+    deployment: float = Field(ge=0, le=1)
+    slew: float = Field(ge=-180, le=180)
+
+    @model_validator(mode='after')
+    def dated(self):
+        if self.date.tzinfo is None:
+            raise ValueError('Boom key must include timezone')
+        return self
+
 
 class ClimbLift(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     id: UUID
     activity_id: UUID | None = None
+    climb_activity_id: UUID | None = None
+    pour_activity_id: UUID | None = None
+    strip_activity_id: UUID | None = None
     height: float = Field(ge=-10000, le=10000)
     duration_hours: float = Field(default=24, gt=0, le=87600)
     start: str | None = Field(default=None, max_length=40)
@@ -22,13 +38,37 @@ class ClimbLift(BaseModel):
             raise ValueError('Climb finish must follow start')
         return self
 
+    @model_serializer(mode='wrap')
+    def recipe(self, handler):
+        data = handler(self)
+        for key in ('climb_activity_id', 'pour_activity_id', 'strip_activity_id'):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
+
+
 class ClimbingFormwork(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    mode: Literal['simple', 'articulated'] = 'simple'
+    boom_deployment: float | None = Field(default=None, ge=0, le=1)
+    boom_slew: float = Field(default=0, ge=-180, le=180)
+    boom_keys: list[BoomKey] = Field(default_factory=list, max_length=128)
     axis: Literal['y','z']
     reference_elevation: float = Field(default=0, ge=-1000000, le=1000000)
     lifts: list[ClimbLift] = Field(default_factory=list, max_length=300)
     @model_validator(mode='after')
     def unique_lifts(self):
+        if len({k.date for k in self.boom_keys}) != len(self.boom_keys):
+            raise ValueError('Duplicate boom key times')
         if len({l.id for l in self.lifts}) != len(self.lifts):
             raise ValueError('Duplicate climb lift IDs')
         return self
+
+    @model_serializer(mode='wrap')
+    def recipe(self, handler):
+        # Keep old command fingerprints and saved undo receipts valid for simple climbs.
+        data = handler(self)
+        for key, default in [('mode', 'simple'), ('boom_deployment', None), ('boom_keys', []), ('boom_slew', 0)]:
+            if data.get(key) == default:
+                data.pop(key, None)
+        return data

@@ -17,3 +17,17 @@ class ClimbTests(unittest.TestCase):
     def test_attachment_conflict(self):
         data=dict(id=uuid4(),name='Formwork',kind='asset',asset_id=uuid4(),generator_version=1,up_axis='y',position=dict(x=0,y=0,z=0),climbing_formwork=dict(axis='z',lifts=[self.row()]),load_handling=dict(events=[dict(id=uuid4(),date='2026-11-01T00:00:00Z',matrix=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1])]))
         with self.assertRaises(ValidationError):SiteItem(**data)
+
+    def test_articulated_phase_links_and_keys_survive_json(self):
+        row = {**self.row(), **{k: uuid4() for k in ['climb_activity_id', 'pour_activity_id', 'strip_activity_id']}}
+        key = dict(date='2026-11-22T08:00:00Z', deployment=0.75, slew=-40)
+        cfg = ClimbingFormwork(axis='z', mode='articulated', lifts=[row], boom_keys=[key])
+        self.assertEqual(ClimbingFormwork.model_validate_json(cfg.model_dump_json()), cfg)
+        for keys in [[key, key], [{**key,'date':'2026-11-22'}], [{**key,'deployment':1.1}]]:
+            with self.assertRaises(ValidationError):
+                ClimbingFormwork(axis='z', boom_keys=keys)
+
+    def test_legacy_signature(self):
+        value=ClimbingFormwork(axis='z',lifts=[self.row()]).model_dump(mode='json')
+        self.assertEqual(set(value),{'axis','reference_elevation','lifts'})
+        self.assertEqual(set(value['lifts'][0]),{'id','activity_id','height','duration_hours','start','finish'})

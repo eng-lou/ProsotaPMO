@@ -100,3 +100,17 @@ test('reviewed multi-storey facade waits at supporting floor without changing ot
  assert(reaches(s,slab.temp_id,screen.temp_id))
  assert.equal(s.activities.flatMap(a=>a.element_refs).length,5)
 })
+
+test('dedicated climbs reserve working time between successive core levels',()=>{
+ const options={coreLeadFloors:1,facadeLagFloors:2,coreClimbHours:2}
+ const s=generate(options), climbs=s.activities.filter(a=>a.phase_key==='core_climb')
+ assert.equal(climbs.length,floors.length-1)
+ for(const [i,climb] of climbs.entries()){
+   assert.equal(climb.duration_hours,2)
+   assert.deepEqual(climb.element_refs,[])
+   const prev=s.activities.find(a=>a.parent_temp_id==='wbs-storey-'+i && a.phase_key==='strip' && a.task_name.includes('Core walls'))
+   const next=s.activities.find(a=>a.parent_temp_id==='wbs-storey-'+(i+1) && a.phase_key==='formwork_rebar' && a.task_name.includes('Core walls'))
+   assert.ok(reaches(s,prev.temp_id,climb.temp_id));assert.ok(reaches(s,climb.temp_id,next.temp_id))
+ }
+ assert.equal(generate({...options,coreClimbHours:0}).activities.filter(a=>a.phase_key==='core_climb').length,0)
+})

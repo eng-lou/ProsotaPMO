@@ -1817,6 +1817,12 @@ export function buildStagedSchedule(
       elementCount += category.elementRefs.length
       const phases = resolvePhases(category.name)
       const isStructural = STRUCTURAL_CATEGORIES.has(category.name)
+      if (tower?.coreClimbHours && category.workstream==='core' && storeys.slice(0,storeyIndex).some(s=>s.categories.some(c=>c.workstream==='core'))) {
+        if (!Number.isFinite(tower.coreClimbHours) || tower.coreClimbHours<=0 || tower.coreClimbHours>8760) throw Error('Enter a positive climb duration up to 8760 working hours.')
+        activities.push({temp_id:`act-${storeyIndex}-${categoryIndex}-climb`, task_name:`${storey.storeyName} - Core walls - Climb formwork`,
+          parent_temp_id:wbsTempId, duration_hours:tower.coreClimbHours, element_refs:[], element_labels:[], category:'Walls',
+          phase_key:'core_climb', quantity:null, activity_type:'task', discipline:disciplineFor('Walls','formwork_rebar')})
+      }
       const isWalls = category.name === 'Walls'
       const isFacade = FACADE_CATEGORIES.has(category.name)
       const isLate = LATE_CATEGORIES.has(category.name)

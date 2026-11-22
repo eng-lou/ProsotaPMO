@@ -29,6 +29,7 @@ import { FenceSettings, TowerCoverSettings, fencePresets } from './EnclosureSett
 import { SiteToolSection } from './SiteToolSection'
 import { SiteObjectList } from './SiteObjectList'
 import { removeSitePlacements, type SiteSelectionMode } from './siteObjectSelection'
+import { CoreRigTemplate } from './CoreRigTemplate'
 import { SiteAssetLibrary } from './SiteAssetLibrary'
 import { useSiteAssetInventory, importSiteAsset, type SiteAsset } from './siteAssets'
 import { ElementLinkFields } from './ElementLinkFields'
@@ -144,12 +145,16 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     }
     startShape(kind)
   }
-  function placeAsset(asset: SiteAsset, parts=false) {
+  function placeAsset(asset: SiteAsset, parts=false, articulated=false) {
     cancel(); setPlaceAsParts(parts); focusSite(); setSelected(null); setLibrary(false); setConfirmed(true)
     const value: SiteItem = { id: crypto.randomUUID(), kind: 'asset', asset_id: asset.id, name: asset.name,
       ...asset.dimensions, color: '#ffffff', generator_version: 1, up_axis: upAxis, units: 'm',
       position: { x: 0, y: 0, z: 0 }, yaw: 0, locked: false, activity_id: null, path_id: null,
       points: [], closed: false, module_length: 2, gate_start: 0, gate_width: 0 }
+    if (articulated) {
+      value.climbing_formwork={mode:'articulated',axis:upAxis,reference_elevation:0,lifts:[]}
+      value.animation_playing=false
+    }
     setEdit(value); setDraft(value); state.setPlacing(true)
   }
   async function useSceneSource() {
@@ -203,7 +208,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     try { const placements=placeAsParts&&draft.kind==='asset'&&draft.asset_id ? splitSiteAsset(draft,await loadSiteAsset(draft.asset_id)) : [draft]
       await save([...items, ...placements], `3D Site tools: ${draft.name}`)
       cancel()
-      if (draft.kind === 'light') setSelected(draft.id)
+      if (draft.kind === 'light' || draft.climbing_formwork?.mode==='articulated') setSelected(draft.id)
     } catch(e) { setError(siteError(e)) } finally { setCapturing(false) }
   }
   async function update(item: SiteItem, patch: Partial<SiteItem>) {
@@ -232,6 +237,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   return <div className="p-3 space-y-3 text-xs text-gray-700 dark:text-prosota-paper">
     <div className="flex gap-2"><button className={`${button} flex-1 ${library ? 'bg-blue-600 text-white' : ''}`} onClick={() => { cancel(); setLibraryFilter(''); setLibrary(true) }}>Asset library</button><button className={`${button} flex-1 ${!library ? 'bg-blue-600 text-white' : ''}`} onClick={() => setLibrary(false)}>Layout tools</button></div>
     {library && <SiteAssetLibrary projectId={projectId} inventory={inventory} initialFilter={libraryFilter} onPlace={placeAsset} />}
+    {library && !edit && <CoreRigTemplate projectId={projectId} inventory={inventory} onPlace={asset=>placeAsset(asset,false,true)}/>}
     {!library && !edit && <div className="grid grid-cols-2 gap-1" aria-label="Place site object">
       {(['fence','scatter','shape','context','light'] as const).map(kind =>
         <button key={kind} className={button} disabled={!state.ready || busy} onClick={() => startLayout(kind)}>
@@ -241,7 +247,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     {!edit && <ShapeOperationsPanel projectId={projectId} upAxis={upAxis} sources={sceneSources.filter(s=>!scene.items.some(i=>i.kind==='geographic'&&s.id==='site:'+i.id))} state={state} selectedSources={shapeSources} hideSources={hideShapeSources}/> }
     {edit && <div className="space-y-2 border-t pt-2 dark:border-prosota-line">
       {edit.kind==='asset'&&!edit.asset_part&&<TowerCoverSettings item={edit} change={change}/>}
-      {edit.kind==='asset'&&!edit.asset_part&&<label className="flex gap-2"><input type="checkbox" checked={placeAsParts} onChange={e=>setPlaceAsParts(e.target.checked)}/>Save as independent construction parts</label>}
+      {edit.kind==='asset'&&!edit.asset_part&&edit.climbing_formwork?.mode!=='articulated'&&<label className="flex gap-2"><input type="checkbox" checked={placeAsParts} onChange={e=>setPlaceAsParts(e.target.checked)}/>Save as independent construction parts</label>}
       {(edit.kind === 'fence' || edit.kind === 'array') && !scene.items.some(item => item.id === edit.id) &&
         <label>Path layout<select className={input} value={edit.kind} onChange={e => switchPathLayout(e.target.value as 'fence'|'array')}>
           <option value="fence">Fence / hoarding</option><option value="array">Repeated objects</option>
@@ -303,12 +309,12 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     {chosen && <p>Selected: {selected?.includes(':panel:') ? 'panel at ' + selected.split(':panel:')[1] + ' m' : chosen.name}. Use Frame Selected in the viewport.</p>}
     {scene.items.length>0&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.map(i=>i.id))}>Generate schedule from 3D objects…</button>}
     {chosen?.assembly_id&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.filter(i=>i.assembly_id===chosen.assembly_id).map(i=>i.id))}>Schedule this assembly’s parts…</button>}
-    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&<AssetPartsPanel key={'parts:'+chosen.id} item={chosen} state={state} blocked={extractionBlocks?.[chosen.id] || (links.some(l=>l.source_kind==='site'&&l.element_ref===chosen.id)?'Unlink the whole assembly from its activities before extracting. Then link the new individual parts.':riggedIds?.has('site:'+chosen.id)?'Remove the equipment rig before extracting construction parts.':chosen.path_motion?'Remove the assembly movement path before extracting.':undefined)}/>}
+    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&<AssetPartsPanel key={'parts:'+chosen.id} item={chosen} state={state} blocked={extractionBlocks?.[chosen.id] || (chosen.climbing_formwork?.mode==='articulated'?'Remove the articulated climb setup before extracting the rig into independent parts.':undefined) || (links.some(l=>l.source_kind==='site'&&l.element_ref===chosen.id)?'Unlink the whole assembly from its activities before extracting. Then link the new individual parts.':riggedIds?.has('site:'+chosen.id)?'Remove the equipment rig before extracting construction parts.':chosen.path_motion?'Remove the assembly movement path before extracting.':undefined)}/>}
     {chosen?.geographic&&!edit&&<GeographicWorkbench key={'geography:'+chosen.id} item={chosen} state={state} source={source} projectId={projectId} assets={inventory.assets}/>}
     {chosen&&chosen.kind!=='light'&&!chosen.geographic&&!edit&&<><ReplacementPanel key={chosen.id} state={state} assets={inventory.assets} selection={{itemId:chosen.id,instanceIndex:state.detailSelection?.itemId===chosen.id?state.detailSelection.instanceIndex:undefined}}/><button className={button} disabled={!source||busy||capturing} onClick={async()=>{if(!source)return;setCapturing(true);try{await downloadObjectGlb(source,chosen.name,upAxis)}catch(e){setError(siteError(e))}finally{setCapturing(false)}}}>Export object GLB (static pose)</button></>}
     {chosen?.asset_id && !chosen.asset_part && !edit && <SiteAnimationControls item={chosen} projectId={projectId} disabled={chosen.locked || busy} onChange={patch=>void update(chosen,patch)} onApplyMotion={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Import motion for ${chosen.name}`)}} />}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<WorkSequencePanel key={'work:'+chosen.id} item={chosen} items={scene.items} activities={activities} paths={paths} projectId={projectId} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Work sequence for ${chosen.name}`)}}/>}
-    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
+    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
     {chosen && !edit && <SiteToolSection key={chosen.id} title="Activity links & profiles">
       <ToolVisualGuide topic="links"/>
