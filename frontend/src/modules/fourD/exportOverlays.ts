@@ -40,7 +40,7 @@ export interface ExportLayout {
   totalWidth: number
   totalHeight: number
   ganttRect: Rect | null
-  ganttColumns: number
+  ganttRowCapacity: number
   tableRect: Rect | null
   mainViewRect: Rect
   // Up to 3 comparison panes (2026-08-03, generalized from the old single
@@ -61,6 +61,7 @@ export interface ExportLayout {
 // instead of becoming illegibly tiny at 4K or oversized at 720p.
 const GANTT_BAND_HEIGHT = 172
 const GANTT_ROW_HEIGHT = 34
+const GANTT_MIN_ROW_HEIGHT = 24
 // Time-interval ruler along the top of the Gantt strip (2026-07-25, per
 // Maro: "time interval at the top would be useful") — a separate reserved
 // header row above the bars themselves, tall enough for month/year tick
@@ -165,13 +166,11 @@ export function computeExportLayout(
   const tableWidth = (opts.includeActivityTable || titleBlockWantsSpace) ? Math.round(TABLE_COLUMN_WIDTH * scale) : 0
   const costHeight = opts.includeCostProfile ? Math.round(COST_BAND_HEIGHT * scale) : 0
   const peak = opts.includeGanttChart ? opts.ganttPeakRows ?? 0 : 0
-  // Each column has its own labels and the same date scale. Keep the model
-  // visible and the text at its normal export size even for a dense schedule.
-  const maxColumns = Math.max(1, Math.floor((resolutionWidth - tableWidth) / (620 * scale)))
-  const ganttColumns = Math.max(1, Math.min(maxColumns, Math.ceil(peak / 8)))
-  const maxRows = Math.max(5, Math.floor(((resolutionHeight - costHeight) * 0.45 / scale - TIME_AXIS_HEIGHT) / GANTT_ROW_HEIGHT))
-  const rowsPerColumn = Math.min(maxRows, Math.ceil(peak / ganttColumns))
-  const bandHeight = Math.max(GANTT_BAND_HEIGHT, rowsPerColumn * GANTT_ROW_HEIGHT + 2)
+  // Size the one vertical list once for the export. Rows share the space and
+  // keep their label font size as concurrent work grows.
+  const bodyLimit = Math.max(GANTT_BAND_HEIGHT, (resolutionHeight - costHeight) * 0.4 / scale - TIME_AXIS_HEIGHT)
+  const ganttRowCapacity = Math.min(Math.max(5, peak), Math.floor((bodyLimit - 2) / GANTT_MIN_ROW_HEIGHT))
+  const bandHeight = Math.min(bodyLimit, GANTT_BAND_HEIGHT + (ganttRowCapacity - 5) * GANTT_MIN_ROW_HEIGHT)
   const ganttHeight = (opts.includeGanttChart || titleBlockWantsSpace) ? Math.round((bandHeight + TIME_AXIS_HEIGHT) * scale) : 0
 
   // Explicit target output size (2026-07-25 rework, per Maro: "the
@@ -237,7 +236,7 @@ export function computeExportLayout(
     ? { x: 0, y: 0, width: tableWidth, height: ganttHeight }
     : null
 
-  return { totalWidth, totalHeight, ganttRect, ganttColumns, tableRect, mainViewRect, comparisonViewRects, costRect, titleBlockRect }
+  return { totalWidth, totalHeight, ganttRect, ganttRowCapacity, tableRect, mainViewRect, comparisonViewRects, costRect, titleBlockRect }
 }
 
 function formatShortDate(d: Date): string {
@@ -267,14 +266,15 @@ function addMonths(d: Date, months: number): Date {
 export function drawGanttStrip(
   ctx: CanvasRenderingContext2D, rect: Rect,
   candidates: RenderGanttRow[], scheduleStart: Date | null, scheduleEnd: Date | null, now: Date | null,
-  scale: number, columns = 1,
+  scale: number, capacity = Math.max(1, Math.floor((rect.height / scale - TIME_AXIS_HEIGHT) / GANTT_ROW_HEIGHT)),
 ): void {
   ctx.save()
   ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.width, rect.height); ctx.clip()
   ctx.fillStyle = '#ffffff'; ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
   if (!scheduleStart || !scheduleEnd || scheduleEnd < scheduleStart) { ctx.restore(); return }
-  const perColumn = Math.max(1, Math.floor((rect.height - TIME_AXIS_HEIGHT * scale) / (GANTT_ROW_HEIGHT * scale)))
-  const {rows, hiddenActive} = ganttWindow(candidates, now, perColumn * columns)
+  const axisHeight = TIME_AXIS_HEIGHT * scale
+  const rowHeight = Math.min(GANTT_ROW_HEIGHT * scale, (rect.height - axisHeight) / capacity)
+  const {rows, hiddenActive} = ganttWindow(candidates, now, capacity)
   // Focus on the displayed activities, not five years of unrelated work.
   const starts = rows.map(row => row.start)
   const ends = rows.map(row => row.finish)
@@ -285,20 +285,8 @@ export function drawGanttStrip(
   const domainEnd = new Date(end.getFullYear(), end.getMonth() + 2, 1)
   const hasWbs = rows.some(row => row.level !== 'activities')
   const heading = hasWbs ? (rows.some(row => row.level === 'activities') ? 'WBS / Activity' : 'WBS') : 'Activity'
-  const width = rect.width / columns
-  for (let i = 0; i < columns; i++) {
-    const column = { ...rect, x: rect.x + i * width, width }
-    const label = hiddenActive && i === columns - 1 ? `+${hiddenActive} ongoing` : heading
-    drawGanttColumn(ctx, column, rows.slice(i * perColumn, (i + 1) * perColumn), domainStart, domainEnd, now, scale, label)
-  }
-  ctx.restore()
-}
-
-function drawGanttColumn(ctx: CanvasRenderingContext2D, rect: Rect, rows: RenderGanttRow[],
-  domainStart: Date, domainEnd: Date, now: Date | null, scale: number, heading: string): void {
+  const label = hiddenActive ? `${heading} (+${hiddenActive} ongoing)` : heading
   const padding = 12 * scale
-  const axisHeight = TIME_AXIS_HEIGHT * scale
-  const rowHeight = GANTT_ROW_HEIGHT * scale
   const labelWidth = Math.min(rect.width * .38, 480 * scale)
   const chartX = rect.x + labelWidth
   const chartWidth = Math.max(1, rect.width - labelWidth)
@@ -306,7 +294,7 @@ function drawGanttColumn(ctx: CanvasRenderingContext2D, rect: Rect, rows: Render
   ctx.fillStyle = '#102d4a'; ctx.fillRect(rect.x, rect.y, rect.width, axisHeight)
   ctx.font = `bold ${Math.round(19 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'
-  drawTruncatedText(ctx, heading, rect.x + padding, rect.y + axisHeight / 2, labelWidth - padding * 2)
+  drawTruncatedText(ctx, label, rect.x + padding, rect.y + axisHeight / 2, labelWidth - padding * 2)
   const months = Math.max(1, (domainEnd.getFullYear() - domainStart.getFullYear()) * 12 + domainEnd.getMonth() - domainStart.getMonth())
   const step = Math.max(pickTickIntervalMonths((domainEnd.getTime() - domainStart.getTime()) / 86400000), Math.ceil(months * 108 * scale / chartWidth))
   for (let tick = domainStart; tick < domainEnd; tick = addMonths(tick, step)) {
@@ -347,6 +335,7 @@ function drawGanttColumn(ctx: CanvasRenderingContext2D, rect: Rect, rows: Render
     ctx.strokeStyle = '#f16b58'; ctx.lineWidth = Math.max(1, 2 * scale)
     ctx.beginPath(); ctx.moveTo(xFor(now),rect.y + axisHeight); ctx.lineTo(xFor(now),rect.y + rect.height); ctx.stroke()
   }
+  ctx.restore()
 }
 
 // Readable export table, using the same palette as the Gantt header.
@@ -1228,7 +1217,7 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   ctx.fillRect(0, 0, layout.totalWidth, layout.totalHeight)
 
   if (layout.ganttRect && opts.includeGanttChart) {
-    drawGanttStrip(ctx, layout.ganttRect, opts.ganttRows, opts.scheduleStart, opts.scheduleEnd, opts.now, opts.scale, layout.ganttColumns)
+    drawGanttStrip(ctx, layout.ganttRect, opts.ganttRows, opts.scheduleStart, opts.scheduleEnd, opts.now, opts.scale, layout.ganttRowCapacity)
   }
   if (layout.tableRect && opts.includeActivityTable) {
     drawActivityTableStrip(ctx, layout.tableRect, opts.activities, opts.now, opts.scale)

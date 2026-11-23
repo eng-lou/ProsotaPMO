@@ -4,8 +4,8 @@ import {build} from 'esbuild'
 const {outputFiles}=await build({stdin:{contents:"export {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip} from './src/modules/fourD/exportOverlays';export * from './src/modules/fourD/renderGanttRows';export {loadRenderCaptureSettings,saveRenderCaptureSettings} from './src/modules/fourD/renderCaptureSettings'",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm'})
 const {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip,buildGanttOutline,filterGanttRows,availableGanttDetail,ganttWindow,peakGanttOverlap,loadRenderCaptureSettings,saveRenderCaptureSettings}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
 function context(){
- const fills=[],texts=[],bars=[]
- const ctx=new Proxy({fills,texts,bars,roundRect(...r){bars.push({r,color:this.fillStyle})},measureText(t){return {width:t.length*7}},fillRect(...r){fills.push({r,color:this.fillStyle})},fillText(t,...p){texts.push({t,p,font:this.font})}}, {get(o,k){return k in o?o[k]:()=>{}}})
+ const fills=[],texts=[],bars=[],strokes=[]
+ const ctx=new Proxy({fills,texts,bars,strokes,stroke(){strokes.push(this.strokeStyle)},roundRect(...r){bars.push({r,color:this.fillStyle})},measureText(t){return {width:t.length*7}},fillRect(...r){fills.push({r,color:this.fillStyle})},fillText(t,...p){texts.push({t,p,font:this.font})}}, {get(o,k){return k in o?o[k]:()=>{}}})
  return ctx
 }
 test('render bands preserve 65% model height at every export resolution',()=>{
@@ -82,18 +82,28 @@ test('ongoing WBS rows survive new starts, including nonadjacent floors and exac
 test('busy exports draw overlapping WBS bars using a stable layout and report overflow',()=>{
  const rows=Array.from({length:40},(_,i)=>({activity:{id:String(i),task_name:'Floor '+i,activity_type:'wbs_summary'},level:1,depth:0,start:Date.UTC(2027,0,i+1),finish:Date.UTC(2027,11,31)}))
  const from=new Date('2027-01-01'), to=new Date('2027-12-31')
- for (const scale of [2/3,1,2]) for (const count of [6,12,40]) {
+ for (const scale of [2/3,1,2]) for (const count of [6,12,13,40]) {
    const candidates=rows.slice(0,count)
    const layout=computeExportLayout(1920*scale,1080*scale,scale,{includeGanttChart:true,includeActivityTable:false,comparisonPaneCount:0,includeCostProfile:true,exportTitle:'',exportNarrative:'',ganttPeakRows:peakGanttOverlap(candidates,from,to)})
    assert(layout.mainViewRect.height>400*scale)
    for (const date of [new Date('2027-01-02'),to,new Date('2027-01-02')]) {
      const ctx=context()
-     drawGanttStrip(ctx,layout.ganttRect,candidates,from,to,date,scale,layout.ganttColumns)
+     composeExportFrame(ctx,layout,{includeGanttChart:true,ganttRows:candidates,scheduleStart:from,scheduleEnd:to,
+       now:date,scale,mainCanvas:{width:640,height:480},mainViewTitle:''})
+     assert.equal(ctx.texts.filter(t=>t.t.startsWith('WBS')).length,1,'one WBS header')
+     assert.equal(ctx.strokes.filter(color=>color==='#f16b58').length,1,'one playhead')
+     const dates=ctx.texts.filter(t=>/\d{4}$/.test(t.t)).map(t=>t.t)
+     assert(dates.length>0)
+     assert.equal(new Set(dates).size,dates.length,'one date ruler')
      const drawn=ctx.texts.filter(t=>t.t.startsWith('Floor '))
      assert(drawn.some(t=>t.t==='Floor 0'))
-     for(const label of drawn) assert(label.p[1]<layout.ganttRect.height)
+     assert.equal(new Set(drawn.map(label=>label.p[0])).size,1,'one name column')
+     for(const [i,label] of drawn.entries()) {
+       assert(label.p[1]<layout.ganttRect.height)
+       if(i>0) assert(label.p[1]-drawn[i-1].p[1]>=23.5*scale,'readable vertically stacked rows')
+     }
      if (+date===+to) {
-       if(count<=12) assert.equal(drawn.length,count)
+       if(count<=13) assert.equal(drawn.length,count)
        else assert(ctx.texts.some(t=>t.t.includes('+'+(count-drawn.length)+' ongoing')))
      }
    }
