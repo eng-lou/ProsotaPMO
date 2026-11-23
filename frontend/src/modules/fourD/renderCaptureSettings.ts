@@ -7,6 +7,8 @@
 // hidden live for a cleaner working view, but wanted in the final render).
 // Local/per-browser only, same load/save-to-localStorage convention as
 // viewerSettings.ts.
+import type { GanttDetail } from './renderGanttRows'
+
 export type ResolutionPreset = '720p' | '1080p' | '1440p' | '4kUHD' | '4kDCI' | 'custom'
 
 // Modern/curated set (2026-07-25, confirmed with Maro over Blender's own
@@ -97,6 +99,7 @@ export interface RenderCaptureSettings {
   // header for why these are a purpose-built rendition rather than a
   // screenshot of the real GanttChart.tsx/ScheduleWindow.tsx windows.
   includeGanttChart: boolean
+  ganttDetail: GanttDetail[]
   includeActivityTable: boolean
   // Silently draws nothing with zero AnimationProfiles in the project
   // ("if set") — see exportOverlays.ts's own drawAppearanceLegend.
@@ -166,6 +169,7 @@ export const DEFAULT_RENDER_CAPTURE_SETTINGS: RenderCaptureSettings = {
   videoDraft: false,
   includeBaseline: false,
   includeGanttChart: false,
+  ganttDetail: ['activities'],
   includeActivityTable: false,
   includeAppearanceLegend: false,
   includeDateOverlay: false,
@@ -189,6 +193,9 @@ export function loadRenderCaptureSettings(): RenderCaptureSettings {
     settings.aiEnhanceMode = saved.aiEnhanceMode === 'concept' ? 'concept' : 'off'
     settings.conceptCreativity = typeof saved.conceptCreativity === 'number' && Number.isFinite(saved.conceptCreativity)
       ? Math.max(0, Math.min(1, saved.conceptCreativity)) : DEFAULT_RENDER_CAPTURE_SETTINGS.conceptCreativity
+    const detail = Array.isArray(saved.ganttDetail) ? saved.ganttDetail.filter((v: unknown) =>
+      v === 'activities' || (typeof v === 'number' && Number.isSafeInteger(v) && v > 0)) : []
+    settings.ganttDetail = detail.length ? [...new Set(detail)] : DEFAULT_RENDER_CAPTURE_SETTINGS.ganttDetail
     delete settings.conceptAlsoUpscale
     return settings
   } catch {

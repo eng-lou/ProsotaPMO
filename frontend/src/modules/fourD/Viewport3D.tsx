@@ -111,6 +111,7 @@ import type { SiteContext } from './siteContext'
 import { captureIsolation } from './siteIsolation'
 import { planArea, type ReconstructionArea } from './reconstructionPlan'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
+import { availableGanttDetail, buildGanttOutline, filterGanttRows } from './renderGanttRows'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { prepareExportLabels, createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
@@ -5925,6 +5926,10 @@ export function Viewport3D({
   const [overlaySettings, setOverlaySettings] = useState(loadOverlays)
   const overlays = overlaySettings[hidePathHelpers ? 'render' : 'app']
   const [renderCaptureSettings, setRenderCaptureSettings] = useState<RenderCaptureSettings>(loadRenderCaptureSettings)
+  const ganttOutline = useMemo(() => buildGanttOutline(renderCaptureSettings.includeGanttChart ? timelineActivities : []),
+    [timelineActivities, renderCaptureSettings.includeGanttChart])
+  const renderGanttRows = useMemo(() => filterGanttRows(ganttOutline, availableGanttDetail(renderCaptureSettings.ganttDetail, ganttOutline.levels)),
+    [ganttOutline, renderCaptureSettings.ganttDetail])
   useEffect(() => {
     onCostProfileDemandChange?.(renderCaptureSettings.includeCostProfile)
   }, [onCostProfileDemandChange, renderCaptureSettings.includeCostProfile])
@@ -6299,6 +6304,7 @@ export function Viewport3D({
           mainCanvas: mainSource, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
           now: timelineDateRef.current, scheduleStart, scheduleEnd,
+          ganttRows: renderGanttRows,
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
           mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
@@ -6613,6 +6619,7 @@ export function Viewport3D({
           mainCanvas: canvas, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
           now, scheduleStart, scheduleEnd,
+          ganttRows: renderGanttRows,
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
           mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
           includeCostProfile, costProfileBuckets, costProfileValues, costProfileResourceBreakdown, exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
@@ -7228,6 +7235,7 @@ export function Viewport3D({
           </button>
         )}
         <RenderCaptureSettingsPopover
+          ganttLevels={ganttOutline.levels}
           settings={renderCaptureSettings} onChange={handleRenderCaptureSettingsChange} comparisonPaneCount={comparisonCanvasRefs.length}
           timing={timelineFormat ? { format: timelineFormat, ...captureTiming, onChange: setCaptureTiming } : null}
         />

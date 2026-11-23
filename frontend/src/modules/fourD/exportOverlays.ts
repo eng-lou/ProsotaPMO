@@ -1,3 +1,4 @@
+import { ganttWindow, type RenderGanttRow } from './renderGanttRows'
 import * as THREE from 'three'
 import type { Activity } from '@/modules/scheduling/types'
 import type { AnimationProfile } from './animationProfiles'
@@ -117,11 +118,7 @@ function drawTruncatedText(ctx: CanvasRenderingContext2D, text: string, x: numbe
   ctx.fillText(text.slice(0, lo) + ellipsis, x, y)
 }
 
-// Schedulable activities only (real dates, not a WBS rollup), sorted by
-// start, windowed to `maxRows` centered on whichever are currently active
-// relative to `now` — shared by drawGanttStrip/drawActivityTableStrip so
-// both show the same relevant slice of a schedule that can run to
-// thousands of activities, not just the first N alphabetically/by id.
+// Keep the separate Activity Table centred on scheduled work at the render date.
 export function selectExportActivities(activities: Activity[], now: Date | null, maxRows: number): Activity[] {
   const schedulable = activities
     .filter(a => a.activity_type !== 'wbs_summary' && a.start && a.finish)
@@ -258,20 +255,20 @@ function addMonths(d: Date, months: number): Date {
 // (same convention the Controls Dashboard already uses for is_critical).
 export function drawGanttStrip(
   ctx: CanvasRenderingContext2D, rect: Rect,
-  activities: Activity[], scheduleStart: Date | null, scheduleEnd: Date | null, now: Date | null,
+  candidates: RenderGanttRow[], scheduleStart: Date | null, scheduleEnd: Date | null, now: Date | null,
   scale: number,
 ): void {
   ctx.save()
   ctx.beginPath(); ctx.rect(rect.x, rect.y, rect.width, rect.height); ctx.clip()
   ctx.fillStyle = '#ffffff'; ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
-  if (!scheduleStart || !scheduleEnd || scheduleEnd <= scheduleStart) { ctx.restore(); return }
-  const padding = 10 * scale
+  if (!scheduleStart || !scheduleEnd || scheduleEnd < scheduleStart) { ctx.restore(); return }
+  const padding = 12 * scale
   const axisHeight = TIME_AXIS_HEIGHT * scale
-  const rowHeight = 32 * scale
-  const rows = selectExportActivities(activities, now, Math.max(1, Math.floor((rect.height - axisHeight) / rowHeight)))
+  const rowHeight = 34 * scale
+  const rows = ganttWindow(candidates, now, Math.max(1, Math.floor((rect.height - axisHeight) / rowHeight)))
   // Focus on the displayed activities, not five years of unrelated work.
-  const starts = rows.map(a => new Date(a.start!).getTime())
-  const ends = rows.map(a => new Date(a.finish!).getTime())
+  const starts = rows.map(row => row.start)
+  const ends = rows.map(row => row.finish)
   const focus = now ?? scheduleStart
   const start = new Date(Math.min(focus.getTime(), ...starts))
   const end = new Date(Math.max(focus.getTime(), ...ends))
@@ -282,28 +279,43 @@ export function drawGanttStrip(
   const chartWidth = Math.max(1, rect.width - labelWidth)
   const xFor = (d: Date) => chartX + Math.max(0, Math.min(1, (d.getTime() - domainStart.getTime()) / (domainEnd.getTime() - domainStart.getTime()))) * chartWidth
   ctx.fillStyle = '#102d4a'; ctx.fillRect(rect.x, rect.y, rect.width, axisHeight)
-  ctx.font = `bold ${Math.round(15 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
+  ctx.font = `bold ${Math.round(19 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
   ctx.textBaseline = 'middle'; ctx.fillStyle = '#ffffff'
-  drawTruncatedText(ctx, 'Activity', rect.x + padding, rect.y + axisHeight / 2, labelWidth - padding * 2)
+  const hasWbs = rows.some(row => row.level !== 'activities')
+  const heading = hasWbs ? (rows.some(row => row.level === 'activities') ? 'WBS / Activity' : 'WBS') : 'Activity'
+  drawTruncatedText(ctx, heading, rect.x + padding, rect.y + axisHeight / 2, labelWidth - padding * 2)
   const months = Math.max(1, (domainEnd.getFullYear() - domainStart.getFullYear()) * 12 + domainEnd.getMonth() - domainStart.getMonth())
-  const step = Math.max(pickTickIntervalMonths((domainEnd.getTime() - domainStart.getTime()) / 86400000), Math.ceil(months * 90 * scale / chartWidth))
+  const step = Math.max(pickTickIntervalMonths((domainEnd.getTime() - domainStart.getTime()) / 86400000), Math.ceil(months * 108 * scale / chartWidth))
   for (let tick = domainStart; tick < domainEnd; tick = addMonths(tick, step)) {
     const x = xFor(tick), nextX = xFor(addMonths(tick, step))
     ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = Math.max(1, scale)
     ctx.beginPath(); ctx.moveTo(x, rect.y); ctx.lineTo(x, rect.y + rect.height); ctx.stroke()
-    ctx.fillStyle = '#ffffff'; ctx.font = `bold ${Math.round(13 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
+    ctx.fillStyle = '#ffffff'; ctx.font = `bold ${Math.round(17 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
     drawTruncatedText(ctx, tick.toLocaleDateString('en-GB', {month:'short', year:'numeric'}), x + padding / 2, rect.y + axisHeight / 2, nextX - x - padding)
   }
-  rows.forEach((activity, i) => {
+  rows.forEach(({activity, level, depth, start, finish}, i) => {
     const y = rect.y + axisHeight + i * rowHeight
     ctx.fillStyle = i % 2 ? '#f1f5f9' : '#ffffff'
     ctx.fillRect(rect.x, y, labelWidth, rowHeight)
     ctx.strokeStyle = '#dbe2ea'; ctx.beginPath(); ctx.moveTo(rect.x,y + rowHeight); ctx.lineTo(rect.x + rect.width,y + rowHeight); ctx.stroke()
-    ctx.font = `600 ${Math.round(14 * scale)}px "IBM Plex Sans", system-ui, sans-serif`; ctx.fillStyle = '#102d4a'
-    drawTruncatedText(ctx, activity.task_name, rect.x + padding, y + rowHeight / 2, labelWidth - 2 * padding)
-    const x = xFor(new Date(activity.start!)), finish = xFor(new Date(activity.finish!))
-    ctx.fillStyle = activity.is_critical ? '#ef4444' : '#1683ef'
-    ctx.fillRect(x, y + 7 * scale, Math.max(scale, finish - x), rowHeight - 14 * scale)
+    const summary = level !== 'activities'
+    const indent = Math.min(depth * 16 * scale, labelWidth / 3)
+    ctx.font = `${summary ? 700 : 600} ${Math.round(19 * scale)}px "IBM Plex Sans", system-ui, sans-serif`
+    ctx.fillStyle = '#102d4a'
+    drawTruncatedText(ctx, activity.task_name, rect.x + padding + indent, y + rowHeight / 2, labelWidth - 2 * padding - indent)
+    const x = xFor(new Date(start)), mid = y + rowHeight / 2
+    ctx.fillStyle = summary ? '#26496a' : activity.is_critical ? '#ef4444' : '#1683ef'
+    ctx.beginPath()
+    if (activity.activity_type === 'start_milestone' || activity.activity_type === 'finish_milestone') {
+      const size = 7 * scale
+      ctx.moveTo(x, mid - size); ctx.lineTo(x + size, mid)
+      ctx.lineTo(x, mid + size); ctx.lineTo(x - size, mid); ctx.closePath()
+    } else {
+      const width = Math.max(scale, xFor(new Date(finish)) - x)
+      const height = (summary ? 14 : 18) * scale
+      ctx.roundRect(x, mid - height / 2, width, height, Math.min(4 * scale, width / 2))
+    }
+    ctx.fill()
   })
   if (now && now >= domainStart && now <= domainEnd) {
     ctx.strokeStyle = '#f16b58'; ctx.lineWidth = Math.max(1, 2 * scale)
@@ -965,6 +977,7 @@ export interface ComposeExportFrameOptions {
   // `!opts.baselineCanvas` guard.
   comparisonCanvases: (HTMLCanvasElement | null)[]
   activities: Activity[]
+  ganttRows: RenderGanttRow[]
   profiles: AnimationProfile[]
   now: Date | null
   scheduleStart: Date | null
@@ -1190,7 +1203,7 @@ export function composeExportFrame(ctx: CanvasRenderingContext2D, layout: Export
   ctx.fillRect(0, 0, layout.totalWidth, layout.totalHeight)
 
   if (layout.ganttRect && opts.includeGanttChart) {
-    drawGanttStrip(ctx, layout.ganttRect, opts.activities, opts.scheduleStart, opts.scheduleEnd, opts.now, opts.scale)
+    drawGanttStrip(ctx, layout.ganttRect, opts.ganttRows, opts.scheduleStart, opts.scheduleEnd, opts.now, opts.scale)
   }
   if (layout.tableRect && opts.includeActivityTable) {
     drawActivityTableStrip(ctx, layout.tableRect, opts.activities, opts.now, opts.scale)

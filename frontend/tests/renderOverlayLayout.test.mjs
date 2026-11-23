@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {build} from 'esbuild'
-const {outputFiles}=await build({stdin:{contents:"export {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip} from './src/modules/fourD/exportOverlays'",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm'})
-const {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
+const {outputFiles}=await build({stdin:{contents:"export {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip} from './src/modules/fourD/exportOverlays';export * from './src/modules/fourD/renderGanttRows';export {loadRenderCaptureSettings,saveRenderCaptureSettings} from './src/modules/fourD/renderCaptureSettings'",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm'})
+const {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip,buildGanttOutline,filterGanttRows,availableGanttDetail,ganttWindow,loadRenderCaptureSettings,saveRenderCaptureSettings}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
 function context(){
- const fills=[],texts=[]
- const ctx=new Proxy({fills,texts,measureText(t){return {width:t.length*7}},fillRect(...r){fills.push({r,color:this.fillStyle})},fillText(t,...p){texts.push({t,p})}}, {get(o,k){return k in o?o[k]:()=>{}}})
+ const fills=[],texts=[],bars=[]
+ const ctx=new Proxy({fills,texts,bars,roundRect(...r){bars.push({r,color:this.fillStyle})},measureText(t){return {width:t.length*7}},fillRect(...r){fills.push({r,color:this.fillStyle})},fillText(t,...p){texts.push({t,p,font:this.font})}}, {get(o,k){return k in o?o[k]:()=>{}}})
  return ctx
 }
 test('render bands preserve 65% model height at every export resolution',()=>{
@@ -18,11 +18,63 @@ test('render bands preserve 65% model height at every export resolution',()=>{
 })
 test('Gantt keeps bars out of activity labels and enlarges short work within long projects',()=>{
  const ctx=context()
- drawGanttStrip(ctx,{x:0,y:0,width:1920,height:216},[{id:'a',activity_type:'task',task_name:'Clear vegetation',start:'2026-12-01',finish:'2026-12-20'}],new Date('2026-11-01'),new Date('2031-06-01'),new Date('2026-12-10'),1)
- const bars=ctx.fills.filter(f=>f.color==='#1683ef')
+ drawGanttStrip(ctx,{x:0,y:0,width:1920,height:216},buildGanttOutline([{id:'a',activity_type:'task',task_name:'Clear vegetation',start:'2026-12-01',finish:'2026-12-20'}]).rows,new Date('2026-11-01'),new Date('2031-06-01'),new Date('2026-12-10'),1)
+ const bars=ctx.bars.filter(f=>f.color==='#1683ef')
  assert.equal(bars.length,1);assert(bars[0].r[0]>=480);assert(bars[0].r[2]>100)
- assert(ctx.texts.some(t=>t.t==='Clear vegetation'))
+ assert.equal(bars[0].r[4],4)
+ assert(ctx.texts.some(t=>t.t==='Clear vegetation' && t.font.includes('19px')))
 })
+const wbs = (id, parent_id, sort_order) => ({id, task_name:id, activity_type:'wbs_summary', parent_id, sort_order})
+const job = (id, parent_id, start, finish) => ({id,task_name:id,activity_type:'task',parent_id,start,finish})
+const fortTower = [
+ wbs('Fort Tower',null,0), wbs('Core','Fort Tower',2), wbs('Core walls','Core',1),
+ job('Pour core','Core walls','2027-02-02','2027-02-08'), wbs('Foundation','Fort Tower',1),
+ job('Install pile','Foundation','2026-12-03','2026-12-10'),
+ job('Undated','Core walls',null,null), wbs('Empty group','Core',2),
+]
+
+test('WBS levels start below the project, use outline order and roll up scenario dates',()=>{
+ const outline=buildGanttOutline(fortTower)
+ const names=detail=>filterGanttRows(outline,detail).map(r=>[r.activity.task_name,r.depth])
+ assert.deepEqual(outline.levels,[1,2])
+ assert.deepEqual(names([1]),[['Foundation',0],['Core',0]])
+ assert.deepEqual(names([2]),[['Core walls',0]])
+ assert.deepEqual(names([1,2]),[['Foundation',0],['Core',0],['Core walls',1]])
+ assert.deepEqual(names(['activities']),[['Install pile',0],['Pour core',0]])
+ assert.deepEqual(names([1,2,'activities']),[['Foundation',0],['Install pile',1],['Core',0],['Core walls',1],['Pour core',2]])
+ const rows=buildGanttOutline(fortTower.map(a=>a.id==='Pour core'?{...a,finish:'2027-03-15'}:a)).rows
+ for(const id of ['Core','Core walls']) assert.equal(rows.find(r=>r.activity.id===id).finish,Date.parse('2027-03-15'))
+ const ctx=context()
+ drawGanttStrip(ctx,{x:0,y:0,width:1920,height:216},filterGanttRows(outline,[1,2]),new Date('2026-12-03'),new Date('2027-02-08'),new Date('2026-12-03'),1)
+ assert.equal(ctx.bars.filter(b=>b.color==='#26496a').length,3)
+ assert(ctx.texts.find(t=>t.t==='Core walls').p[0]>ctx.texts.find(t=>t.t==='Core').p[0])
+})
+
+test('mixed rows follow the active branch when scrubbing in either direction',()=>{
+ const rows=filterGanttRows(buildGanttOutline(fortTower),[1,2,'activities'])
+ for(const [date,id] of [['2027-02-06','Pour core'],['2026-12-05','Install pile'],['2027-02-06','Pour core']]){
+   assert.equal(ganttWindow(rows,new Date(date),1)[0].activity.id,id)
+ }
+})
+
+test('capture settings remember checked levels and fall back for legacy or shallower schedules',()=>{
+ let stored='{}'
+ const original=Object.getOwnPropertyDescriptor(globalThis,'localStorage')
+ Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:()=>stored,setItem:(_,s)=>{stored=s}}})
+ try {
+   assert.deepEqual(loadRenderCaptureSettings().ganttDetail,['activities'])
+   saveRenderCaptureSettings({...loadRenderCaptureSettings(),ganttDetail:[1,2]})
+   assert.deepEqual(loadRenderCaptureSettings().ganttDetail,[1,2])
+   assert.deepEqual(availableGanttDetail([1,2],[1]),[1])
+   assert.deepEqual(availableGanttDetail([2],[]),['activities'])
+   stored=JSON.stringify({ganttDetail:[0,-1,'wrong',1,1]})
+   assert.deepEqual(loadRenderCaptureSettings().ganttDetail,[1])
+ } finally {
+   if(original) Object.defineProperty(globalThis,'localStorage',original)
+   else delete globalThis.localStorage
+ }
+})
+
 test('timeline export fits its view regardless of authored pixel width or horizontal offset',()=>{
  for(const width of [640,1920]){
   const ctx=context(),rect={x:100,y:50,width,height:500}

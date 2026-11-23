@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { RESOLUTION_PRESETS, type ResolutionPreset, type RenderCaptureSettings } from './renderCaptureSettings'
+import { availableGanttDetail, type GanttDetail } from './renderGanttRows'
 import { TimelinePointInput, type TimelineFormat } from './TimelinePointInput'
 
 // Capture/export timing (2026-10-02, per Maro: "capture at a particular
@@ -33,6 +34,7 @@ function PointRow({ label, title, children, isSet, onClear, hint }: {
 
 interface Props {
   settings: RenderCaptureSettings
+  ganttLevels: number[]
   onChange: (settings: RenderCaptureSettings) => void
   // Include Baseline (2026-07-24, generalized 2026-08-03 for up to 3
   // comparison panes at once — see Viewport3D.tsx's own comparisonCanvasRefs
@@ -61,11 +63,13 @@ interface Props {
 // full-screen invisible button behind it (lower z-index than the popover,
 // higher than everything else) catches an outside click to close it,
 // rather than a focus-trap library.
-export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPaneCount, timing }: Props) {
+export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPaneCount, ganttLevels, timing }: Props) {
   const [open, setOpen] = useState(false)
   const comparisonPanesOpen = comparisonPaneCount > 0
   const set = <K extends keyof RenderCaptureSettings>(key: K, value: RenderCaptureSettings[K]) =>
     onChange({ ...settings, [key]: value })
+  const ganttDetail = availableGanttDetail(settings.ganttDetail, ganttLevels)
+  const ganttChoices: GanttDetail[] = [...ganttLevels, 'activities']
   const setComparisonTitle = (index: number, value: string) => {
     const next = [...settings.comparisonViewTitles]
     next[index] = value
@@ -236,6 +240,17 @@ export function RenderCaptureSettingsPopover({ settings, onChange, comparisonPan
                 />
                 Gantt Chart (top)
               </label>
+              {settings.includeGanttChart && <fieldset className="ml-4 space-y-1.5 text-xs text-gray-700 dark:text-prosota-paper">
+                <legend className="mb-1 font-semibold">Gantt rows</legend>
+                {ganttChoices.map(level => {
+                  const checked = ganttDetail.includes(level)
+                  return <label key={level} className="flex items-center gap-1.5">
+                    <input type="checkbox" checked={checked} disabled={checked && ganttDetail.length === 1}
+                      onChange={e => set('ganttDetail', e.target.checked ? [...ganttDetail, level] : ganttDetail.filter(v => v !== level))}/>
+                    {level === 'activities' ? 'Activities' : `WBS Level ${level}`}
+                  </label>
+                })}
+              </fieldset>}
               <label className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-prosota-muted" title="Adds an Activity Table column down the left of the capture/export — Code/Name/Finish, highlighting whichever activities are currently active">
                 <input
                   type="checkbox"
