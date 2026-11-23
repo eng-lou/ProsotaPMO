@@ -111,7 +111,7 @@ import type { SiteContext } from './siteContext'
 import { captureIsolation } from './siteIsolation'
 import { planArea, type ReconstructionArea } from './reconstructionPlan'
 import { loadRenderCaptureSettings, saveRenderCaptureSettings, type RenderCaptureSettings } from './renderCaptureSettings'
-import { availableGanttDetail, buildGanttOutline, filterGanttRows } from './renderGanttRows'
+import { availableGanttDetail, buildGanttOutline, filterGanttRows, peakGanttOverlap } from './renderGanttRows'
 import { composeExportFrame, computeExportLayout } from './exportOverlays'
 import { prepareExportLabels, createExportLabelRegistry, type ExportLabelRegistry } from './exportLabels'
 import { RenderCaptureSettingsPopover } from './RenderCaptureSettingsPopover'
@@ -6241,10 +6241,12 @@ export function Viewport3D({
       // to keep the source canvas sharp enough for drawCoverFit's crop,
       // not to size the overlays.
       const overlayScale = resolutionHeight / 1080
+      const captureDate = timelineDateRef.current
       const layout = computeExportLayout(
         resolutionWidth, resolutionHeight,
         overlayScale, {
           includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile,
+          ganttPeakRows: captureDate ? peakGanttOverlap(renderGanttRows, captureDate, captureDate) : 0,
           exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
         },
       )
@@ -6298,12 +6300,12 @@ export function Viewport3D({
       composite.height = layout.totalHeight
       const ctx = composite.getContext('2d')
       if (ctx) {
-        const radialChartProgress = exportHuds.radialChartProgressAt(timelineDateRef.current ?? new Date())
+        const radialChartProgress = exportHuds.radialChartProgressAt(captureDate ?? new Date())
         await prepareExportLabels(exportLabelsRef.current)
         composeExportFrame(ctx, layout, {
           mainCanvas: mainSource, comparisonCanvases: activeComparisonCanvases,
           activities: timelineActivities, profiles: timelineProfiles,
-          now: timelineDateRef.current, scheduleStart, scheduleEnd,
+          now: captureDate, scheduleStart, scheduleEnd,
           ganttRows: renderGanttRows,
           scale: overlayScale, includeGanttChart, includeActivityTable, includeAppearanceLegend, includeDateOverlay,
           mainViewTitle: renderCaptureSettings.mainViewTitle, comparisonViewTitles: renderCaptureSettings.comparisonViewTitles,
@@ -6311,7 +6313,7 @@ export function Viewport3D({
           camera: cameraRef.current, exportLabels: exportLabelsRef.current,
           mainCssSize: { width: canvas.clientWidth, height: canvas.clientHeight },
           includeRadialCharts, radialCharts: visibleRadialCharts, radialChartProgress, radialChartIcons,
-          includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(timelineDateRef.current),
+          includeTimelineStrip, timelineStrips: exportHuds.timelineStripsAt(captureDate),
         })
         // AI Concept Render label (2026-09-02, per Maro's own chosen
         // option: "clearly labeled" was the explicit condition for
@@ -6530,6 +6532,7 @@ export function Viewport3D({
       resolutionWidth, resolutionHeight,
       overlayScale, {
         includeGanttChart, includeActivityTable, comparisonPaneCount, includeCostProfile,
+        ganttPeakRows: peakGanttOverlap(renderGanttRows, motionExport ? null : rangeStart, motionExport ? null : rangeEnd),
         exportTitle: renderCaptureSettings.exportTitle, exportNarrative: renderCaptureSettings.exportNarrative,
       },
     )

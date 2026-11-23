@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {build} from 'esbuild'
 const {outputFiles}=await build({stdin:{contents:"export {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip} from './src/modules/fourD/exportOverlays';export * from './src/modules/fourD/renderGanttRows';export {loadRenderCaptureSettings,saveRenderCaptureSettings} from './src/modules/fourD/renderCaptureSettings'",resolveDir:process.cwd(),loader:'ts'},bundle:true,write:false,platform:'node',format:'esm'})
-const {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip,buildGanttOutline,filterGanttRows,availableGanttDetail,ganttWindow,loadRenderCaptureSettings,saveRenderCaptureSettings}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
+const {computeExportLayout,drawGanttStrip,composeExportFrame,drawActivityTableStrip,buildGanttOutline,filterGanttRows,availableGanttDetail,ganttWindow,peakGanttOverlap,loadRenderCaptureSettings,saveRenderCaptureSettings}=await import(`data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString('base64')}`)
 function context(){
  const fills=[],texts=[],bars=[]
  const ctx=new Proxy({fills,texts,bars,roundRect(...r){bars.push({r,color:this.fillStyle})},measureText(t){return {width:t.length*7}},fillRect(...r){fills.push({r,color:this.fillStyle})},fillText(t,...p){texts.push({t,p,font:this.font})}}, {get(o,k){return k in o?o[k]:()=>{}}})
@@ -53,7 +53,50 @@ test('WBS levels start below the project, use outline order and roll up scenario
 test('mixed rows follow the active branch when scrubbing in either direction',()=>{
  const rows=filterGanttRows(buildGanttOutline(fortTower),[1,2,'activities'])
  for(const [date,id] of [['2027-02-06','Pour core'],['2026-12-05','Install pile'],['2027-02-06','Pour core']]){
-   assert.equal(ganttWindow(rows,new Date(date),1)[0].activity.id,id)
+   assert(ganttWindow(rows,new Date(date),3).rows.some(row=>row.activity.id===id))
+ }
+})
+
+test('ongoing WBS rows survive new starts, including nonadjacent floors and exact finishes',()=>{
+ const active = (name, start, finish) => ({activity:{id:name,task_name:name,activity_type:'wbs_summary'},level:1,depth:0,start,finish})
+ const rows = [active('Core',1,90),active('Completed',2,5),active('Level 01',10,80),
+   active('Future',96,100),...Array.from({length:10},(_,i)=>active('Floor '+i,20+i,70+i))]
+ const expected = rows.filter(r=>r.start<=60 && r.finish>=60)
+ const ids = list=>list.map(r=>r.activity.id)
+ assert.deepEqual(ids(ganttWindow(rows,new Date(60),12).rows),ids(expected))
+ assert(ids(ganttWindow(rows,new Date(80),5).rows).includes('Level 01'))
+ const firstFinishes = rows.map(row => row.activity.id === 'Core' ? {...row,finish:50} : row)
+ assert(ids(ganttWindow(firstFinishes,new Date(50),5).rows).includes('Core'))
+ assert.deepEqual(ids(ganttWindow(firstFinishes,new Date(51),5).rows),['Level 01','Floor 0','Floor 1','Floor 2','Floor 3'])
+ for (const time of [40,60,35]) {
+   const window=ganttWindow(rows,new Date(time),5)
+   assert.deepEqual(ids(window.rows),['Core','Level 01','Floor 0','Floor 1','Floor 2'])
+   assert.equal(window.hiddenActive,7)
+ }
+ assert.equal(peakGanttOverlap(rows,new Date(60),new Date(60)),12)
+ assert.equal(peakGanttOverlap(rows,new Date(5),new Date(99)),12)
+ assert.equal(peakGanttOverlap(rows,new Date(15),new Date(19)),2)
+ assert.equal(peakGanttOverlap([active('Ends',0,10),active('Starts',10,20),active('Milestone',10,10)],new Date(0),new Date(20)),3)
+})
+
+test('busy exports draw overlapping WBS bars using a stable layout and report overflow',()=>{
+ const rows=Array.from({length:40},(_,i)=>({activity:{id:String(i),task_name:'Floor '+i,activity_type:'wbs_summary'},level:1,depth:0,start:Date.UTC(2027,0,i+1),finish:Date.UTC(2027,11,31)}))
+ const from=new Date('2027-01-01'), to=new Date('2027-12-31')
+ for (const scale of [2/3,1,2]) for (const count of [6,12,40]) {
+   const candidates=rows.slice(0,count)
+   const layout=computeExportLayout(1920*scale,1080*scale,scale,{includeGanttChart:true,includeActivityTable:false,comparisonPaneCount:0,includeCostProfile:true,exportTitle:'',exportNarrative:'',ganttPeakRows:peakGanttOverlap(candidates,from,to)})
+   assert(layout.mainViewRect.height>400*scale)
+   for (const date of [new Date('2027-01-02'),to,new Date('2027-01-02')]) {
+     const ctx=context()
+     drawGanttStrip(ctx,layout.ganttRect,candidates,from,to,date,scale,layout.ganttColumns)
+     const drawn=ctx.texts.filter(t=>t.t.startsWith('Floor '))
+     assert(drawn.some(t=>t.t==='Floor 0'))
+     for(const label of drawn) assert(label.p[1]<layout.ganttRect.height)
+     if (+date===+to) {
+       if(count<=12) assert.equal(drawn.length,count)
+       else assert(ctx.texts.some(t=>t.t.includes('+'+(count-drawn.length)+' ongoing')))
+     }
+   }
  }
 })
 

@@ -68,24 +68,51 @@ export function filterGanttRows(outline: GanttOutline, detail: GanttDetail[]): R
   return rows.map(row => ({...row, depth: detail.filter(level => typeof level === 'number' && level < row.depth).length}))
 }
 
-// The export band has a fixed height. Centre it on current work, favouring a
-// selected child over its longer-running parent, including on backward scrubs.
-export function ganttWindow(rows: RenderGanttRow[], now: Date | null, maxRows: number): RenderGanttRow[] {
-  if (rows.length <= maxRows) return rows
-  if (!now) return rows.slice(0, maxRows)
+// Inclusive intervals match the render playhead. Starts sort before finishes
+// at the same instant so milestones and handovers both count for that frame.
+export function peakGanttOverlap(rows: RenderGanttRow[], from: Date | null, to: Date | null): number {
+  const first = from?.getTime() ?? -Infinity
+  const last = to?.getTime() ?? Infinity
+  if (first === last) return rows.filter(row => row.start <= first && first <= row.finish).length
+  const events: {date: number; change: number}[] = []
+  for (const row of rows) {
+    if (row.start > last || row.finish < first) continue
+    events.push({date: Math.max(first, row.start), change: 1}, {date: Math.min(last, row.finish), change: -1})
+  }
+  events.sort((a,b) => a.date - b.date || b.change - a.change)
+  let active = 0, peak = 0
+  for (const event of events) {
+    active += event.change
+    peak = Math.max(peak, active)
+  }
+  return peak
+}
+
+export function ganttWindow(rows: RenderGanttRow[], now: Date | null, capacity: number) {
+  const contextSize = Math.min(5, capacity)
+  if (!now) return {rows: rows.slice(0, contextSize), hiddenActive: 0}
   const time = now.getTime()
-  let active = -1, upcoming = -1, complete = -1
-  rows.forEach((row, i) => {
-    if (row.start > time) {
-      if (upcoming < 0 || row.start < rows[upcoming].start) upcoming = i
-    } else if (row.finish < time) {
-      if (complete < 0 || row.finish > rows[complete].finish) complete = i
-    } else if (active < 0 || row.depth > rows[active].depth ||
-      (row.depth === rows[active].depth && row.start > rows[active].start)) {
-      active = i
+  const active: RenderGanttRow[] = []
+  const nearby: {row: RenderGanttRow; distance: number}[] = []
+  for (const row of rows) {
+    const distance = Math.max(row.start - time, time - row.finish)
+    if (distance <= 0) {
+      active.push(row)
+    } else if (active.length < contextSize && (nearby.length < contextSize || distance < nearby[nearby.length - 1].distance)) {
+      nearby.push({row, distance})
+      nearby.sort((a,b) => a.distance - b.distance)
+      if (nearby.length > contextSize) nearby.pop()
     }
-  })
-  const focus = active >= 0 ? active : upcoming >= 0 ? upcoming : complete
-  const first = Math.max(0, Math.min(rows.length - maxRows, focus - Math.floor(maxRows / 2)))
-  return rows.slice(first, first + maxRows)
+  }
+  const hiddenActive = Math.max(0, active.length - capacity)
+  if (hiddenActive) {
+    // A later start cannot evict an earlier ongoing WBS, even on a crowded frame.
+    active.sort((a,b) => Number(a.level === 'activities') - Number(b.level === 'activities') || a.start - b.start)
+  }
+  const chosen = new Set(active.slice(0, capacity))
+  for (const {row} of nearby) {
+    if (chosen.size >= contextSize) break
+    chosen.add(row)
+  }
+  return {rows: rows.filter(row => chosen.has(row)), hiddenActive}
 }
