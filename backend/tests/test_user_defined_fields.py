@@ -24,14 +24,45 @@ async def test_create_and_list_definitions_scoped_by_entity_type(client: AsyncCl
     activity_fields = (await client.get("/api/v1/user-defined-fields/definitions", params={
         "project_id": str(project.id), "entity_type": "activity",
     })).json()
-    assert len(activity_fields) == 1
-    assert activity_fields[0]["name"] == "Deadline"
+    assert {f["name"] for f in activity_fields} == {"Deadline", "4D Viewable"}
 
     resource_fields = (await client.get("/api/v1/user-defined-fields/definitions", params={
         "project_id": str(project.id), "entity_type": "resource",
     })).json()
     assert len(resource_fields) == 1
     assert resource_fields[0]["name"] == "Trade"
+
+
+async def test_render_visibility_persists_on_the_schedule(client: AsyncClient, project: Project, live_schedule_period):
+    params = {"project_id": str(project.id), "schedule_period_id": str(live_schedule_period.id)}
+    parent = (await client.post("/api/v1/activities/", json={**params, "task_name": "Project Milestones"})).json()
+    child = (await client.post("/api/v1/activities/", json={**params, "task_name": "Handover", "parent_id": parent["id"]})).json()
+    async def visibility():
+        rows = (await client.get("/api/v1/activities/", params=params)).json()
+        return {r["id"]: r["viewable_4d"] for r in rows}
+
+    assert await visibility() == {parent["id"]: True, child["id"]: True}
+    # A pre-existing field with this title keeps its own data and meaning.
+    original = await _create_activity_field(client, project, "4D Viewable", "text")
+    field_params = {"project_id": str(project.id), "entity_type": "activity"}
+    fields = (await client.get("/api/v1/user-defined-fields/definitions", params=field_params)).json()
+    field = next(f for f in fields if f["data_type"] == "4d_viewable")
+    assert field["id"] != original["id"]
+    assert fields == (await client.get("/api/v1/user-defined-fields/definitions", params=field_params)).json()
+    url = f"/api/v1/user-defined-fields/values/{field['id']}/{parent['id']}"
+    assert (await client.put(url, json={"value_text": "No"})).status_code == 200
+    assert await visibility() == {parent["id"]: False, child["id"]: True}
+    variant = await client.post("/api/v1/schedule-variants/", json={
+        "project_id": str(project.id), "name": "Render copy",
+        "duplicate_from_variant_id": str(live_schedule_period.schedule_variant_id),
+    })
+    assert variant.status_code == 201, variant.text
+    all_rows = (await client.get("/api/v1/activities/", params={"project_id": str(project.id)})).json()
+    copies = {r["task_name"]: r["viewable_4d"] for r in all_rows if r["schedule_variant_id"] == variant.json()["id"]}
+    assert copies == {"Project Milestones": False, "Handover": True}
+    assert (await client.put(url, json={"value_text": "invalid"})).status_code == 422
+    assert (await client.put(url, json={"value_text": "Yes"})).status_code == 200
+    assert all((await visibility()).values())
 
 
 async def test_duplicate_name_same_entity_type_rejected(client: AsyncClient, project: Project):

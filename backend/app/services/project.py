@@ -6,6 +6,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.user_defined_field import copy_render_visibility
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
@@ -180,6 +181,7 @@ async def duplicate_project(db: AsyncSession, project_id: uuid.UUID, new_name: s
             new_activities[a.id].parent_id = activity_map[a.parent_id]
 
     if activity_map:
+        await copy_render_visibility(db, project_id, activity_map, new_project.id)
         history = (await db.execute(
             select(ActivityCodeHistory).where(ActivityCodeHistory.activity_id.in_(activity_map.keys()))
         )).scalars().all()

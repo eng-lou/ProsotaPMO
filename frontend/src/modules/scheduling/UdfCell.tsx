@@ -9,6 +9,36 @@ interface Props {
   onSave: (payload: UdfValuePayload) => Promise<void>
 }
 
+export function RenderVisibilityCell({ name, checked, hiddenBy, onSave }: {
+  name: string
+  checked: boolean
+  hiddenBy?: string
+  onSave: (checked: boolean) => Promise<void>
+}) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState(false)
+  const title = hiddenBy ? `Hidden from the rendered Gantt by ${hiddenBy}`
+    : 'Show this row and its branch in the rendered Gantt'
+  const save = async (next: boolean) => {
+    setSaving(true)
+    setError(false)
+    try {
+      await onSave(next)
+    } catch {
+      setError(true)
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <td className="px-3 py-1 whitespace-nowrap" title={title} onClick={e => e.stopPropagation()}>
+      <input type="checkbox" aria-label={`4D Viewable: ${name}`} checked={!hiddenBy && checked}
+        disabled={saving || !!hiddenBy} onChange={e => void save(e.target.checked)} />
+      {error && <span role="alert" className="ml-2 text-red-600">Couldn’t save. Try again.</span>}
+    </td>
+  )
+}
+
 function displayValue(definition: UserDefinedFieldDefinition, value: UserDefinedFieldValue | undefined): React.ReactNode {
   if (definition.data_type === 'indicator') {
     const opt = indicatorOption(value?.value_indicator)

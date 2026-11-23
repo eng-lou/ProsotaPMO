@@ -27,17 +27,19 @@ export function buildGanttOutline(activities: Activity[]): GanttOutline {
   for (const siblings of children.values()) siblings.sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
 
   const ordered: RenderGanttRow[] = []
+  const levels = new Set<number>()
   const visited = new Set<string>()
-  function visit(activity: Activity, depth: number): RenderGanttRow | undefined {
+  function visit(activity: Activity, depth: number, parentVisible: boolean): RenderGanttRow | undefined {
     if (visited.has(activity.id)) return
     visited.add(activity.id)
     const summary = activity.activity_type === 'wbs_summary'
     const row: RenderGanttRow = { activity, depth, level: summary ? depth : 'activities',
       start: Date.parse(activity.start ?? ''), finish: Date.parse(activity.finish ?? '') }
-    if (!summary || depth > 0) ordered.push(row)
+    const visible = parentVisible && activity.viewable_4d !== false
+    if (visible && (!summary || depth > 0)) ordered.push(row)
     let first = Infinity, last = -Infinity
     for (const child of children.get(activity.id) ?? []) {
-      const dates = visit(child, depth + 1)
+      const dates = visit(child, depth + 1, visible)
       if (!dates) continue
       first = Math.min(first, dates.start)
       last = Math.max(last, dates.finish)
@@ -46,15 +48,18 @@ export function buildGanttOutline(activities: Activity[]): GanttOutline {
       row.start = first
       row.finish = last
     }
-    if (row.start <= row.finish) return row
+    if (row.start <= row.finish) {
+      if (summary && depth > 0) levels.add(depth)
+      return row
+    }
   }
   for (const root of children.get(null) ?? []) {
     const depth = root.parent_id ? Math.max(1, (root.wbs_path?.split('.').length ?? 2) - 1) : 0
-    visit(root, depth)
+    visit(root, depth, true)
   }
   const rows = ordered.filter(row => row.start <= row.finish)
-  const levels = [...new Set(rows.flatMap(row => typeof row.level === 'number' ? [row.level] : []))].sort((a,b) => a-b)
-  return {rows, levels}
+  // Hiding every row at a level must not switch a saved WBS export to activities.
+  return { rows, levels: [...levels].sort((a, b) => a - b) }
 }
 
 export function availableGanttDetail(saved: GanttDetail[], levels: number[]): GanttDetail[] {

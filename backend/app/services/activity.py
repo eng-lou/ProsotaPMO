@@ -13,6 +13,7 @@ from sqlalchemy.orm import load_only
 
 from app.services.activity_refresh import refresh_changed_activities
 from app.models.activity import Activity
+from app.models.user_defined_field import VIEWABLE_4D_TYPE, UserDefinedFieldDefinition, UserDefinedFieldValue
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
 from app.models.animation_profile import AnimationProfile
@@ -425,6 +426,17 @@ async def list_activities(
     # Returned in outline order (parent immediately followed by its subtree) so the
     # frontend's data grid / Gantt rows line up with the WBS without re-deriving the
     # tree client-side — see docs/SCHEDULING_MODULE_PLAN.md Phase 2.
+    # Only the list sent to the schedule and simulator needs render visibility.
+    # Read the project's sparse exclusions in one query, including older schedules.
+    hidden_ids = set(await db.scalars(
+        select(UserDefinedFieldValue.record_id).join(UserDefinedFieldDefinition).where(
+            UserDefinedFieldDefinition.project_id == project_id,
+            UserDefinedFieldDefinition.data_type == VIEWABLE_4D_TYPE,
+            UserDefinedFieldValue.value_text == "No",
+        )
+    ))
+    for activity in activities:
+        activity.viewable_4d = activity.id not in hidden_ids
     ordered = _dfs_order(activities)
     await _attach_evm_fields(db, ordered)
     _rollup_wbs_evm_fields(ordered, _build_children_map(activities))

@@ -11,6 +11,7 @@ from app.schemas.activity import (
     ActivityCodeHistoryResponse,
     ActivityCreate,
     ActivityMoveRequest,
+    ActivityListResponse,
     ActivityResponse,
     ActivityUpdate,
     ActivityWbsOption,
@@ -34,7 +35,7 @@ async def list_wbs_options(
     return await svc.list_wbs_options(db, project_id, schedule_period_id)
 
 
-@router.get("/", response_model=list[ActivityResponse])
+@router.get("/", response_model=list[ActivityListResponse])
 async def list_activities(
     project_id: uuid.UUID,
     schedule_period_id: uuid.UUID | None = None,

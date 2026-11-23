@@ -50,6 +50,21 @@ test('WBS levels start below the project, use outline order and roll up scenario
  assert(ctx.texts.find(t=>t.t==='Core walls').p[0]>ctx.texts.find(t=>t.t==='Core').p[0])
 })
 
+test('unchecking a WBS hides its subtree at every render level and preserves schedule rollups', () => {
+ const rows = [...fortTower, job('Late inspection','Core','2027-04-01','2027-04-05')]
+ const outline = (...hidden) => buildGanttOutline(rows.map(row => ({...row, viewable_4d: !hidden.includes(row.id)})))
+ const ids = (tree, detail) => filterGanttRows(tree, detail).map(row => row.activity.id)
+ for (const detail of [[1], [2], ['activities'], [1,2,'activities']]) {
+   assert.deepEqual(ids(outline('Fort Tower'),detail),[])
+   assert.deepEqual(ids(outline('Core','Pour core'),detail),ids(outline(),detail).filter(id => ['Foundation','Install pile'].includes(id)))
+ }
+ assert.deepEqual(availableGanttDetail([2],outline('Core').levels),[2])
+ const restored = outline('Pour core','Late inspection')
+ assert.deepEqual(ids(restored,['activities']),['Install pile'])
+ assert.equal(restored.rows.find(row => row.activity.id==='Core').finish, Date.parse('2027-04-05'))
+ assert.deepEqual(ids(outline(),[1,2,'activities']),ids(buildGanttOutline(rows),[1,2,'activities']))
+})
+
 test('mixed rows follow the active branch when scrubbing in either direction',()=>{
  const rows=filterGanttRows(buildGanttOutline(fortTower),[1,2,'activities'])
  for(const [date,id] of [['2027-02-06','Pour core'],['2026-12-05','Install pile'],['2027-02-06','Pour core']]){

@@ -11,6 +11,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, TimestampMixin
 
 
+# A managed activity UDF. Unset values are visible, including schedules created
+# before the field existed. The type identifies it even if a project already
+# has an unrelated custom field with the same display name.
+VIEWABLE_4D_TYPE = "4d_viewable"
+
+
 class UserDefinedFieldDefinition(Base, TimestampMixin):
     """A named custom field, project-scoped, for one entity kind at a time
     (2026-07-07, per Maro — P6's own "User Defined Fields" dialog:

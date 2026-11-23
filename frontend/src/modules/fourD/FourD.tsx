@@ -445,6 +445,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   useEffect(() => {
     if (!active) return
     refreshSchedule()
+    // A checkbox save can finish after switching from Scheduling to 4D.
+    const visibilitySaved = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === selectedProject?.id) void refreshSchedule()
+    }
+    window.addEventListener('prosota-render-visibility-saved', visibilitySaved)
+    return () => window.removeEventListener('prosota-render-visibility-saved', visibilitySaved)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProject?.id, period?.id, active])
 

@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.user_defined_field import copy_render_visibility
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
@@ -490,6 +491,7 @@ async def promote_baseline_to_variant(
         if a.parent_id is not None and a.parent_id in activity_map:
             new_activities[a.id].parent_id = activity_map[a.parent_id]
 
+    await copy_render_visibility(db, source_variant.project_id, activity_map)
     history = (await db.execute(
         select(ActivityCodeHistory).where(ActivityCodeHistory.activity_id.in_(activity_map.keys()))
     )).scalars().all()

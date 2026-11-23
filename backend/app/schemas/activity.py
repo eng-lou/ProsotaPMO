@@ -401,6 +401,10 @@ class ActivityResponse(ActivityBase):
     is_archive_container: bool = False
 
 
+class ActivityListResponse(ActivityResponse):
+    viewable_4d: bool
+
+
 class DeleteActivityResponse(BaseModel):
     """archived=True means the delete was redirected to Archive instead (the
     activity, or one in its subtree, appears in a saved baseline snapshot) —

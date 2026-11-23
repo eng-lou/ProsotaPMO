@@ -7,6 +7,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.user_defined_field import copy_render_visibility
 from app.models.activity import Activity
 from app.models.activity_code_history import ActivityCodeHistory
 from app.models.activity_relationship import ActivityRelationship
@@ -158,6 +159,7 @@ async def duplicate_schedule_variant(
             new_activities[a.id].parent_id = activity_map[a.parent_id]
 
     if activity_map:
+        await copy_render_visibility(db, source.project_id, activity_map)
         history = (await db.execute(
             select(ActivityCodeHistory).where(ActivityCodeHistory.activity_id.in_(activity_map.keys()))
         )).scalars().all()

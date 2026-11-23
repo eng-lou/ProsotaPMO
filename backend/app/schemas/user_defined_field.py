@@ -51,7 +51,7 @@ class UserDefinedFieldDefinitionResponse(BaseModel):
     project_id: uuid.UUID
     entity_type: UdfEntityType
     name: str
-    data_type: UdfDataType
+    data_type: UdfDataType | Literal["4d_viewable"]
     created_at: datetime
     updated_at: datetime
 

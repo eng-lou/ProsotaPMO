@@ -65,6 +65,7 @@ export function UserDefinedFieldsWidget({
   }
 
   const startEdit = (d: UserDefinedFieldDefinition) => {
+    if (d.data_type === '4d_viewable') return
     setEditingId(d.id)
     setEditName(d.name)
     setEditDataType(d.data_type)
@@ -162,11 +163,13 @@ export function UserDefinedFieldsWidget({
                   <>
                     <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line font-medium">{d.name}</td>
                     <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-gray-500 dark:text-prosota-muted">
-                      {UDF_DATA_TYPES.find(t => t.value === d.data_type)?.label ?? d.data_type}
+                      {d.data_type === '4d_viewable' ? 'Checkbox' : UDF_DATA_TYPES.find(t => t.value === d.data_type)?.label ?? d.data_type}
                     </td>
                     <td className="px-2 py-1.5 border border-gray-200 dark:border-prosota-line text-right whitespace-nowrap">
+                      {d.data_type === '4d_viewable' ? 'Built-in' : <>
                       <button onClick={() => startEdit(d)} className="text-blue-600 dark:text-prosota-azure hover:text-blue-700 dark:hover:text-prosota-cyan mr-2">Edit</button>
                       <button onClick={() => handleDelete(d)} className="text-gray-400 dark:text-prosota-muted hover:text-red-600 dark:hover:text-red-400">Delete</button>
+                      </>}
                     </td>
                   </>
                 )}

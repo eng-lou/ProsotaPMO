@@ -314,6 +314,7 @@ function printColumnWidth(key: ColumnKey, columnWidths: Record<string, number>, 
 const UDF_COLUMN_WIDTH = 144
 
 function udfPrintValue(definition: UserDefinedFieldDefinition, value: UserDefinedFieldValue | undefined, showTimeOfDay: boolean): { text: string; color?: string } {
+  if (definition.data_type === '4d_viewable') return { text: value?.value_text ?? 'Yes' }
   if (definition.data_type === 'indicator') {
     const opt = indicatorOption(value?.value_indicator)
     return { text: opt.label === 'None' ? opt.icon : `${opt.icon} ${opt.label}`, color: opt.color }

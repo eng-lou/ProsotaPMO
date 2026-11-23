@@ -49,6 +49,7 @@ export interface SchedulePeriod {
 }
 
 export interface Activity {
+  viewable_4d?: boolean
   id: string
   code: string
   project_id: string
@@ -723,7 +724,7 @@ export interface UserDefinedFieldDefinition {
   project_id: string
   entity_type: UdfEntityType
   name: string
-  data_type: UdfDataType
+  data_type: UdfDataType | '4d_viewable'
   created_at: string
   updated_at: string
 }

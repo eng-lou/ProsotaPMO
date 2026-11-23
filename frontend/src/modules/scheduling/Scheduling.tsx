@@ -57,7 +57,7 @@ import { SchedulingFiltersWidget } from './SchedulingFiltersWidget'
 import { SchedulingHighlightsWidget } from './SchedulingHighlightsWidget'
 import { SchedulingQualityPrintView } from './SchedulingQualityPrintView'
 import { ScheduleVariantWidget } from './ScheduleVariantWidget'
-import { UdfCell } from './UdfCell'
+import { RenderVisibilityCell, UdfCell } from './UdfCell'
 import {
   findNextOverallocatedTarget, levelTarget,
   type LevelingGranularity, type LevelingMode, type LevelingTarget,
@@ -1517,12 +1517,26 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
   // themselves are declared further up now, alongside groupBy — see that
   // declaration's own header.)
   const [visibleUdfFieldIds, setVisibleUdfFieldIds] = useState<Set<string>>(loadVisibleUdfFields)
-  const isUdfColumnVisible = (id: string) => visibleUdfFieldIds.has(id)
+  const renderField = udfDefinitions.find(d => d.data_type === '4d_viewable')
+  const isUdfColumnVisible = (id: string) => id === renderField?.id
+    ? !visibleUdfFieldIds.has(`hide:${id}`) : visibleUdfFieldIds.has(id)
+  // The server returns parents before children, including collapsed branches.
+  const hiddenByWbs = useMemo(() => {
+    const inherited = new Map<string, string>()
+    const branches = new Map<string, string>()
+    for (const row of activities) {
+      const ancestor = row.parent_id ? branches.get(row.parent_id) : undefined
+      if (ancestor) inherited.set(row.id, ancestor)
+      if (ancestor || row.viewable_4d === false) branches.set(row.id, ancestor ?? row.task_name)
+    }
+    return inherited
+  }, [activities])
   const toggleUdfColumn = (id: string) => {
     setVisibleUdfFieldIds(prev => {
       const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      const key = id === renderField?.id ? `hide:${id}` : id
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
       localStorage.setItem(VISIBLE_UDF_FIELDS_STORAGE_KEY, JSON.stringify([...next]))
       return next
     })
@@ -1539,6 +1553,11 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     ...udfDefinitions.map(d => ({key: `udf:${d.id}`, label: `${d.name} (UDF)`})),
   ]
   const orderedColumnKeys = reconcileColumnOrder(columnOrder, columnChoices.map(c => c.key))
+  const renderColumnKey = renderField && `udf:${renderField.id}`
+  if (renderColumnKey && !columnOrder.includes(renderColumnKey)) {
+    orderedColumnKeys.splice(orderedColumnKeys.indexOf(renderColumnKey), 1)
+    orderedColumnKeys.splice(orderedColumnKeys.indexOf('activity') + 1, 0, renderColumnKey)
+  }
   const sourceColumnKeys = columnChoices.filter(c => c.key === 'activity' || (c.key.startsWith('udf:')
     ? isUdfColumnVisible(c.key.slice(4)) : isColumnVisible(c.key as ColumnKey))).map(c => c.key)
   const displayedColumnKeys = orderedColumnKeys.filter(key => sourceColumnKeys.includes(key))
@@ -2282,7 +2301,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     try {
       if (Object.keys(payload).length) {
         const { data } = await api.patch<Activity>(`/api/v1/activities/${activity.id}`, amendRelationships ? { ...payload, amend_relationships: true } : payload)
-        if (metadataOnly) setActivities(rows => rows.map(row => row.id === data.id ? data : row))
+        if (metadataOnly) setActivities(rows => rows.map(row => row.id === data.id ? { ...row, ...data } : row))
       }
     } catch (err) {
       // Changing activity_type to/from a Start/Finish Milestone can leave
@@ -2511,7 +2530,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
     try {
       const { data } = await api.patch<Activity>(`/api/v1/activities/${id}`, payload)
       setEditingCell(null)
-      if (field === 'task_name') setActivities(rows => rows.map(row => row.id === id ? data : row))
+      if (field === 'task_name') setActivities(rows => rows.map(row => row.id === id ? { ...row, ...data } : row))
       else await refreshActivityEdit()
     } catch (err) {
       const message = axios.isAxiosError(err) ? (err.response?.data as { detail?: string } | undefined)?.detail : undefined
@@ -3862,7 +3881,7 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                 {isColumnVisible('eac') && <ResizableTh width={columnWidths.eac} onResizeStart={startColumnResize('eac')} {...sortHeader('eac')} title="Estimate At Completion — BAC ÷ CPI">EAC</ResizableTh>}
                 {isColumnVisible('etc') && <ResizableTh width={columnWidths.etc} onResizeStart={startColumnResize('etc')} {...sortHeader('etc')} title="Estimate To Complete — EAC minus AC">ETC</ResizableTh>}
                 {visibleUdfDefinitions.map(d => (
-                  <th key={d.id} className="px-3 py-2.5 whitespace-nowrap" title={`Custom field (${d.data_type})`}>{d.name} (UDF)</th>
+                  <th key={d.id} className="px-3 py-2.5 whitespace-nowrap" title={d.data_type === '4d_viewable' ? 'Show this row and its branch in the rendered Gantt' : `Custom field (${d.data_type})`}>{d.name} (UDF)</th>
                 ))}
                 </OrderedColumns>
               </tr>
@@ -4278,7 +4297,14 @@ export function Scheduling({initialTab = 'schedule'}: {initialTab?: 'schedule' |
                   {isColumnVisible('spi') && <td className={`px-3 py-1 ${a.spi !== null && Number(a.spi) < 1 ? 'text-red-600 dark:text-red-400 font-semibold' : 'text-gray-600 dark:text-prosota-muted'}`}>{formatRatio(a.spi)}</td>}
                   {isColumnVisible('eac') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.eac)}</td>}
                   {isColumnVisible('etc') && <td className="px-3 py-1 text-gray-600 dark:text-prosota-muted whitespace-nowrap">{formatMoney(a.etc)}</td>}
-                  {visibleUdfDefinitions.map(d => (
+                  {visibleUdfDefinitions.map(d => d.data_type === '4d_viewable' ? (
+                    <RenderVisibilityCell key={d.id} name={a.task_name} checked={a.viewable_4d !== false}
+                      hiddenBy={hiddenByWbs.get(a.id)} onSave={async checked => {
+                        await setUdfValue(d.id, a.id, { value_text: checked ? 'Yes' : 'No' })
+                        setActivities(rows => rows.map(row => row.id === a.id ? { ...row, viewable_4d: checked } : row))
+                        window.dispatchEvent(new CustomEvent('prosota-render-visibility-saved', { detail: a.project_id }))
+                      }} />
+                  ) : (
                     <UdfCell
                       key={d.id}
                       definition={d}
