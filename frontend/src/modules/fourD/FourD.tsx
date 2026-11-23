@@ -129,6 +129,7 @@ import { createPath, deletePath, listPaths, updatePath, type Path, type PathPoin
 import { deletePathFollower, listPathFollowers, updatePathFollower, upsertPathFollower, type PathFollower } from './pathFollowers'
 import { PathsPanel } from './PathsPanel'
 import { SiteScheduleWizard } from './SiteScheduleWizard'
+import type { ConstructionTemplate } from './constructionActivities'
 import { changeSiteSelection, type SiteSelectionMode } from './siteObjectSelection'
 import { selectedPileBounds } from './pileSelection'
 import { SiteToolsPanel } from './SiteToolsPanel'
@@ -3230,7 +3231,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   }, [ifcHandles, elementSplits, settings.upAxis])
 
   const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false)
-  const [siteScheduleIds,setSiteScheduleIds]=useState<string[]|null>(null)
+  const [siteSchedule,setSiteSchedule]=useState<{ids:string[];template?:ConstructionTemplate}|null>(null)
 
   // Resolves each element-scoped SectionBox's own GlobalId (element_ref)
   // to an expressID within whichever specific IFC model it belongs to
@@ -7343,24 +7344,35 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   if (siteToolsOpen && selectedProject) dockablePanels.push({
     id: 'site-tools', label: '3D Site tools', keepMounted: true, dock: siteToolsDock, onToggleDock: () => setSiteToolsDock(side => side === 'right' ? 'left' : 'right'),
     onClose: () => { setSiteToolsOpen(false); siteScene.setDraft(null) },
-    content: <SiteToolsPanel readPileBounds={machineId=>selectedPileBounds(machineId,selectedObjectIds,currentIfcPick(),[...viewportObjects,...siteViewportObjects])} sceneLightsEnabled={settings.importedLights !== false} enableSceneLights={() => setSettings({...settings, importedLights:true})} onEditAttachment={mode=>{setGizmoMode(mode);setGizmoSpace('world');setEditPivot(false);setSnapToSurface(false)}} timelineFormat={{scheduleStart:timelineRange?.start||timelineDateRef.current||new Date(),timeDisplayMode,speedDaysPerSecond,fps}} timelineDateRef={timelineDateRef} onSeek={handleSeekTimelineTo} extractionBlocks={Object.fromEntries(siteScene.scene.items.flatMap(i=>elementKeyframes.keyframes.some(k=>k.source_kind==='mesh'&&k.element_ref==='site:'+i.id)?[[i.id,'Remove the whole-object transform keys before extracting; the new parts will have their own keys.']]:Object.keys(customTextures['site:'+i.id]||{}).length||customOpacity['site:'+i.id]!==undefined?[[i.id,'Clear the whole-object custom material override before extracting. Authored materials are retained; apply custom overrides to the individual parts afterwards.']]:[]))} riggedIds={new Set(instanceEquipment.map(r=>r.model_ref))} onGenerateSchedule={ids=>setSiteScheduleIds(ids)} selectedShapeSources={() => {
-      if (selectedExpressIds.size && activeObjectId) {
-        const handle = getIfcHandleFor(activeObjectId)
-        if (!handle) return []
-        const sources = [...selectedExpressIds].map(id => {
-          ensureMaterialized(handle.object, id)
-          const group = new Group()
-          handle.object.updateWorldMatrix(true, true)
-          const meshes = handle.object.userData.expressIdMeshIndex?.get(id) as Mesh[] | undefined
-          for (const mesh of meshes || []) { const copy = new Mesh(mesh.geometry, mesh.material); copy.name=mesh.name; copy.userData={...mesh.userData}; copy.matrixAutoUpdate = false; copy.matrix.copy(mesh.matrixWorld); group.add(copy) }
-          const source=sceneObjects.find(o=>o.id===activeObjectId)
-          return { backupRef:source?.fileId?'file:'+source.fileId+'::'+id:undefined, id: activeObjectId+'::'+id, name: 'IFC element '+id, object: group }
+    content: <SiteToolsPanel readPileBounds={machineId=>selectedPileBounds(machineId,selectedObjectIds,currentIfcPick(),[...viewportObjects,...siteViewportObjects])} sceneLightsEnabled={settings.importedLights !== false} enableSceneLights={() => setSettings({...settings, importedLights:true})} onEditAttachment={mode=>{setGizmoMode(mode);setGizmoSpace('world');setEditPivot(false);setSnapToSurface(false)}} timelineFormat={{scheduleStart:timelineRange?.start||timelineDateRef.current||new Date(),timeDisplayMode,speedDaysPerSecond,fps}} timelineDateRef={timelineDateRef} onSeek={handleSeekTimelineTo} extractionBlocks={Object.fromEntries(siteScene.scene.items.flatMap(i=>elementKeyframes.keyframes.some(k=>k.source_kind==='mesh'&&k.element_ref==='site:'+i.id)?[[i.id,'Remove the whole-object transform keys before extracting; the new parts will have their own keys.']]:Object.keys(customTextures['site:'+i.id]||{}).length||customOpacity['site:'+i.id]!==undefined?[[i.id,'Clear the whole-object custom material override before extracting. Authored materials are retained; apply custom overrides to the individual parts afterwards.']]:[]))} riggedIds={new Set(instanceEquipment.map(r=>r.model_ref))} onGenerateSchedule={(ids,template)=>setSiteSchedule({ids,template})} selectedShapeSources={scope => {
+      const pick=scope==='construction'?currentIfcPick():new Map(activeObjectId && selectedExpressIds.size?[[activeObjectId,selectedExpressIds]]:[])
+      const elements=[...pick].flatMap(([modelId,ids])=>{
+        const handle=getIfcHandleFor(modelId)
+        if(!handle){
+          if(scope==='construction')throw Error('Wait for the selected IFC model to load.')
+          return []
+        }
+        const source=sceneObjects.find(o=>o.id===modelId)
+        handle.object.updateWorldMatrix(true,false)
+        return [...ids].map(id=>{
+          const group=new Group()
+          for(const mesh of getMaterializedMeshes(handle.object,id)){
+            mesh.updateWorldMatrix(true,false)
+            const copy=new Mesh(mesh.geometry,mesh.material)
+            copy.name=mesh.name;copy.userData={...mesh.userData};copy.matrixAutoUpdate=false
+            copy.matrix.copy(mesh.matrixWorld);group.add(copy)
+          }
+          const type=scope==='construction'?handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.ifcModelID,id)):undefined
+          return {backupRef:source?.fileId?'file:'+source.fileId+'::'+id:undefined,id:modelId+'::'+id,
+            name:(type||'IFC element')+' '+id,object:group,ifcType:type}
         })
-        setMaterializeVersion(v => v+1)
-        return sources
+      })
+      if(elements.length){
+        setMaterializeVersion(v=>v+1)
+        if(scope!=='construction')return elements
       }
-      return [...sceneObjects.filter(o=>o.kind==='mesh' && selectedObjectIds.has(o.id)).map(o=>({id:o.id,backupRef:o.fileId?'file:'+o.fileId:undefined,name:o.name,object:o.object})),
-        ...siteScene.scene.items.flatMap(item=>{const object=siteSourceRoots.get(item.id);return object && (selectedObjectIds.has('site:'+item.id)||siteScene.selected===item.id)?[{id:'site:'+item.id,name:item.name,object}]:[]})]
+      return [...elements,...sceneObjects.filter(o=>o.kind==='mesh' && selectedObjectIds.has(o.id)).map(o=>({id:o.id,backupRef:o.fileId?'file:'+o.fileId:undefined,name:o.name,object:o.object})),
+        ...siteScene.scene.items.flatMap(item=>{const object=siteSourceRoots.get(item.id);return object && (selectedObjectIds.has('site:'+item.id)||(scope!=='construction'&&siteScene.selected===item.id))?[{id:'site:'+item.id,name:item.name,object}]:[]})]
     }} hideShapeSources={ids => {
       const whole=ids.filter(id=>!id.includes('::')), elements=ids.filter(id=>id.includes('::'))
       const addedWhole=whole.filter(id=>!hiddenIds.has(id)), addedElements=elements.filter(id=>!hiddenExpressIds.has(id))
@@ -8439,7 +8451,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             ⏳ {name} {percent}%
           </span>
         ))}
-        {siteScene.scene.items.length>0&&<button className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line" onClick={()=>setSiteScheduleIds(siteScene.scene.items.map(i=>i.id))} title="Create reviewed activities and animation links for independent 3D objects">{ifcHandles.length?'Generate 3D Schedule':'Generate Schedule'}</button>}
+        {siteScene.scene.items.length>0&&<button className="text-xs px-2.5 py-1 rounded-md border border-gray-300 dark:border-prosota-line" onClick={()=>setSiteSchedule({ids:siteScene.scene.items.map(i=>i.id)})} title="Create reviewed activities and animation links for independent 3D objects">{ifcHandles.length?'Generate 3D Schedule':'Generate Schedule'}</button>}
         {ifcHandles.length > 0 && (
           <button
             onClick={() => setScheduleWizardOpen(true)}
@@ -8597,7 +8609,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           onAssignProfile={handleAssignProfile}
         />
       </div>
-      {siteScheduleIds && selectedProject && <SiteScheduleWizard key={selectedProject.id+':'+(period?.id||'')} projectId={selectedProject.id} schedulePeriodId={period?.id} items={siteScene.scene.items.filter(i=>siteScheduleIds.includes(i.id))} profiles={animationProfiles.profiles} links={modelElementLinks} upAxis={settings.upAxis} calendars={calendars} onCancel={()=>setSiteScheduleIds(null)} onGenerated={()=>{setSiteScheduleIds(null);refreshSchedule();void listModelElementLinks(selectedProject.id).then(setModelElementLinks);void animationProfiles.refetch()}}/>}
+      {siteSchedule && selectedProject && <SiteScheduleWizard activities={activities} initialTemplate={siteSchedule.template} key={selectedProject.id+':'+(period?.id||'')} projectId={selectedProject.id} schedulePeriodId={period?.id} items={siteScene.scene.items.filter(i=>siteSchedule.ids.includes(i.id))} profiles={animationProfiles.profiles} links={modelElementLinks} upAxis={settings.upAxis} calendars={calendars} onCancel={()=>setSiteSchedule(null)} onGenerated={()=>{setSiteSchedule(null);refreshSchedule();void listModelElementLinks(selectedProject.id).then(setModelElementLinks);void animationProfiles.refetch()}}/>}
       {scheduleWizardOpen && selectedProject && period && (
         <IfcScheduleWizard
           models={ifcHandles.map(handle => ({

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { Object3D } from 'three'
 import type { Activity } from '@/modules/scheduling/types'
 import { climbWindows, type ClimbLift, type ClimbingFormwork } from './climbingFormwork'
-import { prepareCoreCycle, type LiftWindow } from './coreCycle'
+import { corePhases, prepareCoreCycle, type LiftWindow } from './coreCycle'
 import { markRenderActivity } from './IdleRenderDriver'
 
 export function CoreLiftTiming({lift,row,activities,onSeek,change}:{
@@ -11,7 +11,11 @@ export function CoreLiftTiming({lift,row,activities,onSeek,change}:{
   const [query,setQuery]=useState(''), [position,setPosition]=useState(0)
   const anchor=activities.find(a=>a.id===lift.activity_id)
   const names=[['climb_activity_id','Climb activity','Count back from formwork start'],['pour_activity_id','Pour activity','No linked pour'],['strip_activity_id','Strip activity','Retract during the climb']] as const
+  const suggested=anchor?corePhases(anchor,activities):{}
+  const missing:Partial<ClimbLift>={}
+  for(const [key] of names)if(!lift[key] && suggested[key])missing[key]=suggested[key]
   return <>
+    {Object.keys(missing).length>0&&<button onClick={()=>change(missing)}>Match missing phase activities</button>}
     <label>Find phase activities<input className="w-full" value={query} placeholder="Search by name or code" onChange={e=>setQuery(e.target.value)}/></label>
     {names.map(([key,label,empty])=>{
       const q=query.trim().toLowerCase(), current=activities.find(a=>a.id===lift[key])

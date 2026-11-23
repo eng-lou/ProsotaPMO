@@ -1,0 +1,93 @@
+import { useEffect, useRef, useState } from 'react'
+import { Bounds, OrbitControls } from '@react-three/drei'
+import { SafeCanvas as Canvas } from './SafeCanvas'
+import { constructionModes, type ConstructionMode, type ConstructionOptions } from './constructionGeometry'
+import { constructionPlacements, prepareConstruction, releaseConstruction, type ConstructionPreview, type HostSource } from './constructionLayout'
+import { siteError, type useSiteScene } from './siteScene'
+
+export type CreatorKind='Formwork'|'Reinforcement'
+const modes:Record<CreatorKind,ConstructionMode[]>={Formwork:['deck','shutter','screen'],Reinforcement:['mat','column','wall']}
+const field='block w-full rounded border p-1.5 bg-white dark:bg-prosota-panel2 dark:border-prosota-line'
+const button='rounded border px-2 py-1.5 disabled:opacity-40 dark:border-prosota-line'
+export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state,onSelect,onPlan,onClose}:{
+  kind:CreatorKind; projectId:string; upAxis:'y'|'z'; selectedSources():HostSource[]
+  state:ReturnType<typeof useSiteScene>; onSelect(ids:string[]):void; onPlan(ids:string[],mode:ConstructionMode):void; onClose():void
+}){
+  const [mode,setMode]=useState<ConstructionMode>(modes[kind][0])
+  const [spacing,setSpacing]=useState('200'),[diameter,setDiameter]=useState('16'),[cover,setCover]=useState('35')
+  const [clearance,setClearance]=useState('3.424'),[propSpacing,setPropSpacing]=useState('1.9')
+  const [screenHeight,setScreenHeight]=useState('7.2'),[bayWidth,setBayWidth]=useState('2.4'),[skip,setSkip]=useState('')
+  const [doubleMat,setDoubleMat]=useState(true),[separate,setSeparate]=useState(true)
+  const [preview,setPreview]=useState<ConstructionPreview|null>(null),prepared=useRef<ConstructionPreview|null>(null)
+  const [busy,setBusy]=useState(false),pending=useRef(false),alive=useRef(true)
+  const [error,setError]=useState('')
+  function clear(){if(prepared.current)releaseConstruction(prepared.current.scene);prepared.current=null;setPreview(null);setError('')}
+  useEffect(()=>{
+    alive.current=true
+    return ()=>{alive.current=false;if(prepared.current)releaseConstruction(prepared.current.scene)}
+  },[])
+  const host=mode==='shutter'||mode==='column'?'columns':mode==='wall'?'walls':'slabs'
+  const number=(label:string,value:string,change:(v:string)=>void)=><label>{label}<input className={field} type="number" step="any" min="0" value={value} onChange={e=>{clear();change(e.target.value)}}/></label>
+  function value(text:string,min:number,max:number,label:string){
+    const n=Number(text)
+    if(!text.trim()||!Number.isFinite(n)||n<min||n>max)throw Error(label+' must be between '+min+' and '+max+'.')
+    return n
+  }
+  async function prepare(){
+    if(pending.current)return
+    pending.current=true;setBusy(true);clear()
+    try{
+      const rebar=kind==='Reinforcement'
+      const options:ConstructionOptions={mode,
+        spacing:rebar?value(spacing,40,2000,'Bar spacing (mm)')/1000:mode==='deck'?value(propSpacing,.3,5,'Prop spacing (m)'):1,
+        diameter:rebar?value(diameter,4,60,'Bar diameter (mm)')/1000:.016,
+        cover:rebar?value(cover,5,250,'Cover (mm)')/1000:.035,
+        clearance:mode==='deck'?value(clearance,.75,10,'Soffit height (m)'):3.424,
+        screenHeight:mode==='screen'?value(screenHeight,2.5,18,'Screen height (m)'):7.2,
+        bayWidth:mode==='screen'?value(bayWidth,.4,6,'Bay width (m)'):2.4,doubleMat}
+      const skipEdges=mode==='screen'&&skip.trim()?skip.split(',').map(s=>Number(s.trim())):[]
+      if(skipEdges.some(n=>!Number.isInteger(n)||n<1))throw Error('Enter exterior edge numbers separated by commas.')
+      const sources=selectedSources()
+      const result=await prepareConstruction(sources,upAxis,options,skipEdges)
+      if(alive.current){prepared.current=result;setPreview(result)}else releaseConstruction(result.scene)
+    }catch(e){if(alive.current)setError(siteError(e))}
+    finally{pending.current=false;if(alive.current)setBusy(false)}
+  }
+  async function create(plan=false){
+    if(!preview||pending.current)return
+    pending.current=true;setBusy(true);setError('')
+    try{
+      const items=await constructionPlacements(preview,projectId,upAxis,separate)
+      if(!alive.current)return
+      const saved=await state.save(current=>[...current,...items],'Create '+preview.label)
+      if(!saved)throw Error('The scene is busy. Try creating this preview again.')
+      if(alive.current){
+        const ids=items.map(i=>i.id)
+        onSelect(ids)
+        onClose()
+        if(plan)onPlan(ids,mode)
+      }
+    }catch(e){if(alive.current)setError(siteError(e))}
+    finally{pending.current=false;if(alive.current)setBusy(false)}
+  }
+  return <section aria-label={kind+' creator'} className="rounded border p-2 space-y-2 dark:border-prosota-line">
+    <div className="flex items-center justify-between"><strong>{kind} creator</strong><button className={button} disabled={busy} onClick={onClose}>Close</button></div>
+    <fieldset disabled={busy||state.busy} className="space-y-2 min-w-0">
+      <label>Generate<select className={field} value={mode} onChange={e=>{clear();setMode(e.target.value as ConstructionMode)}}>{modes[kind].map(m=><option key={m} value={m}>{constructionModes[m]}</option>)}</select></label>
+      <p>Select {host} in the viewport. Ctrl/Cmd-click to add more.</p>
+      {mode==='deck'&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance)}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
+      {mode==='screen'&&<><div className="grid grid-cols-2 gap-2">{number('Max bay width (m)',bayWidth,setBayWidth)}{number('Screen height (m)',screenHeight,setScreenHeight)}</div>
+        <label>Exterior edges to skip<input placeholder="e.g. 2, 4" className={field} value={skip} onChange={e=>{clear();setSkip(e.target.value)}}/></label></>}
+      {kind==='Reinforcement'&&<><div className="grid grid-cols-2 gap-2">{number('Spacing (mm)',spacing,setSpacing)}{number('Bar diameter (mm)',diameter,setDiameter)}{number('Cover (mm)',cover,setCover)}</div>
+        {mode==='mat'&&<label className="flex gap-2"><input type="checkbox" checked={doubleMat} onChange={e=>{clear();setDoubleMat(e.target.checked)}}/>Top and bottom mats</label>}</>}
+      <button className={button} disabled={!state.ready} onClick={()=>void prepare()}>{busy?'Working…':'Preview from selection'}</button>
+      {preview&&<><div className="h-48 rounded bg-slate-800 overflow-hidden">
+        <Canvas camera={{position:[6,5,7],fov:40}}><ambientLight intensity={1.8}/><directionalLight position={[5,9,3]} intensity={2.4}/><Bounds fit clip observe margin={1.2} key={preview.scene.uuid}><primitive object={preview.scene} dispose={null}/></Bounds><OrbitControls makeDefault/></Canvas>
+      </div><p>{preview.hosts} selected {preview.hosts===1?'host':'hosts'} · {preview.parts} construction parts</p>
+      {preview.parts>1&&<label className="flex gap-2"><input type="checkbox" checked={separate} onChange={e=>setSeparate(e.target.checked)}/>Save parts separately for scheduling</label>}
+      <button className={button+' bg-blue-600 text-white'} onClick={()=>void create()}>Create at selected {preview.hosts===1?'element':'elements'}</button>
+      <button className={button} onClick={()=>void create(true)}>Create and plan activities…</button></>}
+    </fieldset>
+    {error&&<p role="alert" className="text-red-500">{error}</p>}
+  </section>
+}

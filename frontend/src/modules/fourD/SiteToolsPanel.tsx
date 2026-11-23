@@ -29,6 +29,8 @@ import { FenceSettings, TowerCoverSettings, fencePresets } from './EnclosureSett
 import { SiteToolSection } from './SiteToolSection'
 import { SiteObjectList } from './SiteObjectList'
 import { removeSitePlacements, type SiteSelectionMode } from './siteObjectSelection'
+import type { ConstructionTemplate } from './constructionActivities'
+import { ConstructionCreator, type CreatorKind } from './ConstructionCreator'
 import { CoreRigTemplate } from './CoreRigTemplate'
 import { SiteAssetLibrary } from './SiteAssetLibrary'
 import { useSiteAssetInventory, importSiteAsset, type SiteAsset } from './siteAssets'
@@ -58,9 +60,9 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   onEditAttachment?(mode:"translate"|"rotate"):void
   riggedIds?: Set<string>
   extractionBlocks?: Record<string,string>
-  onGenerateSchedule(ids:string[]):void
+  onGenerateSchedule(ids:string[],template?:ConstructionTemplate):void
   readPileBounds(machineId: string): Box3
-  selectedShapeSources():ShapeSource[]
+  selectedShapeSources(scope?:'construction'):ShapeSource[]
   hideShapeSources(ids:string[]):()=>void
   importRequest?: number
   sceneSources: {id:string;name:string;object:Object3D}[]
@@ -78,13 +80,14 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   const [previewing, setPreviewing] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [library, setLibrary] = useState(true)
+  const [creator,setCreator]=useState<CreatorKind|null>(null)
   const inventory = useSiteAssetInventory(projectId)
   const [libraryFilter,setLibraryFilter] = useState('')
   useEffect(()=>{if(importRequest){setLibrary(true);setLibraryFilter('')}},[importRequest])
   const generation = useRef(0)
   const sequence = useRef<AbortController | null>(null)
   const { scene, draft, setDraft, selected, setSelected, save, busy, error, setError } = state
-  function cancel() { setPlaceAsParts(false); generation.current++; sequence.current?.abort(); setEdit(null); setDraft(null); state.setPlacing(false); setPreviewing(false); setError('') }
+  function cancel() { setCreator(null); setPlaceAsParts(false); generation.current++; sequence.current?.abort(); setEdit(null); setDraft(null); state.setPlacing(false); setPreviewing(false); setError('') }
   useEffect(() => () => { generation.current++; sequence.current?.abort(); setDraft(null); state.setPlacing(false) }, [])
   useEffect(() => {
     if (!state.placement || !edit) return
@@ -249,13 +252,17 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     <div className="flex gap-2"><button className={`${button} flex-1 ${library ? 'bg-blue-600 text-white' : ''}`} onClick={() => { cancel(); setLibraryFilter(''); setLibrary(true) }}>Asset library</button><button className={`${button} flex-1 ${!library ? 'bg-blue-600 text-white' : ''}`} onClick={() => setLibrary(false)}>Layout tools</button></div>
     {library && <SiteAssetLibrary projectId={projectId} inventory={inventory} initialFilter={libraryFilter} onPlace={placeAsset} />}
     {library && !edit && <CoreRigTemplate projectId={projectId} inventory={inventory} onPlace={asset=>placeAsset(asset,false,true)}/>}
-    {!library && !edit && <div className="grid grid-cols-2 gap-1" aria-label="Place site object">
+    {!library && !edit && !creator && <div className="grid grid-cols-2 gap-1" aria-label="Place site object">
       {(['fence','scatter','shape','context','light'] as const).map(kind =>
         <button key={kind} className={button} disabled={!state.ready || busy} onClick={() => startLayout(kind)}>
           + {kind === 'fence' ? 'Fence / objects along path' : presets[kind].name}
         </button>)}
+      {(['Formwork','Reinforcement'] as const).map(kind=><button key={kind} className={button} disabled={!state.ready || busy}
+        onClick={()=>setCreator(kind)}>+ {kind} creator</button>)}
+      <button className={button} onClick={()=>onGenerateSchedule([],'cycle')}>Add simulation activities…</button>
     </div>}
-    {!edit && <ShapeOperationsPanel projectId={projectId} upAxis={upAxis} sources={sceneSources.filter(s=>!scene.items.some(i=>i.kind==='geographic'&&s.id==='site:'+i.id))} state={state} selectedSources={shapeSources} hideSources={hideShapeSources}/> }
+    {!library && !edit && creator && <ConstructionCreator key={projectId+creator+upAxis} kind={creator} projectId={projectId} upAxis={upAxis} state={state} selectedSources={()=>selectedShapeSources('construction')} onSelect={ids=>onPickItems(ids,'replace')} onPlan={onGenerateSchedule} onClose={()=>setCreator(null)}/>}
+    {!edit && !creator && <ShapeOperationsPanel projectId={projectId} upAxis={upAxis} sources={sceneSources.filter(s=>!scene.items.some(i=>i.kind==='geographic'&&s.id==='site:'+i.id))} state={state} selectedSources={shapeSources} hideSources={hideShapeSources}/> }
     {edit && <div className="space-y-2 border-t pt-2 dark:border-prosota-line">
       {edit.kind==='asset'&&!edit.asset_part&&<TowerCoverSettings item={edit} change={change}/>}
       {edit.kind==='asset'&&!edit.asset_part&&edit.climbing_formwork?.mode!=='articulated'&&<label className="flex gap-2"><input type="checkbox" checked={placeAsParts} onChange={e=>setPlaceAsParts(e.target.checked)}/>Save as independent construction parts</label>}
@@ -330,7 +337,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
       readPileBounds={readPileBounds} onApply={async patch=>{
         await save(items=>items.map(i=>i.id===sequenceMachine.id?{...i,...patch}:i), `Work sequence for ${sequenceMachine.name}`)
       }}/>}
-    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
+    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel onPlan={()=>onGenerateSchedule([chosen.id],'core')} source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
     {chosen && !edit && <SiteToolSection key={chosen.id} title="Activity links & profiles">
       <ToolVisualGuide topic="links"/>

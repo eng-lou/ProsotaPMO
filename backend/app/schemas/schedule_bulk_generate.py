@@ -154,6 +154,8 @@ class BulkRelationshipInput(BaseModel):
 class ScheduleBulkGenerateRequest(BaseModel):
     project_id: uuid.UUID
     schedule_period_id: uuid.UUID
+    # Attach top-level rows in this batch to an existing WBS in the live period.
+    parent_wbs_id: uuid.UUID | None = None
     # Applied to every generated activity (2026-07-13, per Maro: "prompt the
     # user to pick the calendar they want... by default the standard
     # calendar") — one choice for the whole batch, not per-activity; None

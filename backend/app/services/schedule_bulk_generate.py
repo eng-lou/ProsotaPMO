@@ -4,7 +4,7 @@ import uuid
 from collections import Counter, defaultdict
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import Activity
@@ -112,8 +112,23 @@ async def bulk_generate(db: AsyncSession, data: ScheduleBulkGenerateRequest) -> 
         for i, child_temp_id in enumerate(children_by_parent_temp_id.get(temp_id, [])):
             plan_activity(child_temp_id, activity_id, i)
 
+    first_sort_order = 0
+    if data.parent_wbs_id is not None:
+        parent = await db.scalar(select(Activity).where(
+            Activity.id == data.parent_wbs_id,
+            Activity.project_id == data.project_id,
+            Activity.schedule_period_id == data.schedule_period_id,
+            Activity.activity_type == "wbs_summary",
+        ).with_for_update())
+        if parent is None:
+            raise HTTPException(422, "Choose an existing WBS in this schedule period.")
+        last_sort_order = await db.scalar(select(func.max(Activity.sort_order)).where(
+            Activity.parent_id == parent.id, Activity.schedule_period_id == data.schedule_period_id,
+        ))
+        first_sort_order = (last_sort_order if last_sort_order is not None else -1) + 1
+
     for i, temp_id in enumerate(children_by_parent_temp_id.get(None, [])):
-        plan_activity(temp_id, None, i)
+        plan_activity(temp_id, data.parent_wbs_id, first_sort_order + i)
 
     if len(real_id_by_temp_id) != len(data.activities):
         raise HTTPException(status_code=422, detail="activities contains an unreachable/cyclic parent_temp_id chain")

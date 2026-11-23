@@ -9,10 +9,20 @@ const progress = (date:number, from:number, to:number) => unit((date-from)/(to-f
 // Use the generator's floor, core workstream and phase together. A floor can also have ordinary wall pours.
 export function corePhases(erect:Activity, tasks:Activity[]): Partial<ClimbLift> {
   if (erect.schedule_phase_key !== 'formwork_rebar') return {}
-  const prefix = erect.task_name.split(' - ').slice(0,-1).join(' - ')
-  if (!prefix.endsWith(' - Core walls')) return {}
-  const matching = tasks.filter(t => t.parent_id === erect.parent_id && t.task_name.startsWith(prefix+' - '))
-  const unique = (key:string) => { const hits=matching.filter(t=>t.schedule_phase_key===key); return hits.length===1 ? hits[0].id : null }
+  const siblings = tasks.filter(t => t.parent_id === erect.parent_id)
+  const prefix = (task:Activity) => task.task_name.split(/\s+[-–—]\s+/).slice(0,-1).join(' - ')
+  const group = prefix(erect)
+  const planned = erect.schedule_category === 'Core lift'
+  if (!planned && !group.endsWith(' - Core walls')) return {}
+  const coreTasks=siblings.filter(t=>t.schedule_category==='Core lift' || prefix(t).endsWith(' - Core walls'))
+  const matching=coreTasks.filter(t=>planned?t.schedule_category==='Core lift':prefix(t)===group)
+  const anchors=coreTasks.filter(t=>t.schedule_phase_key==='formwork_rebar')
+  if (planned && matching.filter(t=>t.schedule_phase_key==='formwork_rebar').length>1) return {}
+  const unique=(key:string)=>{
+    const sameLift=matching.filter(t=>t.schedule_phase_key===key)
+    const choices=sameLift.length || anchors.length!==1 ? sameLift : coreTasks.filter(t=>t.schedule_phase_key===key)
+    return choices.length===1?choices[0].id:null
+  }
   return {climb_activity_id:unique('core_climb'),pour_activity_id:unique('pour'),strip_activity_id:unique('strip')}
 }
 

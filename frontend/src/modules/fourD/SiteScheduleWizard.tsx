@@ -5,7 +5,12 @@ import { buildSiteSchedule, type SiteScheduleRow } from './siteSchedule'
 import type { AnimationProfile } from './animationProfiles'
 import type { ModelElementLink } from './modelElementLinks'
 
-export function SiteScheduleWizard({projectId,schedulePeriodId,items,profiles,links,upAxis,calendars,onCancel,onGenerated}:{projectId:string;schedulePeriodId?:string;items:SiteItem[];profiles:AnimationProfile[];links:ModelElementLink[];upAxis:'y'|'z';calendars:{id:string;name:string}[];onCancel():void;onGenerated():void}){
+import type { Activity } from '../scheduling/types'
+import type { ConstructionTemplate } from './constructionActivities'
+import { SimulationActivityPlanner } from './SimulationActivityPlanner'
+
+export function SiteScheduleWizard({projectId,schedulePeriodId,items,profiles,links,upAxis,calendars,activities,initialTemplate,onCancel,onGenerated}:{activities:Activity[];initialTemplate?:ConstructionTemplate;projectId:string;schedulePeriodId?:string;items:SiteItem[];profiles:AnimationProfile[];links:ModelElementLink[];upAxis:'y'|'z';calendars:{id:string;name:string}[];onCancel():void;onGenerated():void}){
+  const [activitiesOnly,setActivitiesOnly]=useState(!!initialTemplate || !items.length)
   const linked=new Set(links.filter(l=>l.source_kind==='site').map(l=>l.element_ref))
   const [rows,setRows]=useState<SiteScheduleRow[]>(()=>items.map(i=>({id:i.id,name:i.name,hours:8,include:!linked.has(i.id)})))
   const [name,setName]=useState(items[0]?.assembly_name||'3D construction sequence'),[hours,setHours]=useState(8),[calendarId,setCalendar]=useState(''),[sequence,setSequence]=useState(true),[profile,setProfile]=useState('drop'),[distance,setDistance]=useState(5),[busy,setBusy]=useState(false),[error,setError]=useState('')
@@ -14,7 +19,12 @@ export function SiteScheduleWizard({projectId,schedulePeriodId,items,profiles,li
   function move(index:number,delta:number){setRows(old=>{const next=[...old];if(index+delta<0||index+delta>=next.length)return old;[next[index],next[index+delta]]=[next[index+delta],next[index]];return next})}
   async function generate(){if(!schedulePeriodId)return;setBusy(true);setError('');try{const payload=buildSiteSchedule(projectId,schedulePeriodId,items,rows,{name,calendarId,sequence,profile,upAxis,distance});await api.post('/api/v1/schedule-bulk-generate/',payload);onGenerated()}catch(e){setError(siteError(e))}finally{setBusy(false)}}
   return <div className="fixed inset-0 z-[100] bg-black/40 flex items-center justify-center p-4"><section role="dialog" aria-label="Generate schedule from 3D objects" className="bg-white dark:bg-prosota-panel dark:text-prosota-paper rounded-lg shadow-xl p-4 w-[900px] max-w-full max-h-[92vh] overflow-auto space-y-3">
-    <h3 className="font-bold">Generate schedule from 3D objects</h3>
+    <h3 className="font-bold">{activitiesOnly?'Add simulation activities':'Generate schedule from 3D objects'}</h3>
+    <div className="flex gap-2" aria-label="Generation mode">
+      <button aria-pressed={!activitiesOnly} disabled={busy||!items.length} className={button+(!activitiesOnly?' bg-blue-600 text-white':'')} onClick={()=>setActivitiesOnly(false)}>Activities and object links</button>
+      <button aria-pressed={activitiesOnly} disabled={busy} className={button+(activitiesOnly?' bg-blue-600 text-white':'')} onClick={()=>setActivitiesOnly(true)}>Activities only</button>
+    </div>
+    {activitiesOnly?<SimulationActivityPlanner projectId={projectId} periodId={schedulePeriodId} activities={activities} calendars={calendars} initialTemplate={initialTemplate||'cycle'} busy={busy} onBusy={setBusy} onCancel={onCancel} onGenerated={onGenerated}/>:<>
     <p className="text-sm">One checked object → one activity → its own animation. Review the order and working hours below; these are planning assumptions, not quantities inferred from geometry.</p>
     {!schedulePeriodId&&<p role="alert">Choose a live schedule period before generating.</p>}
     <fieldset disabled={busy} className="space-y-3">
@@ -27,5 +37,6 @@ export function SiteScheduleWizard({projectId,schedulePeriodId,items,profiles,li
       {error&&<p role="alert" className="text-red-600">{error}</p>}
       <div className="flex gap-2"><button className={button+' bg-blue-600 text-white'} disabled={!schedulePeriodId||!selected.length} onClick={()=>void generate()}>{busy?'Generating…':'Create activities & links'}</button><button className={button} onClick={onCancel}>Cancel</button></div>
     </fieldset>
+    </>}
   </section></div>
 }

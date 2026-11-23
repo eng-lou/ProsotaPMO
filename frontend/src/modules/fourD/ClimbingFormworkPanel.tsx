@@ -10,8 +10,9 @@ import type {SiteItem} from './siteScene'
 import type {ShapeSource} from './ShapeOperationsPanel'
 import {climbWindows,type ClimbingFormwork,type ClimbLift} from './climbingFormwork'
 import {TimelinePointInput,type TimelineFormat} from './TimelinePointInput'
+const isCoreAnchor=(a:Activity)=>a.schedule_phase_key==='formwork_rebar' && (a.schedule_category==='Core lift' || /\s[-–—]\sCore walls\s[-–—]\s/.test(a.task_name))
 const cls='w-full rounded border p-1 dark:bg-prosota-panel2'
-export function ClimbingFormworkPanel({source,dateRef,item,activities,axis,format,onSeek,onApply,selectedSources,disabled}:{source?:Object3D;dateRef?:React.RefObject<Date|null>;item:SiteItem;activities:Activity[];axis:'y'|'z';format:TimelineFormat;onSeek:(d:Date)=>void;onApply:(p:Partial<SiteItem>)=>Promise<void>;selectedSources:()=>ShapeSource[];disabled:boolean}){
+export function ClimbingFormworkPanel({source,dateRef,item,activities,axis,format,onSeek,onApply,selectedSources,disabled,onPlan}:{onPlan?():void;source?:Object3D;dateRef?:React.RefObject<Date|null>;item:SiteItem;activities:Activity[];axis:'y'|'z';format:TimelineFormat;onSeek:(d:Date)=>void;onApply:(p:Partial<SiteItem>)=>Promise<void>;selectedSources:()=>ShapeSource[];disabled:boolean}){
  const [selected,setSelected]=useState<string[]>([]),[query,setQuery]=useState(''),[rise,setRise]=useState(3),[hours,setHours]=useState(24),[error,setError]=useState(''),[busy,setBusy]=useState(false)
  const config=item.climbing_formwork,blocked=!!item.work_sequence||!!item.path_motion||!!item.attachment||!!item.load_handling?.events.length
  const articulated=config?.mode==='articulated'
@@ -47,6 +48,7 @@ export function ClimbingFormworkPanel({source,dateRef,item,activities,axis,forma
  function selectedTop(){const sources=selectedSources().filter(s=>s.id!=='site:'+item.id);try{if(!sources.length)throw Error('Select the core geometry in the viewport first.');const bounds=new Box3();for(const source of sources){source.object.updateWorldMatrix(true,true);bounds.union(new Box3().setFromObject(source.object))}if(bounds.isEmpty())throw Error('Selected geometry has no bounds.');return bounds.max[config?.axis||axis]}finally{sources.forEach(s=>s.dispose?.())}}
  function readHeight(id?:string){try{if(!config)return;const top=selectedTop();if(id)change(id,{height:top-config.reference_elevation});else void save({...config,reference_elevation:top})}catch(e){setError((e as Error).message)}}
  return <SiteToolSection title="Climbing formwork" disabled={disabled||busy||blocked}>
+ {onPlan&&(articulated||supported)&&<button onClick={onPlan}>Add core lift activities…</button>}
  <p>{articulated?'The upper deck climbs first. The lower platform follows. Link each lift to its formwork, pour and strip activities.':'Position the assembly at its first working level. Use one formwork activity per lift.'}</p>
  {supported&&!articulated&&<button onClick={enableRig}>Enable articulated core cycle</button>}
  {articulated&&<button onClick={()=>void save({...config!,mode:'simple'})}>Use whole-assembly climb</button>}
@@ -57,8 +59,8 @@ export function ClimbingFormworkPanel({source,dateRef,item,activities,axis,forma
  <button onClick={()=>readHeight()}>Read first core top from selection</button>
  <p>Use the same reference (core top) for every lift. Geometry heights are captured when you click; later model changes require reading them again.</p>
  <details><summary>Add lifts from activities</summary><input aria-label="Search core activities" className={cls} placeholder="Search core activities" value={query} onChange={e=>setQuery(e.target.value)}/>
- {articulated&&available.some(a=>a.schedule_phase_key==='formwork_rebar'&&a.task_name.includes(' - Core walls - '))&&
-  <button onClick={()=>setSelected(available.filter(a=>a.schedule_phase_key==='formwork_rebar'&&a.task_name.includes(' - Core walls - ')).map(a=>a.id))}>Select matching generated core lifts</button>}
+ {articulated&&available.some(isCoreAnchor)&&
+  <button onClick={()=>setSelected(available.filter(isCoreAnchor).map(a=>a.id))}>Select matching generated core lifts</button>}
  <div className="max-h-40 overflow-auto">{available.slice(0,100).map(a=><label className="block" key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={e=>setSelected(e.target.checked?[...selected,a.id]:selected.filter(id=>id!==a.id))}/>{a.code} - {a.task_name}</label>)}</div>
  {available.length>100&&<p>Showing 100 of {available.length}. Refine your search.</p>}{!available.length&&<p>No matching activities to add.</p>}
  <label>Typical lift height (m)<input className={cls} type="number" step=".1" value={rise} onChange={e=>setRise(e.target.valueAsNumber)}/></label>
