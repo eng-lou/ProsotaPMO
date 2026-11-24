@@ -97,7 +97,7 @@ function cutFaceMaterial(base: Brush): THREE.Material {
   return chosen
 }
 
-export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, upAxis:'y'|'z', operation:ShapeOperation): BooleanResult[] {
+export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, upAxis:'y'|'z', operation:ShapeOperation, allowEmpty=false): BooleanResult[] {
   const inputs:THREE.Group[]=[], brushes:Brush[]=[], results:BooleanResult[]=[]
   const evaluator=new Evaluator(); evaluator.attributes=['position','normal','uv']
   let triangleCount=0
@@ -154,7 +154,7 @@ export function computeShapeBoolean(base: THREE.Object3D, tool: THREE.Object3D, 
     for(let i=0;i<operations.length;i++){
       const brush=evaluator.evaluate(a,b,operations[i]);brushes.push(brush)
       const g=compact(brush.geometry,true)
-      if(!g.getAttribute('position').count || volume(g)<1e-8){g.dispose();throw Error(operation==='excavate'?'Excavation needs a partial overlap: both remaining and removed volumes must exist.':'The operation produced no solid. Check the overlap of your inputs.')}
+      if(!g.getAttribute('position').count || volume(g)<1e-8){g.dispose();if(allowEmpty)continue;throw Error(operation==='excavate'?'Excavation needs a partial overlap: both remaining and removed volumes must exist.':'The operation produced no solid. Check the overlap of your inputs.')}
       g.computeBoundingBox(); const box=g.boundingBox!, centre=box.getCenter(new THREE.Vector3()),anchor=new THREE.Vector3(centre.x,box.min.y,centre.z)
       g.translate(-anchor.x,-anchor.y,-anchor.z)
       const mats=Array.isArray(brush.material)?brush.material:[brush.material]

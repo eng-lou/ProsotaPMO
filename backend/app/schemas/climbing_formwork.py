@@ -79,6 +79,7 @@ class ClimbingFormwork(BaseModel):
     pour_sweep: PourSweep | None = None
     boom_keys: list[BoomKey] = Field(default_factory=list, max_length=128)
     axis: Literal['y','z']
+    reference_sources: list[str] = Field(default_factory=list, max_length=1000)
     reference_elevation: float = Field(default=0, ge=-1000000, le=1000000)
     lifts: list[ClimbLift] = Field(default_factory=list, max_length=300)
     @model_validator(mode='after')
@@ -93,7 +94,7 @@ class ClimbingFormwork(BaseModel):
     def recipe(self, handler):
         # Keep old command fingerprints and saved undo receipts valid for simple climbs.
         data = handler(self)
-        for key, default in [('mode', 'simple'), ('boom_deployment', None), ('boom_keys', []), ('boom_slew', 0), ('pour_sweep', None)]:
+        for key, default in [('reference_sources', []), ('mode', 'simple'), ('boom_deployment', None), ('boom_keys', []), ('boom_slew', 0), ('pour_sweep', None)]:
             if data.get(key) == default:
                 data.pop(key, None)
         return data

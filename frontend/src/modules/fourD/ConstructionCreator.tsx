@@ -5,7 +5,7 @@ import { constructionPlacements, prepareConstruction, releaseConstruction, type 
 import { siteError, type useSiteScene } from './siteScene'
 
 export type CreatorKind='Formwork'|'Reinforcement'
-const modes:Record<CreatorKind,ConstructionMode[]>={Formwork:['deck','shutter','wallForm','screen'],Reinforcement:['mat','column','wall']}
+const modes:Record<CreatorKind,ConstructionMode[]>={Formwork:['deck','slabEdge','beam','groundBeam','shutter','wallForm','screen'],Reinforcement:['mat','column','wall']}
 const field='block w-full rounded border p-1.5 bg-white dark:bg-prosota-panel2 dark:border-prosota-line'
 const button='rounded border px-2 py-1.5 disabled:opacity-40 dark:border-prosota-line'
 export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state,onSelect,onPlan,onClose}:{
@@ -27,7 +27,8 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     alive.current=true
     return ()=>{alive.current=false;if(prepared.current)releaseConstruction(prepared.current.scene)}
   },[])
-  const host=mode==='shutter'||mode==='column'?'columns':(mode==='wall'||mode==='wallForm')?'walls':'slabs'
+  const supported=mode==='deck'||mode==='beam'
+  const host=mode==='beam'||mode==='groundBeam'?'beams':mode==='shutter'||mode==='column'?'columns':(mode==='wall'||mode==='wallForm')?'walls':'slabs'
   const number=(label:string,value:string,change:(v:string)=>void,placeholder?:string)=><label>{label}<input className={field} type="number" step="any" min="0" placeholder={placeholder} value={value} onChange={e=>{clear();change(e.target.value)}}/></label>
   function value(text:string,min:number,max:number,label:string){
     const n=Number(text)
@@ -40,12 +41,12 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     try{
       const rebar=kind==='Reinforcement'
       const options:ConstructionOptions={mode,
-        spacing:rebar?value(spacing,40,2000,'Bar spacing (mm)')/1000:mode==='deck'?value(propSpacing,.3,5,'Prop spacing (m)'):1,
+        spacing:rebar?value(spacing,40,2000,'Bar spacing (mm)')/1000:supported?value(propSpacing,.3,5,'Prop spacing (m)'):1,
         panelWidth:mode==='wallForm'?value(panelWidth,.4,3,'Max wall panel width (m)'):undefined,braceSide,
         diameter:rebar?value(diameter,4,60,'Bar diameter (mm)')/1000:.016,
         cover:rebar?value(cover,5,250,'Cover (mm)')/1000:.035,
         autoClearance:!clearance.trim(),
-        clearance:mode==='deck'&&clearance.trim()?value(clearance,.75,10,'Soffit height (m)'):3.424,
+        clearance:supported&&clearance.trim()?value(clearance,.75,10,'Soffit height (m)'):3.424,
         screenHeight:mode==='screen'?value(screenHeight,2.5,18,'Screen height (m)'):7.2,
         bayWidth:mode==='screen'?value(bayWidth,.4,6,'Bay width (m)'):2.4,doubleMat}
       const skipEdges=mode==='screen'&&skip.trim()?skip.split(',').map(s=>Number(s.trim())):[]
@@ -78,7 +79,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     <fieldset disabled={busy||state.busy} className="space-y-2 min-w-0">
       <label>Generate<select className={field} value={mode} onChange={e=>{clear();setMode(e.target.value as ConstructionMode)}}>{modes[kind].map(m=><option key={m} value={m}>{constructionModes[m]}</option>)}</select></label>
       <p>Select {host} in the viewport. Ctrl/Cmd-click to add more.</p>
-      {mode==='deck'&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance,'Auto (IFC) / 3.424')}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
+      {supported&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance,'Auto (IFC) / 3.424')}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
       {mode==='wallForm'&&<div className="grid grid-cols-2 gap-2">
         {number('Max wall panel width (m)',panelWidth,setPanelWidth)}
         <label>Brace placement<select className={field} value={braceSide} onChange={e=>{clear();setBraceSide(e.target.value as typeof braceSide)}}>

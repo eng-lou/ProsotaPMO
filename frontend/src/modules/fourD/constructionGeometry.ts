@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { contains, faceShapes, isExterior, rowPositions, spans, type ConstructionHost } from './constructionHost'
 
 export const constructionModes = {
+  slabEdge:'Ground slab edge shutters', groundBeam:'Ground beam shutters', beam:'Suspended beam formwork',
   deck: 'Slab formwork', shutter: 'Column shutters', wallForm: 'Wall formwork', screen: 'Perimeter screens',
   mat: 'Slab reinforcement mat', column: 'Column reinforcement cage', wall: 'Wall reinforcement cage',
 } as const
@@ -22,6 +23,7 @@ export interface ConstructionOptions {
   braceSide?:'near'|'far'|'both'
   excludedEdges?:ReadonlySet<string>
   screenRuns?:ScreenRun[]
+  shutterRuns?:ScreenRun[]
 }
 export interface PropPiece {geometry:BufferGeometry; material:MeshStandardMaterial; tripod:boolean}
 const v=(x:number,y:number,z:number)=>new Vector3(x,y,z)
@@ -269,6 +271,81 @@ function buildDeck(host:ConstructionHost,o:ConstructionOptions,p:Parts,prop:Prop
   }
 }
 
+/** Clip shutter runs against adjoining hosts at the same pour elevation.
+ * An outward probe also removes coincident seams at T and cross junctions. */
+export function exposedShutterRuns(hosts:ConstructionHost[]):ScreenRun[][]{
+  const zero=new Vector2()
+  const outlines=hosts.map(host=>host.rings.map(r=>r.map(p=>p.clone().rotateAround(zero,host.angle)
+    .add(new Vector2(host.origin.x,host.origin.z)))))
+  return hosts.map((host,index)=>{
+    const runs:ScreenRun[]=[]
+    const others=outlines.filter((_,i)=>i!==index&&Math.abs(hosts[i].origin.y-host.origin.y)<.001&&Math.abs(hosts[i].height-host.height)<.001)
+    for(const [r,ring] of host.rings.entries())for(const [i,a] of ring.entries()){
+      const b=ring[(i+1)%ring.length],length=a.distanceTo(b),d=b.clone().sub(a).normalize()
+      const n=new Vector2(d.y,-d.x).multiplyScalar(Math.sign(ShapeUtils.area(ring))*(isExterior(ring,host.rings)?1:-1))
+      const edge={a,b,d,n,length,id:r+'-'+i}
+      const dir=d.clone().rotateAround(zero,host.angle),normal=n.clone().rotateAround(zero,host.angle)
+      const origin=outlines[index][r][i].clone().addScaledVector(normal,.0001)
+      const breaks=[0,length]
+      for(const rings of others)for(const other of rings)for(const [j,q] of other.entries()){
+        const v=other[(j+1)%other.length].clone().sub(q),det=dir.cross(v)
+        if(Math.abs(det)<1e-10)continue
+        const delta=q.clone().sub(origin),t=delta.cross(v)/det,u=delta.cross(dir)/det
+        if(t>0&&t<length&&u>=0&&u<=1)breaks.push(t)
+      }
+      breaks.sort((x,y)=>x-y)
+      for(let k=1;k<breaks.length;k++){
+        const start=breaks[k-1],end=breaks[k]
+        const mid=origin.clone().addScaledVector(dir,(start+end)/2)
+        if(end-start>.001&&!others.some(rings=>rings.filter(r=>contains(r,mid)).length%2===1))
+          runs.push({edge,edgeNumber:i+1,start,length:end-start})
+      }
+    }
+    return runs
+  })
+}
+
+function horizontalShutters(host:ConstructionHost,o:ConstructionOptions,p:Parts,kit:PropPiece[]){
+  const sides=p.part('Side shutters'),studs=p.part(o.mode==='beam'?'Side stiffeners':'Stakes and braces')
+  for(const {edge,start,length} of o.shutterRuns??exposedShutterRuns([host])[0]){
+    const at=(s:number,out:number,y:number)=>v(edge.a.x+edge.d.x*(start+s)+edge.n.x*out,y,edge.a.y+edge.d.y*(start+s)+edge.n.y*out)
+    const courses=Math.max(1,Math.ceil(host.height/.20)),h=host.height/courses
+    for(let i=0;i<courses;i++){
+      const y=(i+.5)*h
+      p.member(sides,'wood',at(0,.014,y),at(length,.014,y),.028,Math.max(h*.9,h-.002))
+    }
+    for(const s of rowPositions(0,length,.85,.12)){
+      p.member(studs,'wood',at(s,.055,0),at(s,.055,host.height+.035),.055)
+      if(o.mode!=='beam'){
+        const reach=Math.min(.8,host.height*.85+.12)
+        p.member(studs,'wood',at(s,.068,host.height*.82),at(s,reach,0),.045)
+        p.member(studs,'wood',at(s,reach,-.12),at(s,reach,.08),.045)
+      }
+    }
+  }
+  if(o.mode!=='beam')return
+  const soffit=p.part('Soffit panels'),props=p.part('Beam props and heads')
+  for(const shape of faceShapes(host.rings)){
+    p.add(soffit,'sheet',new ExtrudeGeometry(shape,{depth:.025,bevelEnabled:false}).rotateX(Math.PI/2))
+  }
+  const feet=propFootprint(kit), centre=(host.bounds.min.y+host.bounds.max.y)/2
+  let count=0
+  for(const [lo,hi] of spans(host.rings,true,centre)){
+    const inset=Math.min(.15,(hi-lo)/3)
+    p.member(soffit,'beam',v(lo,-.105,centre),v(hi,-.105,centre),.09,.16)
+    for(const x of rowPositions(lo,hi,o.spacing,inset)){
+      if(o.bearingSurfaces&&!o.bearingSurfaces.some(rings=>supportedSpans(rings,x,feet).some(([low,high])=>centre>=low&&centre<=high)))continue
+      const h=o.clearance-.185
+      for(const piece of kit){
+        const scale=piece.tripod?Math.min(1,h/1.3):h/3
+        p.add(props,piece.material,piece.geometry.clone().scale(1,scale,1).translate(x,-o.clearance,centre))
+      }
+      count++
+    }
+  }
+  if(!count)throw Error('No beam prop fits the supporting surface.')
+}
+
 function shutters(host:ConstructionHost,p:Parts){
   const edges=constructionEdges(host)
   for(const [i,{a,d,n,length}] of edges.entries()){
@@ -476,7 +553,8 @@ export function buildConstruction(host:ConstructionHost,o:ConstructionOptions,pr
   if(o.mode==='deck'){
     if(!prop.length)throw Error('The slab prop kit could not be loaded.')
     buildDeck(host,o,p,prop)
-  }else if(o.mode==='shutter')shutters(host,p)
+  }else if(o.mode==='slabEdge'||o.mode==='groundBeam'||o.mode==='beam')horizontalShutters(host,o,p,prop)
+  else if(o.mode==='shutter')shutters(host,p)
   else if(o.mode==='wallForm')wallFormwork(host,o,p)
   else if(o.mode==='screen')screens(host,o,p)
   else if(o.mode==='column')columnCage(host,o,p)

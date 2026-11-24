@@ -5,6 +5,12 @@ from app.schemas.climbing_formwork import ClimbingFormwork
 from app.schemas.site_scene import SiteItem
 
 class ClimbTests(unittest.TestCase):
+    def test_first_core_references_round_trip_without_changing_legacy_recipes(self):
+        refs = ['file:core-model::21', 'file:core-model::22']
+        config = ClimbingFormwork(axis='z', mode='articulated', reference_elevation=3.5, reference_sources=refs)
+        self.assertEqual(ClimbingFormwork.model_validate_json(config.model_dump_json()).reference_sources, refs)
+        self.assertNotIn('reference_sources', ClimbingFormwork(axis='y').model_dump())
+
     def row(self):return dict(id=uuid4(),activity_id=uuid4(),height=3.5,duration_hours=12)
     def test_round_trip(self):
         c=ClimbingFormwork(axis='z',lifts=[self.row()])

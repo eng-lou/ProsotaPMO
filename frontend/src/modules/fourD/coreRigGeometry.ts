@@ -33,7 +33,7 @@ export function coreHardwareBuilder(materials:Record<Finish,MeshStandardMaterial
   return {box,member,finish}
 }
 
-export function addCoreHardware(frame:Object3D) {
+export function addCoreHardware(frame:Object3D, withBoom=true) {
   const materials = Object.fromEntries(Object.entries(colours).map(([name,color])=>{
     const material=new MeshStandardMaterial({color,metalness:name==='deck'?.03:.44,roughness:name==='deck'?.83:.48})
     material.name='Core rig '+name
@@ -90,6 +90,7 @@ export function addCoreHardware(frame:Object3D) {
     }
     member(top,'frame',V(ax,4.14,az),V(bx,4.14,bz),.14)
   }
+  if (!withBoom) { finish(); return top }
   // The boom is a folded serial linkage. Each delivery pipe turns about the same pin as its arm.
   box(top,'grip',0,4.15,0,1.25,.16,1.25)
   for(const s of [-1,1])for(const z of [-1,1]){

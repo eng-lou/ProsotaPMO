@@ -8,6 +8,11 @@ const taskSets = {
     'Set out openings and cast-in items', 'Install slab reinforcement', 'Install tendons and service conduits',
     'Complete deck pre-pour checks'],
   deck: ['Deliver slab formwork', 'Install props, bearers and joists', 'Lay slab soffit panels', 'Strip slab formwork and reshore'],
+  slabEdge:['Set out slab edges and openings','Fix and brace slab edge shutters','Strip slab edge shutters'],
+  groundBeam:['Set out ground beams','Install beam side shutters and stops','Strip ground beam shutters'],
+  beam:['Install beam props and soffit','Erect beam side shutters','Strip beam sides','Strike beam soffit and props'],
+  corePlain:['Climb core formwork','Fix core wall reinforcement','Close core wall forms','Pour core walls','Strip core wall forms'],
+  ground:['Excavate selected ground volumes','Place foundations','Backfill excavations'],
   shutter: ['Deliver column shutters', 'Erect and brace column shutters', 'Pour columns', 'Strip column shutters'],
   wallForm: ['Deliver wall formwork panels', 'Erect and brace first wall face', 'Fix wall reinforcement',
     'Fit stop ends and opening forms', 'Close opposite wall face and install ties', 'Pour wall concrete', 'Strip wall formwork'],
@@ -21,11 +26,12 @@ const taskSets = {
 } as const
 export type ConstructionTemplate = keyof typeof taskSets
 export const templateLabels: Record<ConstructionTemplate,string> = {
+  slabEdge:'Ground slab edge formwork', groundBeam:'Ground beam formwork', beam:'Suspended beam formwork', corePlain:'Climbing core without boom', ground:'Ground excavation',
   cycle:'Deck cycle', deck:'Slab formwork', shutter:'Column shutters', wallForm:'Wall formwork', screen:'Perimeter screens',
   mat:'Slab reinforcement', column:'Column reinforcement', wall:'Wall reinforcement', core:'Climbing core', crane:'Crane delivery and lift', blank:'Custom activities',
 }
 const corePhaseKeys:Record<string,string>={
-  'Climb core formwork and placing boom':'core_climb', 'Close core wall forms':'formwork_rebar',
+  'Climb core formwork':'core_climb', 'Climb core formwork and placing boom':'core_climb', 'Close core wall forms':'formwork_rebar',
   'Pour core walls':'pour', 'Strip core wall forms':'strip',
 }
 export interface SimulationRow extends SiteScheduleRow { corePhase?:string }

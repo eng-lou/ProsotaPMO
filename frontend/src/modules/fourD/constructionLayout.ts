@@ -2,7 +2,7 @@ import { Box3, BufferGeometry, Group, Matrix4, Mesh, MeshStandardMaterial, Objec
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { splitSiteAsset } from './assetParts'
-import { buildConstruction, constructionEdges, constructionModes, perimeterRuns, type ConstructionOptions, type PropPiece } from './constructionGeometry'
+import { buildConstruction, constructionEdges, constructionModes, exposedShutterRuns, perimeterRuns, type ConstructionOptions, type PropPiece } from './constructionGeometry'
 import { readConstructionHost } from './constructionHost'
 import { importSiteAsset, loadSiteAsset, type SiteAsset } from './siteAssets'
 import { findDeckBearing, type SlabLookup } from './deckBearing'
@@ -47,7 +47,8 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
   if(!sources.length)throw Error('Select one or more IFC elements or individual mesh objects in the viewport.')
   const {mode}=options
   const wallHost=mode==='wall'||mode==='wallForm'
-  const expected=mode==='column'||mode==='shutter'?'column':wallHost?'wall':'slab'
+  const supported=mode==='deck'||mode==='beam'
+  const expected=mode==='beam'||mode==='groundBeam'?'beam':mode==='column'||mode==='shutter'?'column':wallHost?'wall':'slab'
   const elements=sources.map(source=>{
     const type=source.ifcType?.toLowerCase()
     if(type && !type.includes(expected) && /ifc(slab|wall|column|beam|door|window)/.test(type))
@@ -56,7 +57,7 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
     catch(e){throw Error(source.name+': '+(e instanceof Error?e.message:e))}
   })
   const root=new Group(),base=elements[0].origin
-  const kit=mode==='deck'?await loadPropKit():[]
+  const kit=supported?await loadPropKit():[]
   // Previews own their materials; the small authored prop kit is shared between previews.
   const finishes=new Map<MeshStandardMaterial,MeshStandardMaterial>()
   const pieces=kit.map(p=>{
@@ -64,6 +65,7 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
     return {...p,material:finishes.get(p.material)!}
   })
   const runs=mode==='screen'?perimeterRuns(elements):undefined
+  const shutterRuns=['slabEdge','groundBeam','beam'].includes(mode)?exposedShutterRuns(elements):undefined
   let parts=0
   const deckHeights:number[]=[]
   let matchedSlabs=0
@@ -73,14 +75,14 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
       if(skipEdges.some(n=>n>edges.length))throw Error(host.name+' has '+edges.length+' exterior edges.')
       const excludedEdges=new Set(skipEdges.map(n=>edges[n-1].id))
       const screenRuns=runs?.[i]
-      if(screenRuns && screenRuns.every(run=>excludedEdges.has(run.edge.id)))continue
+      if(mode==='screen' && screenRuns && screenRuns.every(run=>excludedEdges.has(run.edge.id)))continue
       const lookup=sources[i].slabLookup
-      const bearing=mode==='deck' && lookup ? await findDeckBearing(host,lookup,upAxis,options) : undefined
-      if(mode==='deck'){
+      const bearing=supported && lookup ? await findDeckBearing(host,lookup,upAxis,options) : undefined
+      if(supported){
         deckHeights.push(bearing?.clearance??options.clearance)
         if(bearing) matchedSlabs++
       }
-      const model=buildConstruction(host,{...options,excludedEdges,screenRuns,...bearing},pieces)
+      const model=buildConstruction(host,{...options,excludedEdges,screenRuns,shutterRuns:shutterRuns?.[i],...bearing},pieces)
       model.rotation.y=-host.angle
       model.position.copy(host.origin).sub(base)
       model.children.forEach(g=>{

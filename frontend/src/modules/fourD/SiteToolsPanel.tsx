@@ -31,6 +31,7 @@ import { SiteObjectList } from './SiteObjectList'
 import { removeSitePlacements, type SiteSelectionMode } from './siteObjectSelection'
 import type { ConstructionTemplate } from './constructionActivities'
 import { ConstructionCreator, type CreatorKind } from './ConstructionCreator'
+import { GroundFromObjectsPanel } from './GroundFromObjectsPanel'
 import { CoreRigTemplate } from './CoreRigTemplate'
 import { SiteAssetLibrary } from './SiteAssetLibrary'
 import { useSiteAssetInventory, importSiteAsset, type SiteAsset } from './siteAssets'
@@ -149,7 +150,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     }
     startShape(kind)
   }
-  function placeAsset(asset: SiteAsset, parts=false, articulated=false) {
+  function placeAsset(asset: SiteAsset, parts=false, articulated=false, fit?:Partial<SiteItem>) {
     cancel(); setPlaceAsParts(parts); focusSite(); setSelected(null); setLibrary(false); setConfirmed(true)
     const value: SiteItem = { id: crypto.randomUUID(), kind: 'asset', asset_id: asset.id, name: asset.name,
       ...asset.dimensions, color: '#ffffff', generator_version: 1, up_axis: upAxis, units: 'm',
@@ -159,7 +160,8 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
       value.climbing_formwork={mode:'articulated',axis:upAxis,reference_elevation:0,lifts:[]}
       value.animation_playing=false
     }
-    setEdit(value); setDraft(value); state.setPlacing(true)
+    if(fit) Object.assign(value,fit)
+    setEdit(value); setDraft(value); state.setPlacing(!fit)
   }
   async function useSceneSource() {
     const source=sceneSources.find(s=>s.id===sourceId)
@@ -207,12 +209,12 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   }
   async function commit() {
     if (!draft || state.placing) return
-    const items = scene.items.filter(i => i.id !== draft.id)
     setCapturing(true)
     try { const placements=placeAsParts&&draft.kind==='asset'&&draft.asset_id ? splitSiteAsset(draft,await loadSiteAsset(draft.asset_id)) : [draft]
-      await save([...items, ...placements], `3D Site tools: ${draft.name}`)
+      if(!await save(current=>[...current.filter(i=>i.id!==draft.id),...placements], `3D Site tools: ${draft.name}`))return
       cancel()
       if (draft.kind === 'light' || draft.climbing_formwork?.mode==='articulated') setSelected(draft.id)
+      if (draft.climbing_formwork?.reference_sources?.length) onPickItems([draft.id],'replace')
     } catch(e) { setError(siteError(e)) } finally { setCapturing(false) }
   }
   async function update(item: SiteItem, patch: Partial<SiteItem>) {
@@ -261,7 +263,13 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
         onClick={()=>setCreator(kind)}>+ {kind} creator</button>)}
       <button className={button} onClick={()=>onGenerateSchedule([],'cycle')}>Add simulation activities…</button>
     </div>}
+    {!library && !edit && !creator && <CoreRigTemplate projectId={projectId} inventory={inventory}
+      selection={{sources:()=>selectedShapeSources('construction'),activities,axis:upAxis}}
+      onPlace={(asset,fit)=>placeAsset(asset,false,true,fit)}/>}
     {!library && !edit && creator && <ConstructionCreator key={projectId+creator+upAxis} kind={creator} projectId={projectId} upAxis={upAxis} state={state} selectedSources={()=>selectedShapeSources('construction')} onSelect={ids=>onPickItems(ids,'replace')} onPlan={onGenerateSchedule} onClose={()=>setCreator(null)}/>}
+    {!library && !edit && !creator && <GroundFromObjectsPanel key={projectId+upAxis} projectId={projectId} axis={upAxis} state={state}
+      selection={()=>selectedShapeSources('construction')} hideSources={hideShapeSources}
+      onSelect={ids=>onPickItems(ids,'replace')} onPlan={ids=>onGenerateSchedule(ids,'ground')}/>}
     {!edit && !creator && <ShapeOperationsPanel projectId={projectId} upAxis={upAxis} sources={sceneSources.filter(s=>!scene.items.some(i=>i.kind==='geographic'&&s.id==='site:'+i.id))} state={state} selectedSources={shapeSources} hideSources={hideShapeSources}/> }
     {edit && <div className="space-y-2 border-t pt-2 dark:border-prosota-line">
       {edit.kind==='asset'&&!edit.asset_part&&<TowerCoverSettings item={edit} change={change}/>}
@@ -337,7 +345,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
       readPileBounds={readPileBounds} onApply={async patch=>{
         await save(items=>items.map(i=>i.id===sequenceMachine.id?{...i,...patch}:i), `Work sequence for ${sequenceMachine.name}`)
       }}/>}
-    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel onPlan={()=>onGenerateSchedule([chosen.id],'core')} source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
+    {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel onPlan={withBoom=>onGenerateSchedule([chosen.id],withBoom?'core':'corePlain')} source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
     {chosen && !edit && <SiteToolSection key={chosen.id} title="Activity links & profiles">
       <ToolVisualGuide topic="links"/>

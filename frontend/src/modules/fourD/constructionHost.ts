@@ -63,8 +63,7 @@ function flatFace(triangles: Triangle[], axis: 'y'|'z', elevation: number): Vect
   return rings.sort((a,b)=>Math.abs(ShapeUtils.area(b))-Math.abs(ShapeUtils.area(a)))
 }
 
-export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',face:boolean|'wallForm'|'slabTop'=false):ConstructionHost {
-  const needWallFace=face===true || face==='wallForm'
+export function constructionTriangles(object:Object3D,upAxis:'y'|'z'){
   object.updateWorldMatrix(true,true)
   const triangles:Triangle[]=[]
   const worldBounds=new Box3()
@@ -96,6 +95,12 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
       for(let i=start;i+2<end;i+=3)triangles.push([point(i),point(i+1),point(i+2)])
     }
   })
+  return {triangles,worldBounds}
+}
+
+export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',face:boolean|'wallForm'|'slabTop'=false):ConstructionHost {
+  const needWallFace=face===true || face==='wallForm'
+  const {triangles,worldBounds}=constructionTriangles(object,upAxis)
   const origin=worldBounds.getCenter(new Vector3())
   origin.y=worldBounds.min.y
   const height=worldBounds.max.y-origin.y

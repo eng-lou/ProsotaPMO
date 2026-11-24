@@ -7365,7 +7365,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
           const type=scope==='construction'?handle.api.GetNameFromTypeCode(handle.api.GetLineType(handle.ifcModelID,id)):undefined
           return {backupRef:source?.fileId?'file:'+source.fileId+'::'+id:undefined,id:modelId+'::'+id,
             name:(type||'IFC element')+' '+id,object:group,ifcType:type,
-            slabLookup:type?.toUpperCase().startsWith('IFCSLAB') ? {handle, expressID:id} : undefined}
+            slabLookup:type && /^IFC(SLAB|BEAM)/i.test(type) ? {handle, expressID:id} : undefined}
         })
       })
       if(elements.length){

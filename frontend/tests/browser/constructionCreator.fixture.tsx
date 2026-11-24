@@ -46,7 +46,7 @@ export async function run() {
   let multipleWalls=false, uploadedFile:File|undefined
   let assetId='', schedulePayload:any, finished=false
   const tasks=[{id:'floor',code:'W-35',schedule_period_id:'live',task_name:'Level 35',activity_type:'wbs_summary'},
-    {id:'existing',parent_id:'floor',schedule_period_id:'live',task_name:'Climb core formwork and placing boom',activity_type:'task'}] as Activity[]
+    {id:'existing',parent_id:'floor',schedule_period_id:'live',task_name:'Climb core formwork and placing boom',activity_type:'task',start:'2026-11-01T08:00:00Z'}] as Activity[]
   window.XMLHttpRequest=class extends originalXHR {
     fixture=false
     open(method:string,url:string|URL,...rest:any[]){
@@ -68,7 +68,7 @@ export async function run() {
     else if(config.method==='post'){assetId=crypto.randomUUID();data={id:assetId,upload_url:'/mock-upload'}}
     return {config,data,status:200,statusText:'OK',headers:{}}
   }
-  const state={scene:{items:[]},ready:true,setDraft:noop,setPlacing:noop,
+  const state={scene:{items:[]},ready:true,draft:null,setDraft:(item:SiteItem|null)=>{state.draft=item},setSelected:noop,setError:noop,setPlacing:noop,
     save:async (apply:(v:SiteItem[])=>SiteItem[])=>{items=apply(items);return true}} as unknown as ReturnType<typeof useSiteScene>
   async function waitFor<T>(read:()=>T|undefined|false,label:string){
     for(let i=0;i<250;i++){
@@ -87,7 +87,7 @@ export async function run() {
       onCancel={draw} onGenerated={()=>{finished=true;draw()}}/>)
   }
   function draw(){
-    root.render(<SiteToolsPanel state={state} projectId="creator-test" activities={[]} paths={[]} zones={[]} sceneSources={[]}
+    root.render(<SiteToolsPanel state={state} projectId="creator-test" activities={tasks} paths={[]} zones={[]} sceneSources={[]}
       timelineFormat={{scheduleStart:now,timeDisplayMode:'date',speedDaysPerSecond:1,fps:30}} upAxis="y"
       selectedObjectIds={new Set()} onPickItems={noop} links={[]} profiles={[]} onSeek={noop} onLink={noop} onUnlink={noop}
       onAssignProfile={noop} linkError={null} selectedShapeSources={()=>cageSelection
@@ -102,7 +102,7 @@ export async function run() {
     draw()
     ;(await button('Layout tools')).click()
     for(const [kind,mode,element] of [
-      ['Formwork','deck',slab],['Formwork','shutter',column],['Formwork','wallForm',wall],['Formwork','screen',slab],
+      ['Formwork','deck',slab],['Formwork','slabEdge',slab],['Formwork','groundBeam',wall],['Formwork','beam',wall],['Formwork','shutter',column],['Formwork','wallForm',wall],['Formwork','screen',slab],
       ['Reinforcement','mat',slab],['Reinforcement','column',column],['Reinforcement','wall',wall],
     ] as const){
       source=element;multipleWalls=mode==='wallForm';cageSelection=mode==='wall'
@@ -183,6 +183,24 @@ export async function run() {
       }
       await button('+ '+kind+' creator')
     }
+    cageSelection=true
+    const plain=await waitFor(()=>host.querySelector<HTMLSelectElement>('select:has(option[value="plain"])')||undefined,'climbing variants')
+    plain.closest('details')!.open=true
+    plain.value='plain';plain.dispatchEvent(new Event('change',{bubbles:true}))
+    const anchor=host.querySelector<HTMLSelectElement>('select:has(option[value="existing"])')!
+    anchor.value='existing';anchor.dispatchEvent(new Event('change',{bubbles:true}))
+    ;(await button('Preview on selected core')).click()
+    const save=await button('Save')
+    if(!state.draft?.climbing_formwork||state.draft.climbing_formwork.reference_sources?.length!==4 ||
+      state.draft.climbing_formwork.reference_elevation!==9.5 || state.draft.climbing_formwork.lifts[0]?.height!==0)
+      throw Error('Core placement did not use the first selected lift')
+    save.click()
+    await waitFor(()=>items.some(i=>i.climbing_formwork?.lifts[0]?.activity_id==='existing'),'saved core lift')
+    cageSelection=false;source=column
+    const addCuts=await button('Add selected exclusions');addCuts.closest('details')!.open=true;addCuts.click()
+    ;(await button('Preview ground cuts')).click()
+    ;(await button('Create ground')).click()
+    await waitFor(()=>items.some(i=>i.name==='Ground · remaining soil')&&items.some(i=>i.name.startsWith('Excavation ·')),'saved ground and cuts')
     ;(await button('Add simulation activities…')).click()
     const destination=await waitFor(()=>host.querySelector<HTMLSelectElement>('label:has(option[value="floor"]) select')||undefined,'WBS')
     destination.value='floor';destination.dispatchEvent(new Event('change',{bubbles:true}))
@@ -195,7 +213,7 @@ export async function run() {
       schedulePayload.activities.some((a:any)=>a.element_refs?.length || a.parent_temp_id)||
       schedulePayload.relationships.length || !schedulePayload.activities.some((a:any)=>a.phase_key==='pour'))
       throw Error('Activities-only generation wrote unexpected data')
-    if(uploads!==7)throw Error('Wrong number of generated assets')
-    return {passed:true,creators:2,modes:7,uploads,scheduledParts:items.length,activities:4}
+    if(uploads!==13)throw Error('Wrong number of generated assets')
+    return {passed:true,creators:2,modes:10,core:true,ground:true,uploads,scheduledParts:items.length,activities:4}
   }finally{root.unmount();host.remove();api.defaults.adapter=previousAdapter;window.XMLHttpRequest=originalXHR}
 }
