@@ -5,19 +5,20 @@ import { splitSiteAsset } from './assetParts'
 import { buildConstruction, constructionEdges, constructionModes, perimeterRuns, type ConstructionOptions, type PropPiece } from './constructionGeometry'
 import { readConstructionHost } from './constructionHost'
 import { importSiteAsset, loadSiteAsset, type SiteAsset } from './siteAssets'
+import { findDeckBearing, type SlabLookup } from './deckBearing'
 import type { SiteItem } from './siteScene'
 
-export interface HostSource {id:string; name:string; object:Object3D; ifcType?:string; backupRef?:string}
+export interface HostSource {id:string; name:string; object:Object3D; ifcType?:string; backupRef?:string; slabLookup?:SlabLookup}
 export function readPropKit(scene:Object3D){
   scene.updateWorldMatrix(true,true)
   const prop=scene.getObjectByName('Prop_-125_-19'),tripod=scene.getObjectByName('Tripod_-125_-19')
   if(!prop || !tripod)throw Error('The slab formwork asset is missing its prop or tripod.')
   const box=new Box3().setFromObject(prop),origin=box.getCenter(new Vector3())
-  origin.y=box.min.y
+  const tripodBase=new Box3().setFromObject(tripod,true).min.y
   const pieces:PropPiece[]=[]
   for(const node of [prop,tripod]) node.traverse(child=>{
     if(child instanceof Mesh && child.material instanceof MeshStandardMaterial){
-      const geo=child.geometry.clone().applyMatrix4(child.matrixWorld).translate(-origin.x,-origin.y,-origin.z)
+      const geo=child.geometry.clone().applyMatrix4(child.matrixWorld).translate(-origin.x,node===tripod?-tripodBase:-box.min.y,-origin.z)
       pieces.push({geometry:geo,material:child.material,tripod:node===tripod})
     }
   })
@@ -29,7 +30,7 @@ function loadPropKit(){
     .then(gltf=>readPropKit(gltf.scene)).catch(error=>{propKit=undefined;throw error})
 }
 
-export interface ConstructionPreview { scene: Group; anchor:Vector3; hosts:number; parts:number; label:string; cachedAsset?:SiteAsset }
+export interface ConstructionPreview { scene: Group; anchor:Vector3; hosts:number; parts:number; label:string; bearingSummary?:string; cachedAsset?:SiteAsset }
 export function releaseConstruction(scene:Group){
   const geometries=new Set<BufferGeometry>(),materials=new Set<MeshStandardMaterial>()
   scene.traverse(node=>{
@@ -64,6 +65,8 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
   })
   const runs=mode==='screen'?perimeterRuns(elements):undefined
   let parts=0
+  const deckHeights:number[]=[]
+  let matchedSlabs=0
   try{
     for(const [i,host] of elements.entries()){
       const edges=mode==='screen'?constructionEdges(host):[]
@@ -71,7 +74,13 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
       const excludedEdges=new Set(skipEdges.map(n=>edges[n-1].id))
       const screenRuns=runs?.[i]
       if(screenRuns && screenRuns.every(run=>excludedEdges.has(run.edge.id)))continue
-      const model=buildConstruction(host,{...options,excludedEdges,screenRuns},pieces)
+      const lookup=sources[i].slabLookup
+      const bearing=mode==='deck' && lookup ? await findDeckBearing(host,lookup,upAxis,options) : undefined
+      if(mode==='deck'){
+        deckHeights.push(bearing?.clearance??options.clearance)
+        if(bearing) matchedSlabs++
+      }
+      const model=buildConstruction(host,{...options,excludedEdges,screenRuns,...bearing},pieces)
       model.rotation.y=-host.angle
       model.position.copy(host.origin).sub(base)
       model.children.forEach(g=>{
@@ -87,7 +96,14 @@ export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',op
     const anchor=bounds.getCenter(new Vector3());anchor.y=bounds.min.y;anchor.add(base)
     if(upAxis==='z')anchor.applyMatrix4(new Matrix4().makeRotationX(Math.PI/2))
     const label=constructionModes[mode]+' - '+(elements.length===1?elements[0].name:elements.length+' hosts')
-    return {scene:root,anchor,hosts:elements.length,parts,label:label.slice(0,96)} as ConstructionPreview
+    let bearingSummary:string|undefined
+    if(deckHeights.length) {
+      const min=Math.min(...deckHeights).toFixed(3), max=Math.max(...deckHeights).toFixed(3)
+      const height=(min===max ? min : min+' to '+max)+' m below soffit'
+      const support=matchedSlabs===deckHeights.length ? 'IFC slab' : matchedSlabs ? 'IFC slabs and projected support planes' : 'Projected support plane'
+      bearingSummary=support+' / '+height
+    }
+    return {scene:root,anchor,hosts:elements.length,parts,label:label.slice(0,96),bearingSummary} as ConstructionPreview
   }catch(error){releaseConstruction(root);throw error}
 }
 

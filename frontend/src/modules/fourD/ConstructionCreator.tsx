@@ -14,7 +14,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
 }){
   const [mode,setMode]=useState<ConstructionMode>(modes[kind][0])
   const [spacing,setSpacing]=useState('200'),[diameter,setDiameter]=useState('16'),[cover,setCover]=useState('35')
-  const [clearance,setClearance]=useState('3.424'),[propSpacing,setPropSpacing]=useState('1.9')
+  const [clearance,setClearance]=useState(''),[propSpacing,setPropSpacing]=useState('1.9')
   const [panelWidth,setPanelWidth]=useState('1.2')
   const [braceSide,setBraceSide]=useState<'near'|'far'|'both'>('near')
   const [screenHeight,setScreenHeight]=useState('7.2'),[bayWidth,setBayWidth]=useState('2.4'),[skip,setSkip]=useState('')
@@ -28,7 +28,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     return ()=>{alive.current=false;if(prepared.current)releaseConstruction(prepared.current.scene)}
   },[])
   const host=mode==='shutter'||mode==='column'?'columns':(mode==='wall'||mode==='wallForm')?'walls':'slabs'
-  const number=(label:string,value:string,change:(v:string)=>void)=><label>{label}<input className={field} type="number" step="any" min="0" value={value} onChange={e=>{clear();change(e.target.value)}}/></label>
+  const number=(label:string,value:string,change:(v:string)=>void,placeholder?:string)=><label>{label}<input className={field} type="number" step="any" min="0" placeholder={placeholder} value={value} onChange={e=>{clear();change(e.target.value)}}/></label>
   function value(text:string,min:number,max:number,label:string){
     const n=Number(text)
     if(!text.trim()||!Number.isFinite(n)||n<min||n>max)throw Error(label+' must be between '+min+' and '+max+'.')
@@ -44,7 +44,8 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
         panelWidth:mode==='wallForm'?value(panelWidth,.4,3,'Max wall panel width (m)'):undefined,braceSide,
         diameter:rebar?value(diameter,4,60,'Bar diameter (mm)')/1000:.016,
         cover:rebar?value(cover,5,250,'Cover (mm)')/1000:.035,
-        clearance:mode==='deck'?value(clearance,.75,10,'Soffit height (m)'):3.424,
+        autoClearance:!clearance.trim(),
+        clearance:mode==='deck'&&clearance.trim()?value(clearance,.75,10,'Soffit height (m)'):3.424,
         screenHeight:mode==='screen'?value(screenHeight,2.5,18,'Screen height (m)'):7.2,
         bayWidth:mode==='screen'?value(bayWidth,.4,6,'Bay width (m)'):2.4,doubleMat}
       const skipEdges=mode==='screen'&&skip.trim()?skip.split(',').map(s=>Number(s.trim())):[]
@@ -77,7 +78,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     <fieldset disabled={busy||state.busy} className="space-y-2 min-w-0">
       <label>Generate<select className={field} value={mode} onChange={e=>{clear();setMode(e.target.value as ConstructionMode)}}>{modes[kind].map(m=><option key={m} value={m}>{constructionModes[m]}</option>)}</select></label>
       <p>Select {host} in the viewport. Ctrl/Cmd-click to add more.</p>
-      {mode==='deck'&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance)}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
+      {mode==='deck'&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance,'Auto (IFC) / 3.424')}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
       {mode==='wallForm'&&<div className="grid grid-cols-2 gap-2">
         {number('Max wall panel width (m)',panelWidth,setPanelWidth)}
         <label>Brace placement<select className={field} value={braceSide} onChange={e=>{clear();setBraceSide(e.target.value as typeof braceSide)}}>
@@ -90,6 +91,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
         {mode==='mat'&&<label className="flex gap-2"><input type="checkbox" checked={doubleMat} onChange={e=>{clear();setDoubleMat(e.target.checked)}}/>Top and bottom mats</label>}</>}
       <button className={button} disabled={!state.ready} onClick={()=>void prepare()}>{busy?'Working…':'Preview from selection'}</button>
       {preview&&<><ConstructionPreviewView scene={preview.scene} label={constructionModes[mode]}/><p>{preview.hosts} selected {preview.hosts===1?'host':'hosts'} · {preview.parts} construction parts</p>
+      {preview.bearingSummary&&<p>{preview.bearingSummary}</p>}
       {preview.parts>1&&<label className="flex gap-2"><input type="checkbox" checked={separate} onChange={e=>setSeparate(e.target.checked)}/>Save parts separately for scheduling</label>}
       <button className={button+' bg-blue-600 text-white'} onClick={()=>void create()}>Create at selected {preview.hosts===1?'element':'elements'}</button>
       <button className={button} onClick={()=>void create(true)}>Create and plan activities…</button></>}

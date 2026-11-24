@@ -11,6 +11,8 @@ export interface ConstructionOptions {
   mode:ConstructionMode
   spacing:number
   clearance:number
+  autoClearance?:boolean
+  bearingSurfaces?:Vector2[][][]
   screenHeight:number
   bayWidth:number
   cover:number
@@ -108,7 +110,7 @@ class Parts {
     return g
   }
   add(g:Group,finish:Finish|MeshStandardMaterial,geometry:BufferGeometry){
-    this.vertices+=geometry.index?.count ?? geometry.getAttribute('position').count
+    this.vertices+=geometry.getAttribute('position').count
     if(++this.pieces>24000 || this.vertices>2000000){geometry.dispose();throw Error('This selection is too dense. Increase spacing or generate a smaller zone.')}
     let mat:MeshStandardMaterial
     if(typeof finish==='string'){
@@ -146,9 +148,13 @@ class Parts {
   }
   finish(){
     for(const [part,groups] of this.meshes)for(const [mat,geos] of groups){
-      const inputs=geos.map(g=>g.index?g.toNonIndexed():g)
-      const merged=mergeGeometries(inputs)
-      new Set([...inputs,...geos]).forEach(g=>g.dispose())
+      // Retain the kit's indexed geometry. Expanding each repeated prop into
+      // triangle corners exhausted the vertex budget on a single storey.
+      if(geos.some(g=>g.index)) for(const geometry of geos) {
+        if(!geometry.index) geometry.setIndex(Array.from({length:geometry.getAttribute('position').count},(_,i)=>i))
+      }
+      const merged=mergeGeometries(geos)
+      geos.forEach(g=>g.dispose())
       if(!merged)throw Error('Could not assemble '+part.name)
       const lines=this.barLines.get(part)?.get(mat.name as Finish)
       if(lines)previewBarLines.set(merged,new Float32Array(lines))
@@ -161,6 +167,46 @@ class Parts {
   }
 }
 
+type Interval = [number, number]
+
+/** At this bearer, find centre positions where the entire rectangular envelope
+ * of the feet fits. Each boundary edge swept across that envelope excludes a
+ * range, including slanted edges and holes wholly enclosed by the tripod. */
+function supportedSpans(rings:Vector2[][], x:number, feet:Box2):Interval[] {
+  let valid=spans(rings,false,x)
+  const left=x+feet.min.x, right=x+feet.max.x
+  for(const ring of rings) for(const [i,a] of ring.entries()) {
+    const b=ring[(i+1)%ring.length]
+    if(Math.max(a.x,b.x)<=left || Math.min(a.x,b.x)>=right) continue
+    let z1=a.y, z2=b.y
+    if(a.x!==b.x) {
+      const at=(t:number)=>a.y+(b.y-a.y)*Math.max(0,Math.min(1,t))
+      z1=at((left-a.x)/(b.x-a.x))
+      z2=at((right-a.x)/(b.x-a.x))
+    }
+    const lo=Math.min(z1,z2)-feet.max.y, hi=Math.max(z1,z2)-feet.min.y
+    valid=valid.flatMap(([start,end]):Interval[]=>{
+      if(hi<=start || lo>=end) return [[start,end]]
+      const pieces:Interval[]=[]
+      if(lo>start) pieces.push([start,lo])
+      if(hi<end) pieces.push([hi,end])
+      return pieces
+    })
+  }
+  return valid
+}
+
+function propFootprint(prop:PropPiece[]) {
+  const feet=new Box2()
+  for(const piece of prop) {
+    const pos=piece.geometry.getAttribute('position')
+    for(let i=0;i<pos.count;i++) if(pos.getY(i)<=.002)
+      feet.expandByPoint(new Vector2(pos.getX(i),pos.getZ(i)))
+  }
+  if(feet.isEmpty()) throw Error('The prop kit has no base contact geometry.')
+  return feet.expandByScalar(.002)
+}
+
 function buildDeck(host:ConstructionHost,o:ConstructionOptions,p:Parts,prop:PropPiece[]){
   const {rings,bounds}=host
   const props=p.part('Props'),bearers=p.part('Primary bearers'),joists=p.part('Secondary joists'),deck=p.part('Plywood')
@@ -170,20 +216,42 @@ function buildDeck(host:ConstructionHost,o:ConstructionOptions,p:Parts,prop:Prop
     for(const offset of [-.02,-.18])p.member(group,'beam',point(start,y+offset),point(end,y+offset),.080,.04)
     p.member(group,'beam',point(start,y-.10),point(end,y-.10),.028,.12)
   }
-  for(const x of rowPositions(bounds.min.x,bounds.max.x,o.spacing,Math.min(.38,o.spacing/3))){
-    for(const [a,b] of spans(rings,false,x)){
-      beam(bearers,false,x,a,b,primaryTop)
-      for(const z of rowPositions(a,b,o.spacing,Math.min(.28,o.spacing/3))){
-        const h=o.clearance+propTop
-        const transform=new Matrix4()
-        for(const piece of prop){
-          const sy=piece.tripod?Math.min(1,h/1.3):h/3.0
-          transform.compose(v(x,-o.clearance,z),identity,v(1,sy,1))
-          p.add(props,piece.material,piece.geometry.clone().applyMatrix4(transform))
-        }
+  const feet=propFootprint(prop)
+  const supports=o.bearingSurfaces??[rings]
+  const bearingBounds=new Box2().setFromPoints(supports.flat(2))
+  const minX=Math.max(bounds.min.x,bearingBounds.min.x)-feet.min.x+.0001
+  const maxX=Math.min(bounds.max.x,bearingBounds.max.x)-feet.max.x-.0001
+  const noFit='The prop and tripod feet do not fit on the available slab footprint.'
+  if(maxX<minX) throw Error(noFit)
+  let propCount=0
+  for(const x of rowPositions(minX,maxX,o.spacing,0)){
+    const upper=supportedSpans(rings,x,feet)
+    const lower=o.bearingSurfaces ? supports.flatMap(face=>supportedSpans(face,x,feet)) : upper
+    const runs:Interval[]=[]
+    for(const [lo,hi] of upper) for(const [l,h] of lower) {
+      const start=Math.max(l,lo), end=Math.min(h,hi)
+      if(end>=start) runs.push([start,end])
+    }
+    // Coplanar IFC slabs can overlap. Distribute each row of props only once.
+    const merged:Interval[]=[]
+    for(const run of runs.sort((a,b)=>a[0]-b[0])) {
+      const last=merged[merged.length-1]
+      if(last && run[0]<=last[1]) last[1]=Math.max(last[1],run[1])
+      else merged.push(run)
+    }
+    for(const [a,b] of spans(rings,false,x)) beam(bearers,false,x,a,b,primaryTop)
+    for(const [lo,hi] of merged) for(const z of rowPositions(lo,hi,o.spacing,0)){
+      const h=o.clearance+propTop
+      const transform=new Matrix4()
+      for(const piece of prop){
+        const sy=piece.tripod?Math.min(1,h/1.3):h/3.0
+        transform.compose(v(x,-o.clearance,z),identity,v(1,sy,1))
+        p.add(props,piece.material,piece.geometry.clone().applyMatrix4(transform))
       }
+      propCount++
     }
   }
+  if(!propCount) throw Error(noFit)
   for(const z of rowPositions(bounds.min.y,bounds.max.y,.50,.12))
     for(const [a,b] of spans(rings,true,z))beam(joists,true,z,a,b,top)
   for(const shape of faceShapes(rings)){

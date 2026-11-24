@@ -2,12 +2,13 @@ import '../../src/index.css'
 import React from 'react'
 import {addAfterEffect} from '@react-three/fiber'
 import {createRoot} from 'react-dom/client'
-import {Box3, BoxGeometry, Mesh} from 'three'
+import {Box3, BoxGeometry, Group, Mesh} from 'three'
 import {parseAsset} from '../../src/modules/fourD/siteAssets'
 import {extractAssetPart, siteAssetPlacement} from '../../src/modules/fourD/assetParts'
 import {api} from '../../src/lib/api'
 import {SiteToolsPanel} from '../../src/modules/fourD/SiteToolsPanel'
 import {SiteScheduleWizard} from '../../src/modules/fourD/SiteScheduleWizard'
+import type {IfcModelHandle} from '../../src/modules/fourD/ifcModel'
 import type {ConstructionTemplate} from '../../src/modules/fourD/constructionActivities'
 import type {Activity} from '../../src/modules/scheduling/types'
 import type {SiteItem, useSiteScene} from '../../src/modules/fourD/siteScene'
@@ -23,6 +24,13 @@ export async function run() {
   const column=new Mesh(new BoxGeometry(.6,3,.4))
   const wall=new Mesh(new BoxGeometry(3,2.8,.24))
   for(const mesh of [slab,column,wall])mesh.position.set(11,8,18)
+  const bearingSlab=new Mesh(new BoxGeometry(4.4,.3,3.6))
+  bearingSlab.position.set(11.2,8-.12-2.7-.15,18.1)
+  const slabModel=new Group()
+  slabModel.add(slab,bearingSlab)
+  slabModel.userData.expressIdMeshIndex=new Map([[1,[slab]],[2,[bearingSlab]]])
+  const slabLookup={expressID:1,handle:{object:slabModel,ifcModelID:0,
+    api:{GetLineIDsWithType:()=>({size:()=>2,get:(i:number)=>i+1})}} as unknown as IfcModelHandle}
   let source=slab, items:SiteItem[]=[], uploads=0
   wall.rotation.y=.43
   const secondWall=wall.clone()
@@ -86,7 +94,7 @@ export async function run() {
         ?cageWalls.map((object,i)=>({id:'cage-wall-'+i,name:'Core wall '+i,ifcType:'IfcWall',object}))
         :multipleWalls
         ?[wall,secondWall].map((object,i)=>({id:'wall-'+i,name:'W'+i,ifcType:'IfcWallStandardCase',object}))
-        :[{id:'selected-host',name:'Selected host',object:source}]}
+        :[{id:'selected-host',name:'Selected host',object:source,slabLookup:source===slab?slabLookup:undefined}]}
       hideShapeSources={()=>noop} readPileBounds={()=>{throw Error('Unused')}} onGenerateSchedule={plan} openPaths={noop}
       focusSite={noop} sceneLightsEnabled enableSceneLights={noop}/>)
   }
@@ -104,6 +112,7 @@ export async function run() {
       await new Promise(r=>setTimeout(r,30))
       ;(await button('Preview from selection')).click()
       const create=await button(multipleWalls||cageSelection?'Create at selected elements':'Create at selected element')
+      if(mode==='deck' && !host.textContent?.includes('IFC slab / 2.700 m below soffit')) throw Error('Missing measured support height')
       if(cageSelection){
         if(!host.textContent?.includes('4 selected hosts') || !host.textContent?.includes('8 construction parts')) throw Error('Missing wall cage selection')
         const getInline=()=>host.querySelector<HTMLCanvasElement>('[aria-label="Wall reinforcement cage preview"] canvas')
@@ -138,6 +147,15 @@ export async function run() {
       if(added.length<2||added.some(p=>!p.asset_part||p.assembly_id!==added[0].assembly_id||
         !Number.isFinite(p.position.x)||Math.abs(p.position.x-11)>(multipleWalls||cageSelection?11:5)||Math.abs(p.position.z-18)>(cageSelection?11:5)||Math.abs(p.position.y-8)>9))
         throw Error('Incorrect saved parts or placement in '+mode)
+      if(mode==='deck'){
+        const {object}=await parseAsset(await uploadedFile!.arrayBuffer())
+        const saved=added.find(item=>item.name.endsWith('Props'))!
+        const group=extractAssetPart(object,saved.asset_part!)
+        group.applyMatrix4(siteAssetPlacement(saved))
+        const bearing=new Box3().setFromObject(bearingSlab,true), props=new Box3().setFromObject(group,true)
+        if(Math.abs(props.min.y-bearing.max.y)>.0001 || props.min.x<bearing.min.x || props.max.x>bearing.max.x ||
+          props.min.z<bearing.min.z || props.max.z>bearing.max.z) throw Error('Saved props drifted off the bearing slab')
+      }
       if(multipleWalls){
         // Reload the exported bytes and serialized scene items, bypassing the import cache.
         const {object}=await parseAsset(await uploadedFile!.arrayBuffer())

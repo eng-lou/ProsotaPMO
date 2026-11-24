@@ -63,7 +63,8 @@ function flatFace(triangles: Triangle[], axis: 'y'|'z', elevation: number): Vect
   return rings.sort((a,b)=>Math.abs(ShapeUtils.area(b))-Math.abs(ShapeUtils.area(a)))
 }
 
-export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',needWallFace:boolean|'wallForm'=false):ConstructionHost {
+export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',face:boolean|'wallForm'|'slabTop'=false):ConstructionHost {
+  const needWallFace=face===true || face==='wallForm'
   object.updateWorldMatrix(true,true)
   const triangles:Triangle[]=[]
   const worldBounds=new Box3()
@@ -101,14 +102,14 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
   if(!Number.isFinite(height)||height<tolerance)throw Error('Select a solid with a base and a measurable thickness.')
   const vertices=new Set(triangles.flat())
   vertices.forEach(v=>v.sub(origin))
-  const rings=flatFace(triangles,'y',0)
-  if(!rings.length)throw Error('This creator needs a host with a level underside.')
+  const rings=flatFace(triangles,'y',face==='slabTop'?height:0)
+  if(!rings.length)throw Error(face==='slabTop'?'The bearing slab needs a level top face.':'This creator needs a host with a level underside.')
   let angle=0,longest=0
   for(const ring of rings)for(let i=0;i<ring.length;i++){
     const d=ring[(i+1)%ring.length].clone().sub(ring[i])
     if(d.lengthSq()>longest){longest=d.lengthSq();angle=Math.atan2(d.y,d.x)}
   }
-  if(needWallFace==='wallForm'){
+  if(face==='wallForm'){
     // A door can split the underside into short piers. Orient panels from the wall faces.
     const directions=new Map<number,{angle:number;area:number}>()
     for(const [a,b,c] of triangles){
@@ -132,7 +133,7 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
   if(needWallFace){
     const rotation=new Matrix4().makeRotationY(angle)
     vertices.forEach(v=>v.applyMatrix4(rotation))
-    if(needWallFace==='wallForm'){
+    if(face==='wallForm'){
       // A two-sided panel set requires a single straight, constant-thickness wall.
       for(const [a,b,c] of triangles){
         const normal=b.clone().sub(a).cross(c.clone().sub(a))
