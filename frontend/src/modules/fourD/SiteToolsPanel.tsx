@@ -367,7 +367,7 @@ export function SiteToolsPanel({ floorTools, sceneLightsEnabled, enableSceneLigh
       {chosen.kind!=='geographic'&&<button className={button} disabled={chosen.locked || busy} onClick={() => { setPlaceAsParts(false); setEdit(recipe(chosen)); if (chosen.kind === 'light') setDraft(recipe(chosen)); setConfirmed(true) }}>{chosen.kind === 'light' ? 'Edit light' : 'Edit / regenerate'}</button>}
       <button className={button} disabled={busy} onClick={() => void update(chosen, { locked: !chosen.locked })}>{chosen.locked ? 'Unlock' : 'Lock'}</button>
     </div>}
-    {chosen?.enclosure?.openings.some(g=>g.kind!=='gap') && !edit && <GatePosePanel key={chosen.id} item={chosen} state={state} dateRef={timelineDateRef} format={timelineFormat} onSeek={onSeek}/>}
+    {chosen?.kind==='fence' && chosen.enclosure && !edit && <GatePosePanel key={'gate:'+chosen.id} item={chosen} state={state} dateRef={timelineDateRef} format={timelineFormat} onSeek={onSeek}/>}
     {chosen && <p>Selected: {selected?.includes(':panel:') ? 'panel at ' + selected.split(':panel:')[1] + ' m' : chosen.name}. Use Frame Selected in the viewport.</p>}
     {scene.items.length>0&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.map(i=>i.id))}>Generate schedule from 3D objects…</button>}
     {chosen?.assembly_id&&!edit&&<button className={button} onClick={()=>onGenerateSchedule(scene.items.filter(i=>i.assembly_id===chosen.assembly_id).map(i=>i.id))}>Schedule this assembly’s parts…</button>}
@@ -383,7 +383,7 @@ export function SiteToolsPanel({ floorTools, sceneLightsEnabled, enableSceneLigh
       }}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&onSeek&&<ClimbingFormworkPanel onPlan={withBoom=>onGenerateSchedule([chosen.id],withBoom?'core':'corePlain')} source={source} dateRef={timelineDateRef} key={'climb:'+chosen.id} item={chosen} activities={activities} axis={upAxis} format={timelineFormat} onSeek={onSeek} disabled={chosen.locked||busy} selectedSources={selectedShapeSources} onApply={async patch=>{await save(items=>items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Climb setup for ${chosen.name}`)}}/>}
     {chosen?.kind==='asset'&&!chosen.asset_part&&!edit&&timelineFormat&&timelineDateRef&&onSeek&&<WorkerActionsPanel key={'actions:'+chosen.id} item={chosen} items={scene.items} paths={paths} disabled={chosen.locked||busy} format={timelineFormat} dateRef={timelineDateRef} onSeek={onSeek} onEditAttachment={onEditAttachment} onApply={async patch=>{await save(scene.items.map(i=>i.id===chosen.id?{...i,...patch}:i),`Actions for ${chosen.name}`)}}/>}
-    {chosen && !edit && <SiteToolSection key={chosen.id} title="Activity links & profiles">
+    {chosen && !edit && <SiteToolSection key={'links:'+chosen.id} title="Activity links & profiles">
       <ToolVisualGuide topic="links"/>
       <ElementLinkFields key={chosen.id} activities={activities} links={links.filter(l => l.source_kind === 'site' && l.element_ref === chosen.id)} animationProfiles={profiles}
         onLink={(activityId, profileId) => onLink(chosen, activityId, profileId)} onUnlink={onUnlink} onAssignProfile={onAssignProfile} />

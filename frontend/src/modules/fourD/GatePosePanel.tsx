@@ -12,8 +12,13 @@ export function GatePosePanel({item, state, dateRef, format, onSeek}: {
   format?: TimelineFormat; onSeek?: (date: Date) => void
 }) {
   const gates = item.enclosure!.openings
+  const placed = item.layout?.openings
+  // A saved entrance can be repeated on several levels. Pose its authored row once.
+  const gateIndices = useMemo(() => gates.flatMap((gate,i) =>
+    gate.kind !== 'gap' && placed?.some(p => p.kind === gate.kind && p.start === gate.start) ? [i] : []
+  ), [gates,placed])
   const [chosen,setIndex] = useState(0)
-  const index = gates[chosen] && gates[chosen].kind !== 'gap' ? chosen : gates.findIndex(g => g.kind !== 'gap')
+  const index = gateIndices.includes(chosen) ? chosen : gateIndices[0]
   const gate = gates[index]
   const [manual,setManual] = useState<number | null>(null)
   const [time,setTime] = useState<Date | null>(null)
@@ -22,10 +27,10 @@ export function GatePosePanel({item, state, dateRef, format, onSeek}: {
   const {setDraft, save, setError} = state
   const sample = useMemo(() => gate && gateTrack(gate),[gate])
   useEffect(() => {
-    if (!dateRef) return
+    if (!dateRef || !gate) return
     const timer = setInterval(() => setClock(dateRef.current?.getTime() ?? null), 150)
     return () => clearInterval(timer)
-  }, [dateRef])
+  }, [dateRef,gate])
   useEffect(() => {
     setManual(null)
     return () => {
@@ -65,7 +70,7 @@ export function GatePosePanel({item, state, dateRef, format, onSeek}: {
   function discard() { setManual(null); setDraft(null); preview.current=null }
   return <SiteToolSection title="Gate pose" disabled={disabled}>
     <label>Entrance<select className="w-full rounded border bg-white p-1 dark:bg-prosota-panel2" value={index} onChange={e=>{discard(); setIndex(Number(e.target.value))}}>
-      {gates.map((entry,i) => entry.kind !== 'gap' && <option key={i} value={i}>{i+1} · {names[entry.kind]} · {entry.start} m</option>)}
+      {gateIndices.map(i => <option key={i} value={i}>{i+1} · {names[gates[i].kind]} · {gates[i].start} m</option>)}
     </select></label>
     <label className="block">{gate.kind === 'turnstile' ? 'Rotation' : 'Opening'} · {value.toFixed(2)}
       <input className="w-full" type="range" min="0" max="1" step="0.01" value={value} onChange={e=>pose(Number(e.target.value))}/>

@@ -9304,3 +9304,9 @@ The `level-slices` Chromium fixture opens an IFC wall and checks picking at thre
 Two slabs in Simple Struc.ifc had matching top and underside outlines but incomplete shaft linings. Split slab into pour zones now checks both cut solids. If the solid cut fails its geometry check, the tool can split a verified flat slab profile, preserve its external boundary and openings, and check the reconstructed volume. General shape operations retain their closed-solid checks.
 
 Read-only replay covered 15 floors, four cuts per floor and both viewport up axes. The Chromium creator fixture previews both zones, assigns a pour activity, saves both GLBs and reopens them at the original slab elevation with the shaft clear.
+
+### 24 November 2026 - Gate pose panels left behind after fence removal
+
+Gate pose and Activity links shared the selected fence ID as a React key. Selecting one fence produced three Gate pose panels in the browser regression. Each section now has its own key. The entrance selector also checks the generated fence layout before offering a gate.
+
+The enclosure fixture switches fences, selects ground, removes a fence with an active pose preview, removes the last generated entrance and clears selection in the same session.

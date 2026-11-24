@@ -1,4 +1,5 @@
 import React from 'react'
+import {checkGateSelection} from './gateSelection.fixture'
 import {createRoot} from 'react-dom/client'
 import {Canvas} from '@react-three/fiber'
 import {TowerWrap} from '../../src/modules/fourD/TowerWrap'
@@ -43,6 +44,7 @@ export async function run(){
   const perimeter=buildEnclosure(example('mesh',[-3.5,0,3.5],3.5))
   const [net,sheet]=await Promise.all([loader.loadAsync(netted),loader.loadAsync(sheeted)])
   try{
+    await checkGateSelection(gateItem)
     draw();await wait()
     const click=async(label:string)=>{const btn=[...ui.querySelectorAll('button')].find(b=>b.textContent===label);check(btn,label);btn!.click();await wait()}
     await click('Add opening')
@@ -171,7 +173,7 @@ export async function run(){
     }
     ;(window as any).enclosureProofs=images
     renderer.dispose()
-    return {passed:true,checks:['slab capture and per-level bay editing','signed streetworks gate and acoustic blanket','gate swing and clear opening','hinge pivots, reverse seek, rest pose and Z-up turnstile travel','two-level instancing and selection','GLB board roundtrip','six open tower bridges','net and sheet loading','dark narrow controls','whole-site and close WebGL views']}
+    return {passed:true,checks:['gate editor follows selection, deletion, preview cleanup and generated openings','slab capture and per-level bay editing','signed streetworks gate and acoustic blanket','gate swing and clear opening','hinge pivots, reverse seek, rest pose and Z-up turnstile travel','two-level instancing and selection','GLB board roundtrip','six open tower bridges','net and sheet loading','dark narrow controls','whole-site and close WebGL views']}
   }finally{
     live.unmount();viewport.remove();root.unmount();ui.remove();document.documentElement.classList.remove('dark')
     for(const part of [assembly,entrance,perimeter])part.dispose()
