@@ -12,6 +12,7 @@ export function volume(g: THREE.BufferGeometry) {
   for(let i=g.drawRange.start;i<end;i+=3){a.fromBufferAttribute(p,index?index.getX(i):i);b.fromBufferAttribute(p,index?index.getX(i+1):i+1);c.fromBufferAttribute(p,index?index.getX(i+2):i+2);value+=a.dot(b.cross(c))/6}
   return Math.abs(value)
 }
+export class OpenSolidError extends Error {}
 export function checkSolid(g: THREE.BufferGeometry) {
   const p=g.getAttribute('position'), idx=g.index, edges=new Map<string,number>()
   const key=(i:number)=>[p.getX(i),p.getY(i),p.getZ(i)].map(v=>Math.round(v*1e5)).join(',')
@@ -39,7 +40,7 @@ export function checkSolid(g: THREE.BufferGeometry) {
       let covered=0;for(const [start,end] of intervals.sort((a,b)=>a[0]-b[0])){if(start>covered+1e-5)break;covered=Math.max(covered,end)}return covered<length-1e-5
     })
   }
-  if(!edges.size || [...edges.values()].some(n=>n>2) || unmatched || volume(g)<1e-8)throw Error('Choose closed solids. This input has open or non-manifold surfaces; repair it before cutting.')
+  if(!edges.size || [...edges.values()].some(n=>n>2) || unmatched || volume(g)<1e-8)throw new OpenSolidError('Choose closed solids. This input has open or non-manifold surfaces; repair it before cutting.')
 }
 function compact(g: THREE.BufferGeometry, weld=false) {
   const result=new THREE.BufferGeometry(), index=g.index, start=g.drawRange.start

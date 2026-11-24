@@ -2,7 +2,10 @@ import '../../src/index.css'
 import React from 'react'
 import {addAfterEffect} from '@react-three/fiber'
 import {createRoot} from 'react-dom/client'
-import {Box3, BoxGeometry, Group, Mesh} from 'three'
+import {Box3, BoxGeometry, Group, Mesh, Raycaster, Vector3} from 'three'
+import {openRevealSlab} from '../pourSlab.fixture'
+import {readConstructionHost} from '../../src/modules/fourD/constructionHost'
+import type {Path} from '../../src/modules/fourD/paths'
 import {parseAsset} from '../../src/modules/fourD/siteAssets'
 import {extractAssetPart, siteAssetPlacement} from '../../src/modules/fourD/assetParts'
 import {api} from '../../src/lib/api'
@@ -31,7 +34,11 @@ export async function run() {
   slabModel.userData.expressIdMeshIndex=new Map([[1,[slab]],[2,[bearingSlab]]])
   const slabLookup={expressID:1,handle:{object:slabModel,ifcModelID:0,
     api:{GetLineIDsWithType:()=>({size:()=>2,get:(i:number)=>i+1})}} as unknown as IfcModelHandle}
-  let source=slab, items:SiteItem[]=[], uploads=0
+  const pourSlab=openRevealSlab()
+  pourSlab.position.set(11,8,18)
+  const pourPath={id:'break',name:'Pour break',closed:false,points:[{x:11,y:8,z:10},{x:11,y:8,z:26}]} as Path
+  const pourFiles=new Map<string,File>()
+  let source:Mesh=slab, items:SiteItem[]=[], uploads=0
   wall.rotation.y=.43
   const secondWall=wall.clone()
   secondWall.position.x+=8
@@ -57,6 +64,7 @@ export async function run() {
       if(!this.fixture)return super.send(body)
       if(!(body instanceof File)||body.size<1000)throw Error('Missing generated GLB')
       uploadedFile=body;uploads++
+      if(body.name.includes('Pour '))pourFiles.set(assetId,body)
       Object.defineProperty(this,'status',{value:200})
       queueMicrotask(()=>this.dispatchEvent(new ProgressEvent('load')))
     }
@@ -87,7 +95,7 @@ export async function run() {
       onCancel={draw} onGenerated={()=>{finished=true;draw()}}/>)
   }
   function draw(){
-    root.render(<SiteToolsPanel state={state} projectId="creator-test" activities={tasks} paths={[]} zones={[]} sceneSources={[]}
+    root.render(<SiteToolsPanel state={state} projectId="creator-test" activities={tasks} paths={[pourPath]} zones={[]} sceneSources={[]}
       timelineFormat={{scheduleStart:now,timeDisplayMode:'date',speedDaysPerSecond:1,fps:30}} upAxis="y"
       selectedObjectIds={new Set()} onPickItems={noop} links={[]} profiles={[]} onSeek={noop} onLink={noop} onUnlink={noop}
       onAssignProfile={noop} linkError={null} selectedShapeSources={()=>cageSelection
@@ -207,6 +215,31 @@ export async function run() {
     ;(await button('Preview ground cuts')).click()
     ;(await button('Create ground')).click()
     await waitFor(()=>items.some(i=>i.name==='Ground · remaining soil')&&items.some(i=>i.name.startsWith('Excavation ·')),'saved ground and cuts')
+    source=pourSlab
+    const previewPour=await button('Preview selected slab')
+    previewPour.closest('details')!.open=true
+    const breakSelect=host.querySelector<HTMLSelectElement>('select[aria-label="Pour break"]')!
+    breakSelect.value='break'
+    breakSelect.dispatchEvent(new Event('change',{bubbles:true}))
+    await new Promise(r=>setTimeout(r,30))
+    previewPour.click()
+    const zoneB=await waitFor(()=>[...host.querySelectorAll('button')].find(b=>b.textContent?.endsWith('Pour B')),'second pour preview')
+    zoneB.click()
+    const assignment=host.querySelector<HTMLSelectElement>('select[aria-label$="Pour B activity"]')!
+    assignment.value='existing';assignment.dispatchEvent(new Event('change',{bubbles:true}))
+    ;(await button('Create both pour zones')).click()
+    const pours=await waitFor(()=>items.filter(i=>i.asset_id&&pourFiles.has(i.asset_id)).length===2&&items.filter(i=>i.asset_id&&pourFiles.has(i.asset_id)),'both pour assets')
+    if(pours.some(i=>i.operation_inputs?.[0]!=='selected-host')||pours[1].stage_window?.from_activity_id!=='existing')throw Error('Lost pour source or activity')
+    const ray=new Raycaster()
+    for(const item of pours){
+      const {object}=await parseAsset(await pourFiles.get(item.asset_id!)!.arrayBuffer())
+      const placement=new Group().add(object)
+      placement.applyMatrix4(siteAssetPlacement(item));placement.updateMatrixWorld(true)
+      const ref=readConstructionHost(item.name,placement,'y','slabTop')
+      if(Math.abs(ref.origin.y-7.7)>.001||Math.abs(ref.height-.3)>.001)throw Error('Reloaded pour moved')
+      ray.set(new Vector3(11.5,9,18),new Vector3(0,-1,0))
+      if(ray.intersectObject(placement).length)throw Error('Reloaded pour filled the opening')
+    }
     ;(await button('Add simulation activities…')).click()
     const destination=await waitFor(()=>host.querySelector<HTMLSelectElement>('label:has(option[value="floor"]) select')||undefined,'WBS')
     destination.value='floor';destination.dispatchEvent(new Event('change',{bubbles:true}))
@@ -219,7 +252,7 @@ export async function run() {
       schedulePayload.activities.some((a:any)=>a.element_refs?.length || a.parent_temp_id)||
       schedulePayload.relationships.length || !schedulePayload.activities.some((a:any)=>a.phase_key==='pour'))
       throw Error('Activities-only generation wrote unexpected data')
-    if(uploads!==13)throw Error('Wrong number of generated assets')
-    return {passed:true,creators:2,modes:10,core:true,ground:true,uploads,scheduledParts:items.length,activities:4}
+    if(uploads!==15)throw Error('Wrong number of generated assets')
+    return {passed:true,creators:2,modes:10,core:true,ground:true,pours:pours.length,uploads,scheduledParts:items.length,activities:4}
   }finally{root.unmount();host.remove();api.defaults.adapter=previousAdapter;window.XMLHttpRequest=originalXHR}
 }

@@ -9298,3 +9298,9 @@ Ctrl-clicking an IFC pile added its model to the selection, which unmounted the 
 The renderer clipped copies of the entire IFC product. Raycasts and selection bounds still saw the full product, and the element mesh index had no entry for a slice. Generate slice geometry at the saved elevations, index it through the same path as IFC meshes and retain a stable parent GlobalId plus slice index for unloaded elements and placements.
 
 The `level-slices` Chromium fixture opens an IFC wall and checks picking at three heights, gizmo placement, unloading one slice, reopening, selective reload and unsplitting. It also covers a multi-piece wall under a rotated Z-up root.
+
+### 24 November 2026 - Pour breaks through IFC slabs with core openings
+
+Two slabs in Simple Struc.ifc had matching top and underside outlines but incomplete shaft linings. Split slab into pour zones now checks both cut solids. If the solid cut fails its geometry check, the tool can split a verified flat slab profile, preserve its external boundary and openings, and check the reconstructed volume. General shape operations retain their closed-solid checks.
+
+Read-only replay covered 15 floors, four cuts per floor and both viewport up axes. The Chromium creator fixture previews both zones, assigns a pour activity, saves both GLBs and reopens them at the original slab elevation with the shaft clear.

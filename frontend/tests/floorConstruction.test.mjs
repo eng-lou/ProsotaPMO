@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {build} from 'esbuild'
 import {writeFile,unlink} from 'node:fs/promises'
 const exports=['constructionStages','groundFromObjects','phasedFoundations','pourBreak','floorReview','enclosureGeometry','slabReferences','constructionLayout','constructionHost','constructionGeometry'].map(name=>"export * from './src/modules/fourD/"+name+"'")
-const {outputFiles}=await build({stdin:{contents:[...exports,"export {volume} from './src/modules/fourD/shapeBoolean'","export * from 'three'"].join(';'),resolveDir:process.cwd()},bundle:true,write:false,format:'esm',external:['web-ifc'],alias:{'@':'./src'},define:{'import.meta.env':'{}'}})
+const {outputFiles}=await build({stdin:{contents:[...exports,"export {volume,checkSolid} from './src/modules/fourD/shapeBoolean'","export * from './tests/pourSlab.fixture'","export * from 'three'"].join(';'),resolveDir:process.cwd()},bundle:true,write:false,format:'esm',external:['web-ifc'],alias:{'@':'./src'},define:{'import.meta.env':'{}'}})
 const moduleUrl=new URL('./.floor-fixture-'+process.pid+'.mjs',import.meta.url)
 await writeFile(moduleUrl,outputFiles[0].text)
 const t=await import(moduleUrl.href).finally(()=>unlink(moduleUrl))
@@ -19,6 +19,56 @@ test('two pours share one host reference and preserve volume on either up axis',
   const zones=t.divideSlab(s,{points,closed:false},axis)
   assert.equal(zones.length,2);for(const p of zones){close(t.volume(p.scene.children[0].geometry),6);assert.deepEqual(p.sourceRefs,['slab']);assert.ok(t.readConstructionHost('Zone',p.scene,'y','slabTop').rings.length)}
  }
+})
+test('incomplete IFC shaft lining yields two closed formwork hosts in the right place on either up axis',()=>{
+ for (const axis of ['y','z']) {
+  const object=t.openRevealSlab(), rotation=axis==='z'?Math.PI/2:0
+  const world=(x,y,z)=>new t.Vector3(x,y,z).applyAxisAngle(new t.Vector3(1,0,0),rotation)
+  object.rotation.x=rotation
+  object.position.copy(world(17,6,-8))
+  const src={object,id:'model::186',backupRef:'file:floor::186',ifcType:'IfcSlab',name:'Floor'}
+  assert.throws(()=>t.checkSolid(object.geometry),/closed solids/)
+  for(const [x,slope,expected] of [[0,0,[12,12]],[4,0,[4.8,19.2]],[0,.27,[12,12]],[2,0,[9.6,14.4]]]){
+   const path={closed:false,points:[world(17+x-slope*6,6,-14),world(17+x+slope*6,6,-2)]}
+   const zones=t.divideSlab(src,path,axis)
+   const volumes=[]
+   const geometries=zones.map(z=>{
+    const mesh=z.scene.children[0]
+    t.checkSolid(mesh.geometry)
+    volumes.push(t.volume(mesh.geometry))
+    assert.deepEqual(z.sourceRefs,['file:floor::186'])
+    assert.ok(t.readConstructionHost('zone',z.scene,'y').rings.length)
+    assert.ok(t.readConstructionHost('zone',z.scene,'y','slabTop').rings.length)
+    z.scene.rotation.x=rotation; z.scene.position.copy(z.anchor); z.scene.updateMatrixWorld(true)
+    return mesh
+   })
+   volumes.sort((a,b)=>a-b).forEach((v,i)=>close(v,expected[i]))
+   const ray=new t.Raycaster()
+   for(const [px,pz,solid] of [[.7,-.5,false],[-3.5,1,true],[4.5,-3,true],[0,5,false]]){
+    ray.set(world(17+px,7,-8+pz),world(0,-1,0))
+    assert.equal(ray.intersectObjects(geometries).length,solid?1:0)
+   }
+   zones.forEach(z=>t.releaseConstruction(z.scene))
+  }
+  assert.throws(()=>t.divideSlab(src,{closed:false,points:[world(25,6,-14),world(25,6,-2)]},axis),/interior/)
+  assert.throws(()=>t.checkSolid(object.geometry),/closed solids/)
+ }
+})
+test('an incomplete cap or an interior side cannot be inferred from the other slab faces',()=>{
+ const slab=t.openRevealSlab(), geom=slab.geometry, p=geom.attributes.position
+ const cut=object=>t.divideSlab({id:'floor',ifcType:'IfcSlab',name:'Floor',object},
+   {closed:false,points:[{x:0,y:0,z:-7},{x:0,y:0,z:7}]},'y')
+ const extra=new t.BufferGeometry()
+ extra.setAttribute('position',new t.Float32BufferAttribute([-4,0,0,-4,-.3,0,-4,-.3,1],3))
+ const group=new t.Group().add(slab,new t.Mesh(extra))
+ assert.throws(()=>cut(group),/profile|boundary/)
+ const idx=Array.from(geom.index.array), keep=[]
+ for(let i=0;i<idx.length;i+=3){
+   const ids=idx.slice(i,i+3)
+   if(!ids.every(j=>p.getY(j)<-.29))keep.push(...ids)
+ }
+ geom.setIndex(keep)
+ assert.throws(()=>cut(slab),/profile|boundary/)
 })
 test('merged excavation, crossed beam and cap conserve concrete, blinding and backfill',()=>{
  const cap=source('cap',0,-.6,0,3,1,2),beam=source('beam',2,-.35,0,4,.5,.5)

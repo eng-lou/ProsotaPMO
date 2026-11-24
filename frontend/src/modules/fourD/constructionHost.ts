@@ -15,7 +15,7 @@ type Triangle = [Vector3, Vector3, Vector3]
 const tolerance = .0001
 const key = (v: Vector2) => Math.round(v.x/tolerance)+','+Math.round(v.y/tolerance)
 
-function flatFace(triangles: Triangle[], axis: 'y'|'z', elevation: number): Vector2[][] {
+export function flatFaceRings(triangles: Triangle[], axis: 'y'|'z', elevation: number): Vector2[][] {
   const vertices = new Map<string, Vector2>()
   const edges = new Map<string, [string,string]>()
   const faces = new Set<string>()
@@ -107,7 +107,7 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
   if(!Number.isFinite(height)||height<tolerance)throw Error('Select a solid with a base and a measurable thickness.')
   const vertices=new Set(triangles.flat())
   vertices.forEach(v=>v.sub(origin))
-  const rings=flatFace(triangles,'y',face==='slabTop'?height:0)
+  const rings=flatFaceRings(triangles,'y',face==='slabTop'?height:0)
   if(!rings.length)throw Error(face==='slabTop'?'The bearing slab needs a level top face.':'This creator needs a host with a level underside.')
   let angle=0,longest=0
   for(const ring of rings)for(let i=0;i<ring.length;i++){
@@ -148,7 +148,7 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
         }
       }
     }
-    wallFace=flatFace(triangles,'z',bounds.min.y)
+    wallFace=flatFaceRings(triangles,'z',bounds.min.y)
     if(!wallFace.length)throw Error('Select a straight wall with planar faces.')
   }
   return {name,origin,angle,height,rings,bounds,wallFace}
