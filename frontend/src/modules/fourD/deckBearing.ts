@@ -9,7 +9,7 @@ export interface SlabLookup { handle: IfcModelHandle; expressID: number }
 const zero = new Vector2()
 
 // Test for common floor area, including openings, before choosing a bearing elevation.
-function overlaps(a: Vector2[][], b: Vector2[][]) {
+export function overlaps(a: Vector2[][], b: Vector2[][]) {
   const xs = [...new Set([...a.flat(), ...b.flat()].map(p => p.x))].sort((l,r) => l-r)
   for (let i=1; i<xs.length; i++) {
     const x=(xs[i-1]+xs[i])/2
@@ -29,27 +29,49 @@ function overlaps(a: Vector2[][], b: Vector2[][]) {
   return false
 }
 
+/** Look for upper-floor area outside the combined supporting faces at plan sections. */
+export function hasBearingGap(upper:Vector2[][],lower:Vector2[][][]){
+  const xs=[...new Set([...upper.flat(),...lower.flat(2)].map(p=>p.x))].sort((a,b)=>a-b)
+  for(let i=1;i<xs.length;i++){
+    const x=(xs[i-1]+xs[i])/2
+    const support=lower.flatMap(rings=>spans(rings,false,x)).sort((a,b)=>a[0]-b[0])
+    for(const [lo,hi] of spans(upper,false,x)){
+      let covered=lo
+      for(const [a,b] of support){
+        if(a>covered+.001)break
+        covered=Math.max(covered,b)
+      }
+      if(covered<hi-.001)return true
+    }
+  }
+  return false
+}
+
 export async function findDeckBearing(host:ConstructionHost, {handle,expressID}:SlabLookup, upAxis:'y'|'z', options:ConstructionOptions) {
   const {IFCSLAB}=await import('web-ifc')
   const toYUp=new Matrix4().makeRotationX(upAxis==='z'?-Math.PI/2:0)
   const hostOrigin=new Vector2(host.origin.x,host.origin.z)
   const planBounds=new Box2().setFromPoints(host.rings.flat().map(p=>p.clone().rotateAround(zero,host.angle).add(hostOrigin)))
-  const candidates:{ id:number; clearance:number }[]=[]
+  const candidates:{ id:number; clearance:number; nearby:boolean }[]=[]
   handle.object.updateWorldMatrix(true,false)
   const ids=handle.api.GetLineIDsWithType(handle.ifcModelID,IFCSLAB,true)
   for(let i=0;i<ids.size();i++) {
     const id=ids.get(i)
     if(id===expressID) continue
     const box=getExpressIdWorldBounds(handle.object,id)?.applyMatrix4(toYUp)
-    if(!box || box.max.x<=planBounds.min.x || box.min.x>=planBounds.max.x || box.max.z<=planBounds.min.y || box.min.z>=planBounds.max.y) continue
+    if(!box) continue
     const clearance=host.origin.y-box.max.y
-    if(clearance<.75 || clearance>10 || (!options.autoClearance && Math.abs(clearance-options.clearance)>.005)) continue
-    candidates.push({id,clearance})
+    if(clearance<=.001 || clearance>10) continue
+    const nearby=box.max.x>planBounds.min.x && box.min.x<planBounds.max.x && box.max.z>planBounds.min.y && box.min.z<planBounds.max.y
+    candidates.push({id,clearance,nearby})
   }
   const bearingSurfaces:Vector2[][][]=[]
+  const nearest=Math.min(...candidates.map(c=>c.clearance))
+  if(nearest<.75 || (!options.autoClearance && Math.abs(nearest-options.clearance)>.005))return undefined
   let clearance:number|undefined
   for(const candidate of candidates.sort((a,b)=>a.clearance-b.clearance)) {
-    if(clearance!==undefined && candidate.clearance-clearance>.001) break
+    if(candidate.clearance-nearest>.001) break
+    if(!candidate.nearby)continue
     const group=new Group()
     for(const mesh of readIfcClashMeshes(handle.object,candidate.id)) {
       mesh.updateWorldMatrix(true,false)

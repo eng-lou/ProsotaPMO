@@ -13,7 +13,9 @@ export interface ConstructionOptions {
   spacing:number
   clearance:number
   autoClearance?:boolean
+  requireBearing?:boolean
   bearingSurfaces?:Vector2[][][]
+  screenBearing?:{rings:Vector2[][][];shoeElevation:number;omitted:string[]}
   screenHeight:number
   bayWidth:number
   cover:number
@@ -470,9 +472,21 @@ function screens(host:ConstructionHost,o:ConstructionOptions,p:Parts){
       const bay=(bayCounts.get(edgeNumber)??0)+1
       bayCounts.set(edgeNumber,bay)
       const label='Edge '+edgeNumber+' bay '+bay
-      const g=p.part(label+' screen'),shoes=p.part(label+' shoes')
       const top=host.height+1.6,bottom=top-o.screenHeight
       const at=(s:number,out:number,y:number)=>v(edge.a.x+edge.d.x*(start+i*width+s)+edge.n.x*out,y,edge.a.y+edge.d.y*(start+i*width+s)+edge.n.y*out)
+      const lower=o.screenBearing
+      if(lower){
+        const solid=(s:number,out:number)=>{
+          const q=at(s,out,0),pt=new Vector2(q.x,q.z)
+          return lower.rings.some(rings=>rings.filter(r=>contains(r,pt)).length%2===1)
+        }
+        if(lower.shoeElevation<bottom+.08 || [.05*width,.95*width].some(s=>!solid(s,-.02)||solid(s,.02))){
+          lower.omitted.push(host.name+' · '+label)
+          continue
+        }
+      }
+      const shoeLevels=[host.height-Math.min(.1,host.height/2),lower?.shoeElevation??top-o.screenHeight*.70]
+      const g=p.part(label+' screen'),shoes=p.part(label+' shoes')
       const face=new PlaneGeometry(width-.008,o.screenHeight)
       const pos=face.getAttribute('position'),uv=face.getAttribute('uv')
       for(let j=0;j<pos.count;j++){
@@ -483,7 +497,7 @@ function screens(host:ConstructionHost,o:ConstructionOptions,p:Parts){
       for(const s of [.05*width,.95*width]){
         p.member(g,'rail',at(s,.13,bottom),at(s,.13,top),.075)
         p.member(g,'steel',at(s,.745,bottom),at(s,.745,top),.045)
-        for(const y of [host.height-.10,top-o.screenHeight*.70]){
+        for(const y of shoeLevels){
           p.member(shoes,'steel',at(s,0,y),at(s,.13,y),.15,.16)
           p.member(g,'steel',at(s,.13,y),at(s,.74,y),.055)
           p.member(g,'steel',at(s,.13,y-.38),at(s,.74,y),.04)
@@ -495,7 +509,7 @@ function screens(host:ConstructionHost,o:ConstructionOptions,p:Parts){
         }
       }
       for(const y of rowPositions(bottom,top,1.6,.035))p.member(g,'steel',at(0,.75,y),at(width,.75,y),.04,.05)
-      for(const y of [host.height-.10,top-o.screenHeight*.70]){
+      for(const y of shoeLevels){
         p.member(g,'steel',at(0,.43,y),at(width,.43,y),.60,.045)
         p.member(g,'board',at(0,.71,y+.095),at(width,.71,y+.095),.024,.15)
       }

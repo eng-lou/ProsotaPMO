@@ -5,7 +5,7 @@ import { computeShapeBoolean, disposeBooleanResults, type BooleanResult } from '
 import { arraySourceSnapshot, disposeArraySnapshot } from './arraySourceSnapshot'
 
 type Axis='y'|'z'
-export interface GroundPiece { preview:ConstructionPreview; sourceId?:string }
+export interface GroundPiece { preview:ConstructionPreview; sourceId?:string; phase?:'excavation'|'blinding'|'concrete'|'backfill' }
 export interface GroundOptions { margin:number; top?:number; bottom?:number }
 const east=new Vector3(1,0,0)
 const soil=()=>new MeshStandardMaterial({color:'#866449',roughness:.96})
@@ -15,7 +15,7 @@ export function groundCutSource(source:HostSource,axis:Axis){
   // A pile with a pointed toe has no horizontal bottom face. Its head defines the bore.
   const host=readConstructionHost(source.name,source.object,axis,/^IfcPile/i.test(source.ifcType??'')?'slabTop':false)
   const rings=host.rings.map(r=>r.map(p=>p.clone().rotateAround(new Vector2(),host.angle).add(new Vector2(host.origin.x,host.origin.z))))
-  return {id:source.backupRef??source.id,name:source.name,rings,bottom:host.origin.y,top:host.origin.y+host.height}
+  return {source, id:source.backupRef??source.id,name:source.name,rings,bottom:host.origin.y,top:host.origin.y+host.height}
 }
 export type GroundCut=ReturnType<typeof groundCutSource>
 export function makeGround(cuts:GroundCut[],base:HostSource|null,axis:Axis,options:GroundOptions){

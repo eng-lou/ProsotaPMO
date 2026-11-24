@@ -151,7 +151,30 @@ class GatePoseKey(BaseModel):
     value: float = Field(ge=0, le=1)
 
 
+class SlabReference(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    ref: str = Field(min_length=1, max_length=512)
+    name: str = Field(min_length=1, max_length=512)
+    elevation: float
+    rings: list[list[tuple[float, float]]] = Field(min_length=1, max_length=256)
+
+
+class ScaffoldRun(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    slabs: list[SlabReference] = Field(default_factory=list, max_length=512)
+    base_elevation: float | None = None
+    facade_gap: float = Field(default=.18, ge=0, le=3)
+    bay_edits: dict[str, Literal["gap","stairs"]] = Field(default_factory=dict, max_length=6000)
+
+    width: float = Field(default=1.2, ge=.6, le=3)
+    lifts: int = Field(default=3, ge=1, le=30)
+    side: Literal["left", "right"] = "right"
+    netted: bool = False
+    stairs: list[float] = Field(default_factory=list, max_length=32)
+
+
 class FenceOpening(BaseModel):
+    posters: list[Literal["PPE", "Hearing protection", "Site access", "Fire exit", "Site contacts"]] = Field(default_factory=list, max_length=5)
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     kind: Literal["gap", "vehicle", "pedestrian", "turnstile"]
     start: float = Field(ge=0, le=100000)
@@ -180,13 +203,20 @@ class FenceOpening(BaseModel):
 
 class FenceEnclosure(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    style: Literal["plain", "edge", "mesh", "hoarding"] = "edge"
+    scaffold: ScaffoldRun | None = None
+    barrier_base: Literal["feet","low","ballast"] = "feet"
+    reflective: bool = False
+    blanket: bool = False
+    blanket_bays: list[int] | None = Field(default=None,max_length=2000)
+    style: Literal["plain", "edge", "mesh", "hoarding","street","scaffold"] = "edge"
     openings: list[FenceOpening] = Field(default_factory=list, max_length=32)
     levels: list[float] = Field(default_factory=lambda: [0], min_length=1, max_length=64)
     perimeter_lights: bool = False
 
     @model_validator(mode="after")
     def distinct_levels(self):
+        if self.style == "scaffold" and self.levels != [0]:
+            raise ValueError("Set scaffold height using its lifts")
         if len(set(self.levels)) != len(self.levels) or any(abs(n) > 2000 for n in self.levels):
             raise ValueError("Use distinct level offsets within 2,000 m of the source path")
         return self
@@ -201,7 +231,27 @@ class TowerCover(BaseModel):
     offset: Point = Field(default_factory=lambda: Point(x=0, y=0, z=0))
 
 
+class StageWindow(BaseModel):
+    kit_id: UUID | None = None
+    from_activity_id: UUID | None = None
+    until_activity_id: UUID | None = None
+    until_finish: bool = False
+
+
+class PickLift(BaseModel):
+    activity_id: UUID
+    pickup: Point
+    landing: Point
+    clearance: float = Field(gt=0, le=200)
+    hook_height: float = Field(gt=0, le=200)
+
+
 class SiteItem(BaseModel):
+    stage_window: StageWindow | None = None
+    pick_lifts: list[PickLift] = Field(default_factory=list, max_length=250)
+    construction_mode: str | None = Field(default=None, max_length=32)
+    measured_bearing: bool = False
+    construction_sources: list[str] = Field(default_factory=list, max_length=512)
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     id: UUID
     name: str = Field(min_length=1, max_length=100)
@@ -272,6 +322,11 @@ class SiteItem(BaseModel):
             ordered=sorted(self.motion_actions,key=lambda a:datetime.fromisoformat(a.start.replace('Z','+00:00')))
             if any(datetime.fromisoformat(b.start.replace('Z','+00:00')) < datetime.fromisoformat(a.end.replace('Z','+00:00')) for a,b in zip(ordered,ordered[1:])):
                 raise ValueError('Actions for one actor cannot overlap')
+        if self.pick_lifts:
+            if self.path_motion or self.attachment or self.climbing_formwork or self.work_sequence or (self.load_handling and self.load_handling.events):
+                raise ValueError("Clear the existing motion before adding crane picks")
+            if len({p.activity_id for p in self.pick_lifts}) != len(self.pick_lifts):
+                raise ValueError("A load can have only one pick per activity")
         if self.work_sequence and (self.kind != "asset" or self.asset_part):
             raise ValueError("Work sequences require a complete imported machine")
         if self.work_sequence and (self.climbing_formwork or self.path_motion or self.attachment or (self.load_handling and self.load_handling.events)):
@@ -296,7 +351,8 @@ class SiteItem(BaseModel):
             raise ValueError("Enclosure settings require a fence")
         if self.tower_cover and (self.kind != "asset" or self.asset_part):
             raise ValueError("A tower cover requires a complete imported asset")
-        if self.kind == "fence" and (not self.path_id or len(self.points) < 2):
+        slab_run = self.enclosure and self.enclosure.style == "scaffold" and self.enclosure.scaffold and self.enclosure.scaffold.slabs
+        if self.kind == "fence" and not slab_run and (not self.path_id or len(self.points) < 2):
             raise ValueError("Choose an existing path with at least two points")
         if self.kind in ("shape", "array", "scatter"):
             if not (self.path_id or self.zone_id) or len(self.points) < 2:

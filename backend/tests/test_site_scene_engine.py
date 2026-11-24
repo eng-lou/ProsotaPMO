@@ -49,8 +49,10 @@ class SiteGeometryTests(unittest.TestCase):
         item['path_motion'] = dict(path_id=item['path_id'], start='2026-10-23T00:00:00Z', speed=1.4,
                                   loop=False, orient=True, heading=-90, animation_reference_speed=1.4, bind_origin={'x':23.,'y':-15.,'z':-31.}, progress_keys=[])
         parsed = SiteItem.model_validate(item)
-        self.assertEqual(parsed.model_dump(mode='json')['path_motion'], item['path_motion'])
-        self.assertEqual(evaluate(parsed.model_dump(mode='json'))['path_motion'], item['path_motion'])
+        # Legacy unlinked paths round-trip with an explicit empty activity link.
+        expected = {"activity_id": None, **item["path_motion"]}
+        self.assertEqual(parsed.model_dump(mode='json')['path_motion'], expected)
+        self.assertEqual(evaluate(parsed.model_dump(mode='json'))['path_motion'], expected)
         legacy = {k:v for k,v in item['path_motion'].items() if k != 'bind_origin'}
         self.assertIsNone(SiteItem.model_validate({**item, 'path_motion':legacy}).path_motion.bind_origin)
         for patch in ({'bind_origin': {'x':float('nan'),'y':0,'z':0}}, {'speed': 0}, {'speed': float('nan')}, {'animation_reference_speed': 0}, {'start': 'not-a-date'}):

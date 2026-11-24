@@ -13,13 +13,18 @@ export interface SiteObjectState {
 }
 export interface SitePathKey { date: string; progress: number; interpolation: 'linear' | 'smooth' | 'hold' }
 export interface PathMotion { activity_id?: string | null; bind_origin?: PathPoint | null; path_id: string; start: string; speed: number; loop: boolean; orient: boolean; heading: number; animation_reference_speed: number; progress_keys?: SitePathKey[] }
-export type FenceStyle = 'plain' | 'edge' | 'mesh' | 'hoarding'
+export type FenceStyle = 'plain' | 'edge' | 'mesh' | 'hoarding' | 'street' | 'scaffold'
+import type { PosterTitle, ScaffoldRun } from './enclosureOptions'
+export { defaultScaffold, sitePosterTitles } from './enclosureOptions'
+export type { ScaffoldRun, PosterTitle } from './enclosureOptions'
 export interface FenceOpening {
+  posters?:PosterTitle[]
   kind: 'gap' | 'vehicle' | 'pedestrian' | 'turnstile'
   start: number; width: number; angle: number; board: string; lights: boolean
   pose?: number | null; pose_keys?: {date: string; value: number}[]
 }
 export interface Enclosure {
+  scaffold?:ScaffoldRun|null;barrier_base?:'feet'|'low'|'ballast';reflective?:boolean;blanket?:boolean;blanket_bays?:number[]|null
   style: FenceStyle; openings: FenceOpening[]; levels: number[]; perimeter_lights: boolean
 }
 export interface TowerCover {
@@ -29,6 +34,11 @@ export interface TowerCover {
 export interface SiteItem {
   enclosure?: Enclosure | null
   tower_cover?: TowerCover | null
+  stage_window?: import('./constructionStages').StageWindow | null
+  pick_lifts?: import('./constructionStages').PickLift[]
+  construction_mode?: string | null
+  measured_bearing?: boolean
+  construction_sources?: string[]
   work_sequence?: import("./workSequence").WorkSequence | null
   climbing_formwork?: import("./climbingFormwork").ClimbingFormwork | null
   load_handling?: import("./loadHandling").LoadHandling | null
@@ -56,7 +66,7 @@ export interface SiteItem {
   zone_id?: string | null; curve_mode?: 'straight'|'curved'; panel_fit?: 'fit'|'trim'|'strict'
   tag?: string; finish?: 'default'|'water'|GroundFinish; spacing?: number; count?: number; seed?: number
   placement_kind?: 'tree'|'person'|'context'|'cabin'|'arrow'|'asset'; align_to_path?: boolean; random_rotation?: boolean
-  layout?: { openings?: (FenceOpening & { a: PathPoint; b: PathPoint; level: number })[]; footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
+  layout?: { scaffold_corners?:{id:string;points:PathPoint[]}[]; reference_bays?: import('./slabReferences').ReferenceBay[]; unmatched_edits?:number; openings?: (FenceOpening & { a: PathPoint; b: PathPoint; level: number })[]; footprint?: PathPoint[]; placements?: {position:PathPoint;yaw:number}[]; count?: number; panels?: { rise?:number; lifts?:number; flight_offset?:number; stairs?:boolean; id: string; a: PathPoint; b: PathPoint }[]; length?: number; panel_count?: number; gate_width?: number } | null
 }
 interface SavedEdit { id: string; label: string }
 export interface SiteScene { revision: number; items: SiteItem[]; history?: {past: SavedEdit[]; future: SavedEdit[]} }

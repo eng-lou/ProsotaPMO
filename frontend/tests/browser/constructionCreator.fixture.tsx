@@ -110,9 +110,15 @@ export async function run() {
       const select=await waitFor(()=>host.querySelector<HTMLSelectElement>('section[aria-label$=" creator"] select')||undefined,'mode')
       select.value=mode;select.dispatchEvent(new Event('change',{bubbles:true}))
       await new Promise(r=>setTimeout(r,30))
+      if(mode==='beam'){
+        const previous=source
+        source=bearingSlab
+        ;(await button('Use selected bearing slab(s)')).click()
+        source=previous
+      }
       ;(await button('Preview from selection')).click()
       const create=await button(multipleWalls||cageSelection?'Create at selected elements':'Create at selected element')
-      if(mode==='deck' && !host.textContent?.includes('IFC slab / 2.700 m below soffit')) throw Error('Missing measured support height')
+      if(mode==='deck' && !host.textContent?.includes('Measured bearing slab / 2.700 m below soffit')) throw Error('Missing measured support height')
       if(cageSelection){
         if(!host.textContent?.includes('4 selected hosts') || !host.textContent?.includes('8 construction parts')) throw Error('Missing wall cage selection')
         const getInline=()=>host.querySelector<HTMLCanvasElement>('[aria-label="Wall reinforcement cage preview"] canvas')

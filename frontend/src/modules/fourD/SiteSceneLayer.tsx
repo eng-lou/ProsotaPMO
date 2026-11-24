@@ -15,6 +15,7 @@ import { buildPathCurve } from './pathCurve'
 import type { Path } from './paths'
 import * as THREE from 'three'
 import type { Activity } from '@/modules/scheduling/types'
+import { resolvePicks, samplePick, stageInterval } from './constructionStages'
 import type { SiteItem } from './siteScene'
 import { presentAt } from './siteSceneTime'
 import { restoreSiteObjectState } from './siteObjectTransform'
@@ -109,6 +110,9 @@ function FootprintGeometry({item}:{item:SiteItem}) {
 }
 function Item({ item, state, preview, activity, dateRef, links, activities, profiles, instance = false, instanceIndex }: { instanceIndex?:number; instance?: boolean; item: SiteItem; state: SiteLayerState; preview: boolean; activity?: Activity; dateRef: React.MutableRefObject<Date | null>; links: ModelElementLink[]; activities: Activity[]; profiles: AnimationProfile[] }) {
   const motionRoot = useRef<THREE.Group>(null)
+  const hookRoot=useRef<THREE.Group>(null)
+  const picks=useMemo(()=>{try{return resolvePicks(item.pick_lifts??[],activities)}catch{return []}},[item.pick_lifts,activities])
+  const interval=useMemo(()=>stageInterval(item.stage_window??{},activities),[item.stage_window,activities])
   const motionTime = useRef<number | null>(null)
   const workRows=useMemo(()=>{try{return item.work_sequence?workWindows(item.work_sequence,activities):null}catch{return null}},[item.work_sequence,activities])
   const climbRows=useMemo(()=>{try{return item.climbing_formwork?climbWindows(item.climbing_formwork,activities):null}catch{return null}},[item.climbing_formwork,activities])
@@ -126,13 +130,23 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
     [item.path_motion?.activity_id, fittedMotion, pathActivity?.start, pathActivity?.finish])
   useFrame(() => {
     const parent = motionRoot.current
+    if (hookRoot.current) hookRoot.current.visible=false
     if (!parent) return
     const cue = state.presentationVisible?.('site:' + item.id)
     if (cue === false) { parent.visible = false; return }
     if (selectable.current?.userData.simulatorOwnsPose) { parent.visible = true; return }
     parent.visible = preview || instance || !item.path_motion?.activity_id || (!!fittedMotion && sitePathActivityVisible(fittedMotion, dateRef.current))
     if(selectable.current)delete selectable.current.userData.workSequenceControl
-    if(!preview&&!instance&&item.work_sequence){
+    const time=(state.pathDateRef||dateRef).current?.getTime()??NaN
+    const pose=!preview&&!instance?samplePick(picks,time,item.up_axis):null
+    if(hookRoot.current){
+      hookRoot.current.visible=!!pose?.active && !state.hiddenIds?.has('site:'+item.id) && (!state.isolate||!!state.isolatedIds?.has('site:'+item.id))
+      if(pose)hookRoot.current.position.set(pose.hook.x,pose.hook.y,pose.hook.z)
+    }
+    if(pose){
+      parent.position.set(pose.load.x-item.position.x,pose.load.y-item.position.y,pose.load.z-item.position.z)
+      parent.quaternion.identity();parent.scale.setScalar(1);motionTime.current=null
+    }else if(!preview&&!instance&&item.work_sequence){
       try{if(!workRows)throw Error('Invalid sequence');const config=item.work_sequence,origin={x:item.position.x+config.offset.x,y:item.position.y+config.offset.y,z:item.position.z+config.offset.z};
         const time=(state.pathDateRef||dateRef).current?.getTime()??NaN,sample=sampleWork(config,activities,time,origin,workCurve,workRows);applyWorkPose(parent,sample,origin);motionTime.current=null;
         if(selectable.current&&config.kind==='piling'&&config.tool_control)selectable.current.userData.workSequenceControl={time,control:config.tool_control,value:sample.tool}
@@ -185,7 +199,8 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const visualRows=useMemo(()=>{try{return visualOwner?.work_sequence?workWindows(visualOwner.work_sequence,activities):null}catch{return null}},[visualOwner?.work_sequence,activities])
   const visualPath=state.paths?.find(p=>p.id===visualOwner?.work_sequence?.path_id)
   const visualCurve=useMemo(()=>visualPath?buildPathCurve(visualPath.points,visualPath.closed,visualPath.curve_mode):null,[visualPath])
-  useFrame(()=>{const group=workVisualRoot.current;if(!group)return;group.visible=true;
+  useFrame(()=>{const group=workVisualRoot.current;if(!group)return;const now=(state.pathDateRef||dateRef).current?.getTime();group.visible=!item.stage_window||now==null||(now>=interval.start&&now<interval.end);
+    if(!group.visible)return;
     try{if(!preview&&!instance&&visualOwner?.work_sequence&&visualRows){const v=workVisual(visualOwner.work_sequence,activities,item.id,(state.pathDateRef||dateRef).current?.getTime()??NaN,visualCurve,visualRows);group.visible=v.visible;workClip.apply(group,v.plane)}else workClip.apply(group,null)}catch{workClip.apply(group,null)}
   })
   const rotation = useMemo(() => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), item.up_axis === 'z' ? Math.PI / 2 : 0)
@@ -199,7 +214,11 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
   const ownerMapping = state.materialMapping && materialScope(state.materialMapping, 'site:' + item.id)
   const mapping = ownerMapping && instanceIndex !== undefined ? materialScope(ownerMapping, 'instance:' + instanceIndex) : ownerMapping
   const material = <ShapeMaterial textures={state.customTextures?.["site:"+item.id]} opacity={state.customOpacity?.["site:"+item.id]} item={item} mapping={mapping} transmission={state.glassTransmission} preview={preview} colour={colour} />
-  return <group ref={motionRoot}><group ref={selectable} position={[item.position.x, item.position.y, item.position.z]}
+  return <>{!!item.pick_lifts?.length&&<group ref={hookRoot} visible={false} rotation={[item.up_axis==='z'?Math.PI/2:0,0,0]}>
+    <mesh position={[0,.37,0]}><cylinderGeometry args={[.085,.085,.4,12]}/><meshStandardMaterial color="#db962e"/></mesh>
+    <mesh><torusGeometry args={[.13,.035,8,16,Math.PI*1.65]}/><meshStandardMaterial color="#546171"/></mesh>
+    <mesh position={[0,4.55,0]}><cylinderGeometry args={[.013,.013,8,6]}/><meshStandardMaterial color="#48515c"/></mesh>
+  </group>}<group ref={motionRoot}><group ref={selectable} position={[item.position.x, item.position.y, item.position.z]}
     rotation={[item.rotation?.x || 0, item.rotation?.y || 0, item.rotation?.z || 0]}
     scale={[item.scale?.x ?? 1, item.scale?.y ?? 1, item.scale?.z ?? 1]}
     visible={!registered || (!state.hiddenIds?.has('site:' + item.id) && (!state.isolate || !!state.isolatedIds?.has('site:' + item.id)))}>
@@ -235,7 +254,7 @@ function Item({ item, state, preview, activity, dateRef, links, activities, prof
         </>}
       </group>}
     </group>
-  </group></group></group></group>
+  </group></group></group></group></>
 }
 export function SiteSceneLayer({ state, activities, links, profiles, dateRef, rendering }: { state: SiteLayerState; activities: Activity[]; links: ModelElementLink[]; profiles: AnimationProfile[]; dateRef: React.MutableRefObject<Date | null>; rendering: boolean }) {
   const roots=useRef(new Map<string,THREE.Group>())

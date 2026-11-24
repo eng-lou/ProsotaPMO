@@ -1,13 +1,14 @@
 import * as T from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { gateTrack } from './gatePose'
+import {defaultScaffold,type PosterTitle} from './enclosureOptions'
 import type { FenceOpening, SiteItem } from './siteScene'
 import type { PathPoint } from './paths'
 
 type Pivot = { origin: T.Matrix4; station: number; sign: number; meshes: T.InstancedMesh[]; lastAngle: number }
 type Batch = { pivot?: Pivot; geometry:T.BufferGeometry; material:T.MeshStandardMaterial; matrices:T.Matrix4[]; owners:string[] }
-type Finish = 'paint'|'zinc'|'dark'|'board'|'amber'|'white'
-const finishes: Record<Exclude<Finish,'paint'>, string> = {zinc:'#adbbbc',dark:'#354249',board:'#d6a641',amber:'#ff9b14',white:'#eeeccf'}
+type Finish = 'paint'|'zinc'|'dark'|'board'|'amber'|'white'|'trafficRed'|'blanket'|'net'
+const finishes: Record<Exclude<Finish,'paint'>, string> = {zinc:'#adbbbc',dark:'#354249',board:'#d6a641',amber:'#ff9b14',white:'#eeefed',trafficRed:'#d62e39',blanket:'#213963',net:'#446f62'}
 
 function grille(columns:number, rows:number, wireWidth:number, wireHeight:number) {
   // A complete welded infill is one reusable mesh. Thin rectangular wires have
@@ -35,6 +36,24 @@ function entranceBoard(brand:string, pedestrian:boolean) {
   return new T.MeshStandardMaterial({map:texture,roughness:.84})
 }
 
+function posterMaterial(title:PosterTitle){
+  const canvas=document.createElement('canvas');canvas.width=320;canvas.height=440
+  const c=canvas.getContext('2d')!
+  c.fillStyle='#f8faf4';c.fillRect(0,0,320,440)
+  const color=title==='Fire exit'?'#197844':title==='Site access'?'#b8262e':title==='Site contacts'?'#334b59':'#185c9e'
+  c.fillStyle=color;c.fillRect(10,12,300,62)
+  c.fillStyle='white';c.font='bold 31px Arial';c.textAlign='center';c.fillText('SITE NOTICE',160,55)
+  c.fillStyle=color;c.beginPath();c.arc(160,175,78,0,Math.PI*2);c.fill()
+  c.fillStyle='white';c.font='bold 65px Arial'
+  if(title==='Hearing protection'){
+    c.strokeStyle='white';c.lineWidth=10;c.beginPath();c.arc(160,175,40,Math.PI,2*Math.PI);c.stroke()
+    c.fillRect(115,174,15,38);c.fillRect(190,174,15,38)
+  }else c.fillText(title==='PPE'?'PPE':title==='Fire exit'?'➜':title==='Site contacts'?'i':'!',160,197)
+  c.fillStyle=color;c.fillRect(10,275,300,80);c.fillStyle='white';c.font='bold 29px Arial';c.fillText(title.toUpperCase(),160,325,284)
+  c.fillStyle='#374450';c.font='18px Arial';c.fillText(title==='Site contacts'?'Report to site reception':'Construction site',160,403)
+  const map=new T.CanvasTexture(canvas);map.colorSpace=T.SRGBColorSpace
+  return new T.MeshStandardMaterial({map,roughness:.9})
+}
 export function buildEnclosure(item:SiteItem) {
   const config=item.enclosure!
   const root=new T.Group()
@@ -122,18 +141,86 @@ export function buildEnclosure(item:SiteItem) {
     geometries[key]??=grille(cols,rows,.006/(cols*pitchX),.006/(rows*pitchY))
     part(key,finish,center,(bottom+top)/2,z,w,clearH,.009)
   }
+  function scaffoldBay(span:number,stairs:boolean,rise=item.height,lifts=config.scaffold?.lifts??3,flightOffset=0){
+    const sc=config.scaffold??defaultScaffold,sign=sc.slabs?.length||sc.side==='right'?1:-1,w=sc.width*sign,h=rise
+    const far=w+sign*.90,landing=Math.min(.47,span*.19)
+    for(const x of [.022,span-.022])for(const z of stairs?[0,w,far]:[0,w]){
+      const high=lifts*h+1
+      part('round','zinc',x,high/2,z,.048,high,.048)
+      box('dark',x,.02,z,.16,.04,.16)
+    }
+    for(let level=1;level<=lifts;level++){
+      const y=h*level,y0=y-h,mid=span/2
+      for(const x of [.04,span-.04])box('zinc',x,y-.1,w/2,.055,.07,Math.abs(w)+.09)
+      for(const z of [0,w])box('zinc',mid,y-.13,z,span,.055,.05)
+      const boards=Math.ceil(sc.width/.25)
+      for(let n=0;n<boards;n++)box('board',mid,y-.035,w*(n+.5)/boards,span-.01,.07,sc.width/boards-.008)
+      const forward=(level+flightOffset)%2===1,doorStart=stairs&&!forward?landing:0,doorEnd=stairs&&forward?span-landing:span
+      const railLength=doorEnd-doorStart,railX=(doorStart+doorEnd)/2
+      for(const lift of [.5,1])box('zinc',railX,y+lift,w,railLength,.045,.045)
+      box('board',railX,y+.08,w,railLength,.16,.032)
+      if(sc.netted){
+        const lo=level===1?0:y0+1,hi=y+1
+        // Keep the access landing clear on both sides of each alternating flight.
+        const inset=stairs?landing:0,nw=span-2*inset
+        if(nw>0){geometries.scaffoldNet??=grille(28,30,.009,.009);part('scaffoldNet','net',mid,(lo+hi)/2,w+sign*.035,nw,hi-lo,.012)}
+      }
+      if(!stairs){beam('zinc',0,y0,span,y,w,.044);continue}
+      const start=forward?landing:span-landing,end=forward?span-landing:landing
+      const steps=Math.max(4,Math.ceil(h/.18))
+      const stairZ=(w+far)/2
+      for(let n=1;n<=steps;n++)box('zinc',start+(end-start)*(n-.5)/steps,y0+h*n/steps-.025,stairZ,Math.abs(end-start)/steps+.015,.05,.87)
+      for(const z of [w,far]){
+        beam('zinc',start,y0,end,y,z,.075)
+        beam('zinc',start,y0+.91,end,y+.91,z,.04)
+        for(const f of [.05,.5,.95])box('zinc',start+(end-start)*f,y0+h*f+.45,z,.035,.9,.035)
+      }
+      const endX=forward?span-landing/2:landing/2
+      box('zinc',endX,y-.035,stairZ,landing,.07,.90)
+      box('zinc',endX,y+.98,far,landing,.04,.04)
+      box('zinc',forward?span:0,y+.98,stairZ,.04,.04,.90)
+    }
+  }
+  function roadBase(span:number,index:number){
+    const blocks=Math.max(1,Math.round(span/1.6)),w=span/blocks
+    const low=config.barrier_base==='low'
+    for(let n=0;n<blocks;n++){
+      const x=(n+.5)*w,color=(index*blocks+n)%2?'white':'trafficRed'
+      const key=low?'barrierFoot':'ballast'
+      if(!geometries[key]){
+        const outline=new T.Shape()
+        outline.moveTo(-.5,0);outline.lineTo(.5,0);outline.lineTo(.48,.20);outline.lineTo(.25,.68);outline.lineTo(.23,1);outline.lineTo(-.23,1);outline.lineTo(-.25,.68);outline.lineTo(-.48,.20);outline.closePath()
+        geometries[key]=new T.ExtrudeGeometry(outline,{depth:1,bevelEnabled:false}).translate(0,0,-.5).rotateY(Math.PI/2)
+      }
+      part(key,color,x,0,0,w-.015,low?.28:.52,low?.48:.6)
+    }
+  }
   const height=item.height
   for(const [index,panel] of (item.layout?.panels??[]).entries()) {
     owner=panel.id
     const span=frame(panel.a,panel.b),mid=span/2
+    if(config.style==='scaffold'){scaffoldBay(span,!!panel.stairs,panel.rise,panel.lifts,panel.flight_offset);continue}
     if(config.style==='plain') {
       box('paint',mid,height/2,0,span,height,.08)
       continue
     }
-    const edge=config.style==='edge', mesh=config.style==='mesh'
+    const edge=config.style==='edge', mesh=config.style==='mesh'||config.style==='street'
     // Inset each edge-protection shoe. Both ends of an interrupted run stay supported.
     const inset=edge?Math.min(.105,span*.22):0
     support(inset,height+.035,edge,mesh);support(span-inset,height+.035,edge,mesh)
+    if(mesh){
+      if(config.barrier_base==='low'||config.barrier_base==='ballast')roadBase(span,index)
+      if(config.reflective){const count=Math.max(2,Math.round(span/.30));for(let n=0;n<count;n++)box(n%2?'white':'trafficRed',(n+.5)*span/count,height*.55,.057,span/count,.145,.012)}
+      if(config.blanket && (!config.blanket_bays||config.blanket_bays.includes(index+1))){
+        if(!geometries.blanket){
+          const g=new T.PlaneGeometry(1,1,24,12),p=g.getAttribute('position')
+          for(let n=0;n<p.count;n++){const x=p.getX(n),y=p.getY(n),s=Math.sin(Math.PI*(x+.5));p.setXYZ(n,x,y-.042*s*(.5+y),.04*s*Math.cos(15*x+2*y))}
+          g.computeVertexNormals();geometries.blanket=g;materials.get('blanket')!.side=T.DoubleSide
+        }
+        part('blanket','blanket',mid,height*.55,-.045,Math.max(.01,span-.12),height*.82,1)
+        for(const x of [.09,mid,span-.09])box('zinc',x,height*.95,-.027,.018,.11,.018)
+      }
+    }
     if(config.style==='hoarding') {
       const width=Math.max(.001,span-.012)
       box('paint',mid,height/2,0,width,height,.055)
@@ -167,6 +254,24 @@ export function buildEnclosure(item:SiteItem) {
     const h=width*448/768
     box('white',x,y,z,width+.02,h+.02,.028)
     part('face',key,x,y,z+.015,width,h,1)
+  }
+  for(const corner of item.layout?.scaffold_corners??[]){
+    const [p,q,r,s]=corner.points
+    owner=corner.id
+    frame(p,q)
+    const inverse=basis.clone().invert()
+    const corners=[p,q,r,s].map(v=>point(v).applyMatrix4(inverse))
+    const key='corner'+corners.flatMap(v=>[v.x.toFixed(4),v.z.toFixed(4)]).join('/')
+    if(!geometries[key]){
+      const shape=new T.Shape(corners.map(v=>new T.Vector2(v.x,-v.z)))
+      geometries[key]=new T.ExtrudeGeometry(shape,{depth:.07,bevelEnabled:false}).rotateX(-Math.PI/2)
+    }
+    part(key,'board',0,-.07,0,1,1,1)
+    for(const [a,b] of [[q,r],[r,s]]){
+      const length=frame(a,b)
+      for(const h of [.5,1])box('zinc',length/2,h,0,length,.045,.045)
+      box('board',length/2,.08,0,length,.16,.032)
+    }
   }
   for(const gate of item.layout?.openings??[]) {
     if(gate.kind==='gap')continue
@@ -208,7 +313,14 @@ export function buildEnclosure(item:SiteItem) {
           box('paint',centre,.83,.015,width-.085,1.28,.035)
           box('zinc',centre,1.48,.028,width-.075,.028,.045)
         }
-        if(i===0)addEntranceBoard(gate.board,leaves===1,centre,1.3,.078,Math.min(width*.83,1.15))
+        const posters=gate.kind==='pedestrian'?gate.posters??[]:[]
+        if(i===0)addEntranceBoard(gate.board,leaves===1,centre,posters.length?top-.26:1.3,.078,Math.min(width*.83,posters.length?.5:1.15))
+        posters.forEach((title,n)=>{
+          const key='poster '+title
+          if(!materials.has(key)){const m=posterMaterial(title);materials.set(key,m);boardMaps.add(m.map!)}
+          const w=Math.min(.3,width*.41),h=w*1.375,x=centre+(n%2-.5)*(w+.025),y=1.45-Math.floor(n/2)*(h+.025)
+          box('white',x,y,.07,w+.012,h+.012,.016);part('face',key,x,y,.081,w,h,1)
+        })
         beam('zinc',0,.20,sign*width,top-.15,-.032,.034)
         for(const h of [.34,top-.34])part('round','zinc',0,h,0,.071,.12,.071)
         box('zinc',sign*(width-.12),.99,.048,.16,.025,.045)

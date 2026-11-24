@@ -16,6 +16,16 @@ Updated: 19 October 2026. Source: [product review](PRODUCT_REVIEW_2026-10-19.md)
 | FIX-06 | Medium | Index assigned resources | Implemented locally | Set membership replaces a resource-by-assignment scan. Previous equivalence check used 2,000 resources and 30,000 assignments. No changes to resource spread calculations. |
 | FIX-07 | High | Run frontend regression checks in CI | Implemented locally | `npm test` and the production build are in CI. Signed-download test transport repaired. Local frontend suite: 103 passed, 2 optional real-IFC fixtures skipped. Remote CI has not run for these unpushed changes. |
 
+## Construction simulation · 24 November 2026
+
+| Tool | Local implementation | Desktop acceptance |
+| --- | --- | --- |
+| Perimeter scaffold | Capture slab outlines at multiple elevations. Set the base, review bays by level and add stairs, openings and netting. | Try a typical floor, a setback, an overhang and a lower slab with an opening. Check that unsupported bays are shown in plan and excluded from the scaffold. |
+| Formwork and reuse | Fit decks and props to successive selected slabs. Fit screen shoes to both slab edges. Transfer a kit between fitted layouts and optionally hold backprops. | Check the actual tripod feet at a floor edge. Check that changing a lower slab or edge changes the receiving layout when regenerated. |
+| Floor cycles and sequence review | Repeat an authored WBS with internal relationships, optional floor handovers and matching IFC hosts. Inspect material and support-timing conflicts. | Repeat a floor with an opening change. Review unmatched hosts and scrub across the handover. |
+| Pour zones and foundation phases | Split a slab at a two-point path. Generate excavation, blinding, concrete and backfill from selected foundations. | Assign separate activities and inspect visibility before and after each pour or cut. |
+| Crane deliveries and site enclosure | Animate a hook and load between pickup and landing. Fit acoustic blankets, barrier bases and signed pedestrian gates to a fence run. | Scrub a delivery in both directions, then swing the signed gate and check the posters stay attached. |
+
 ## Next improvements
 
 Effort is relative: small is a focused UI change; medium spans several modules/services; large requires data lifecycle or integration design.

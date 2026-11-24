@@ -86,6 +86,10 @@ def enclosure_path(item):
 
 
 def fence_layout(item):
+    config = item.get("enclosure") or {}
+    if config.get("style") == "scaffold" and (config.get("scaffold") or {}).get("slabs"):
+        from app.services.slab_scaffold import slab_scaffold_layout
+        return slab_scaffold_layout(item)
     item = normalized_fence_path(item)
     if item.get("enclosure"):
         points, curved_edges = enclosure_path(item)
@@ -197,6 +201,19 @@ def fence_layout(item):
                     if level:
                         panel_id += f"@{level}"
                     panels.append({"id": panel_id, "a": at(station, level), "b": at(min(end, station + step), level)})
+    if config and config.get("style") == "scaffold":
+        scaffold = config.get("scaffold") or {}
+        if len(panels) * scaffold.get("lifts", 3) > 6000:
+            raise ValueError("Split this scaffold run into smaller sections.")
+        for station in scaffold.get("stairs", []):
+            bay = next((panel for panel in panels if
+                (start := float(panel["id"].split(":panel:")[-1])) <= station <
+                start + math.dist(tuple(panel["a"][k] for k in "xyz"),tuple(panel["b"][k] for k in "xyz")) - 1e-7), None)
+            if bay is None or bay.get("stairs"):
+                raise ValueError("Place each stair in a separate scaffold bay clear of openings.")
+            if math.dist(tuple(bay["a"][k] for k in "xyz"),tuple(bay["b"][k] for k in "xyz")) < 1.8:
+                raise ValueError("Choose a stair bay at least 1.8 m long.")
+            bay["stairs"] = True
     layout = {"panels": panels, "length": chainage, "panel_count": len(panels),
               "gate_width": sum(cut["width"] for cut in openings)}
     if config:

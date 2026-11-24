@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { captureSlabReferences } from './slabReferences'
 import { ConstructionPreviewView } from './ConstructionPreviewView'
 import { constructionModes, type ConstructionMode, type ConstructionOptions } from './constructionGeometry'
 import { constructionPlacements, prepareConstruction, releaseConstruction, type ConstructionPreview, type HostSource } from './constructionLayout'
@@ -13,6 +14,8 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
   state:ReturnType<typeof useSiteScene>; onSelect(ids:string[]):void; onPlan(ids:string[],mode:ConstructionMode):void; onClose():void
 }){
   const [mode,setMode]=useState<ConstructionMode>(modes[kind][0])
+  const [stackHosts,setStackHosts]=useState<HostSource[]>([])
+  const [supports,setSupports]=useState<HostSource[]>([])
   const [spacing,setSpacing]=useState('200'),[diameter,setDiameter]=useState('16'),[cover,setCover]=useState('35')
   const [clearance,setClearance]=useState(''),[propSpacing,setPropSpacing]=useState('1.9')
   const [panelWidth,setPanelWidth]=useState('1.2')
@@ -45,14 +48,14 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
         panelWidth:mode==='wallForm'?value(panelWidth,.4,3,'Max wall panel width (m)'):undefined,braceSide,
         diameter:rebar?value(diameter,4,60,'Bar diameter (mm)')/1000:.016,
         cover:rebar?value(cover,5,250,'Cover (mm)')/1000:.035,
-        autoClearance:!clearance.trim(),
+        autoClearance:!clearance.trim(),requireBearing:!clearance.trim(),
         clearance:supported&&clearance.trim()?value(clearance,.75,10,'Soffit height (m)'):3.424,
         screenHeight:mode==='screen'?value(screenHeight,2.5,18,'Screen height (m)'):7.2,
         bayWidth:mode==='screen'?value(bayWidth,.4,6,'Bay width (m)'):2.4,doubleMat}
       const skipEdges=mode==='screen'&&skip.trim()?skip.split(',').map(s=>Number(s.trim())):[]
       if(skipEdges.some(n=>!Number.isInteger(n)||n<1))throw Error('Enter exterior edge numbers separated by commas.')
-      const sources=selectedSources()
-      const result=await prepareConstruction(sources,upAxis,options,skipEdges)
+      const sources=(mode==='deck'||mode==='screen')&&stackHosts.length?stackHosts:selectedSources()
+      const result=await prepareConstruction(sources,upAxis,options,skipEdges,supported||mode==='screen'&&stackHosts.length?supports:[])
       if(alive.current){prepared.current=result;setPreview(result)}else releaseConstruction(result.scene)
     }catch(e){if(alive.current)setError(siteError(e))}
     finally{pending.current=false;if(alive.current)setBusy(false)}
@@ -79,7 +82,15 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     <fieldset disabled={busy||state.busy} className="space-y-2 min-w-0">
       <label>Generate<select className={field} value={mode} onChange={e=>{clear();setMode(e.target.value as ConstructionMode)}}>{modes[kind].map(m=><option key={m} value={m}>{constructionModes[m]}</option>)}</select></label>
       <p>Select {host} in the viewport. Ctrl/Cmd-click to add more.</p>
-      {supported&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance,'Auto (IFC) / 3.424')}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
+      {(supported||mode==='screen')&&<div>{supported&&<button className={button} onClick={()=>{try{const picked=selectedSources();if(!picked.length||picked.some(s=>s.ifcType&&!/slab/i.test(s.ifcType)))throw Error('Pick the supporting floor slab first.');clear();setStackHosts([]);setSupports(picked)}catch(e){setError(siteError(e))}}}>Use selected bearing slab(s)</button>}
+        {(mode==='deck'||mode==='screen')&&<button className={button} onClick={()=>{try{
+          const picked=selectedSources(),refs=captureSlabReferences(picked,upAxis),base=Math.min(...refs.map(r=>r.elevation))
+          const hosts=picked.filter((_,i)=>refs[i].elevation>base+.001)
+          if(!hosts.length)throw Error('Select the base slab and slabs on at least one upper level.')
+          clear();setSupports(picked);setStackHosts(hosts)
+        }catch(e){setError(siteError(e))}}}>Use selected slab stack</button>}
+        {supports.length>0&&<p>{stackHosts.length&&(mode==='deck'||mode==='screen')?stackHosts.length+' upper slab(s). Lowest level used for bearing only.':supports.length+' bearing reference(s). Select the upper host next.'} <button onClick={()=>{clear();setStackHosts([]);setSupports([])}}>Clear</button></p>}</div>}
+      {supported&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance,'Auto from bearing slab')}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
       {mode==='wallForm'&&<div className="grid grid-cols-2 gap-2">
         {number('Max wall panel width (m)',panelWidth,setPanelWidth)}
         <label>Brace placement<select className={field} value={braceSide} onChange={e=>{clear();setBraceSide(e.target.value as typeof braceSide)}}>

@@ -12,7 +12,7 @@ const taskSets = {
   groundBeam:['Set out ground beams','Install beam side shutters and stops','Strip ground beam shutters'],
   beam:['Install beam props and soffit','Erect beam side shutters','Strip beam sides','Strike beam soffit and props'],
   corePlain:['Climb core formwork','Fix core wall reinforcement','Close core wall forms','Pour core walls','Strip core wall forms'],
-  ground:['Excavate selected ground volumes','Place foundations','Backfill excavations'],
+  ground:['Excavate selected ground volumes','Place foundation blinding','Place foundations','Backfill excavations'],
   shutter: ['Deliver column shutters', 'Erect and brace column shutters', 'Pour columns', 'Strip column shutters'],
   wallForm: ['Deliver wall formwork panels', 'Erect and brace first wall face', 'Fix wall reinforcement',
     'Fit stop ends and opening forms', 'Close opposite wall face and install ties', 'Pour wall concrete', 'Strip wall formwork'],

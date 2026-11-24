@@ -34,13 +34,28 @@ def signature_opening(opening):
             if not (key == "pose" and value is None or key == "pose_keys" and not value)}
 
 
+def construction_signature(item):
+    """Preserve pending command identities across the construction-tools release."""
+    def omit_defaults(value, defaults):
+        return {k:v for k,v in value.items() if k not in defaults or v != defaults[k]}
+    item = omit_defaults(item, dict(stage_window=None, pick_lifts=[], construction_mode=None,
+                                    construction_sources=[], measured_bearing=False))
+    if item.get("enclosure"):
+        enclosure = omit_defaults(item["enclosure"], dict(scaffold=None, barrier_base="feet",
+                                  blanket=False, reflective=False, blanket_bays=None))
+        enclosure["openings"] = [omit_defaults(gate, {"posters":[]}) for gate in enclosure["openings"]]
+        item["enclosure"] = enclosure
+    return item
+
+
 async def previously_saved_scene(db, project_id, revision, items, signature_data):
     receipts = select(SiteSceneCommand).where(SiteSceneCommand.project_id == project_id)
-    hashes = {fingerprint(items)}
+    previous = [construction_signature(item) for item in items]
+    hashes = {fingerprint(items), fingerprint(previous)}
     # Receipts saved before gate poses did not include empty pose fields.
     if any(item.get("enclosure") for item in items):
         legacy = []
-        for item in items:
+        for item in previous:
             enclosure = item.get("enclosure")
             if enclosure:
                 openings = [signature_opening(gate) for gate in enclosure["openings"]]
@@ -101,6 +116,13 @@ async def validate_item(db, project_id, item, references=None, *, restore_layout
             raise HTTPException(422, "Choose an activity in this project")
         if not activity.start or not activity.finish:
             raise HTTPException(422, "The linked activity needs start and finish dates")
+    stage_refs = {pick.activity_id for pick in item.pick_lifts}
+    if item.stage_window:
+        stage_refs.update(ref for ref in (item.stage_window.from_activity_id, item.stage_window.until_activity_id) if ref)
+    for ref in stage_refs:
+        activity = await lookup(Activity, ref)
+        if not activity or activity.project_id != project_id or not activity.start or not activity.finish:
+            raise HTTPException(422, "Choose dated construction activities in this project")
     if item.path_motion:
         motion_path = await lookup(Path, item.path_motion.path_id)
         if not motion_path or motion_path.project_id != project_id or len(motion_path.points) < 2:
@@ -149,6 +171,7 @@ async def commit(project_id: UUID, data: SceneEdit, db: AsyncSession = Depends(g
     if signature_data["label"] is None:
         del signature_data["label"]
     # A retry sent across this release must match its pre-enclosure command.
+    signature_data["items"] = [construction_signature(item) for item in signature_data["items"]]
     for recipe in signature_data["items"]:
         if recipe.get("enclosure"):
             enclosure = recipe["enclosure"]

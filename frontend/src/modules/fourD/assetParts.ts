@@ -68,7 +68,8 @@ export function splitSiteAsset(item:SiteItem,root:THREE.Object3D,mode:'groups'|'
     const anchor=new THREE.Vector3((bounds.min.x+bounds.max.x)/2,bounds.min.y,(bounds.min.z+bounds.max.z)/2)
     const transform=new THREE.Matrix4().makeScale(1/size.x,1/size.y,1/size.z).multiply(new THREE.Matrix4().makeTranslation(-anchor.x,-anchor.y,-anchor.z)).multiply(placement)
     const position=anchor.applyMatrix4(toWorld)
-    return {...item,id:crypto.randomUUID(),name:part.name.slice(0,100),assembly_id:item.id,assembly_name:item.name,
+    const hostRef=assetPartNode(root,part.path).userData.constructionHost
+    return {...item,...(typeof hostRef==='string'?{construction_sources:[hostRef]}:{}),id:crypto.randomUUID(),name:part.name.slice(0,100),assembly_id:item.id,assembly_name:item.name,
       asset_part:{path:part.path,transform:transform.toArray(),own_mesh:mode==='meshes'},position:{x:position.x,y:position.y,z:position.z},
       width:size.x,height:size.y,depth:size.z,yaw:0,rotation:{x:0,y:0,z:0},scale:{x:1,y:1,z:1},object_state:null,
       activity_id:null,path_motion:null,animation_playing:false,rig_disabled:true,operation_inputs:index===0?item.operation_inputs||[]:[],instance_overrides:{}}

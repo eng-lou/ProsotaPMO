@@ -25,6 +25,8 @@ import { recipe, siteError, type SiteItem, type useSiteScene } from './siteScene
 import { SiteAnimationControls } from './SiteAnimationControls'
 import { WorkerActionsPanel } from './WorkerActionsPanel'
 import type { TimelineFormat } from './TimelinePointInput'
+import { captureSlabReferences } from './slabReferences'
+import { defaultScaffold } from './enclosureOptions'
 import { FenceSettings, TowerCoverSettings, fencePresets } from './EnclosureSettings'
 import { SiteToolSection } from './SiteToolSection'
 import { SiteObjectList } from './SiteObjectList'
@@ -32,6 +34,8 @@ import { removeSitePlacements, type SiteSelectionMode } from './siteObjectSelect
 import type { ConstructionTemplate } from './constructionActivities'
 import { ConstructionCreator, type CreatorKind } from './ConstructionCreator'
 import { GroundFromObjectsPanel } from './GroundFromObjectsPanel'
+import { PourZonesPanel } from './PourZonesPanel'
+import { KitAndLiftPanel } from './KitAndLiftPanel'
 import { CoreRigTemplate } from './CoreRigTemplate'
 import { SiteAssetLibrary } from './SiteAssetLibrary'
 import { useSiteAssetInventory, importSiteAsset, type SiteAsset } from './siteAssets'
@@ -53,7 +57,8 @@ const presets: Record<Exclude<SiteItem['kind'], 'asset'|'geographic'>, { name: s
   person: { name: 'Static person', width: .5, depth: .3, height: 1.75, color: '#f59e0b' },
   arrow: { name: 'Road arrow', width: 1, depth: 2.5, height: .02, color: '#ffffff' },
 }
-export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timelineFormat, timelineDateRef, onSeek, onEditAttachment, selectedShapeSources, readPileBounds, hideShapeSources, importRequest, projectId, paths, zones, sceneSources, activities, riggedIds, extractionBlocks, onGenerateSchedule, upAxis, state, openPaths, focusSite, selectedObjectIds, onPickItems, links, profiles, onLink, onUnlink, onAssignProfile, linkError }: {
+export function SiteToolsPanel({ floorTools, sceneLightsEnabled, enableSceneLights, timelineFormat, timelineDateRef, onSeek, onEditAttachment, selectedShapeSources, readPileBounds, hideShapeSources, importRequest, projectId, paths, zones, sceneSources, activities, riggedIds, extractionBlocks, onGenerateSchedule, upAxis, state, openPaths, focusSite, selectedObjectIds, onPickItems, links, profiles, onLink, onUnlink, onAssignProfile, linkError }: {
+  floorTools?: React.ReactNode
   sceneLightsEnabled: boolean; enableSceneLights(): void
   timelineFormat?: TimelineFormat
   timelineDateRef?: React.MutableRefObject<Date|null>
@@ -85,10 +90,11 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   const inventory = useSiteAssetInventory(projectId)
   const [libraryFilter,setLibraryFilter] = useState('')
   useEffect(()=>{if(importRequest){setLibrary(true);setLibraryFilter('')}},[importRequest])
+  const [bayReview,setBayReview]=useState<SiteItem|null>(null)
   const generation = useRef(0)
   const sequence = useRef<AbortController | null>(null)
   const { scene, draft, setDraft, selected, setSelected, save, busy, error, setError } = state
-  function cancel() { setCreator(null); setPlaceAsParts(false); generation.current++; sequence.current?.abort(); setEdit(null); setDraft(null); state.setPlacing(false); setPreviewing(false); setError('') }
+  function cancel() { setBayReview(null); setCreator(null); setPlaceAsParts(false); generation.current++; sequence.current?.abort(); setEdit(null); setDraft(null); state.setPlacing(false); setPreviewing(false); setError('') }
   useEffect(() => () => { generation.current++; sequence.current?.abort(); setDraft(null); state.setPlacing(false) }, [])
   useEffect(() => {
     if (!state.placement || !edit) return
@@ -102,6 +108,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key)
   })
   function change(patch: Partial<SiteItem>) {
+    if(!edit?.enclosure?.scaffold?.slabs?.length && patch.enclosure?.scaffold?.slabs?.length)setConfirmed(true)
     if (edit?.kind === 'light') {
       const next = { ...edit, ...patch }
       setEdit(next); setDraft(next); setError('')
@@ -132,6 +139,21 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     const item = makeShape(kind)
     if (kind === 'light') { setConfirmed(true); setDraft(item); state.setPlacing(true) }
     setEdit(item)
+  }
+  function startSlabScaffold(){
+    cancel()
+    const item=makeShape('fence')
+    const {label,...preset}=fencePresets.scaffold
+    const scaffold={...defaultScaffold}
+    try{
+      const selected=selectedShapeSources('construction')
+      if(selected.length){
+        scaffold.slabs=captureSlabReferences(selected,upAxis)
+        scaffold.base_elevation=Math.min(...scaffold.slabs.map(s=>s.elevation))
+      }
+    }catch(e){setError(siteError(e))}
+    focusSite();setSelected(null);setConfirmed(true)
+    setEdit({...item,...preset,name:label,enclosure:{...item.enclosure!,style:'scaffold',scaffold}})
   }
   function switchPathLayout(kind: 'fence'|'array') {
     if (!edit || (edit.kind !== 'fence' && edit.kind !== 'array') || edit.kind === kind) return
@@ -186,7 +208,9 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
   async function preview(candidate?: SiteItem) {
     if (!(candidate || edit) || !confirmed) return
     const value = recipe(candidate || edit!)
-    if (['fence','shape','array','scatter'].includes(value.kind)) {
+    const slabRun=value.enclosure?.style==='scaffold'&&value.enclosure.scaffold?.slabs?.length
+    if(slabRun){value.path_id=null;value.points=[];value.closed=false}
+    if (!slabRun && ['fence','shape','array','scatter'].includes(value.kind)) {
       if(value.zone_id) {
         const zone=zones.find(z=>z.id===value.zone_id)
         if(!zone){setError('Choose a zone first');return}
@@ -203,10 +227,18 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
     sequence.current?.abort(); sequence.current = new AbortController(); setPreviewing(true); setDraft(null); setError('')
     try {
       const { data } = await api.post<SiteItem>(`/api/v1/site-scenes/${projectId}/preview`, value, { signal: sequence.current.signal })
-      if (generation.current === version) { setDraft(data); setEdit(recipe(data)) }
+      if (generation.current === version) { setDraft(data); setEdit(recipe(data)); setBayReview(data) }
     } catch (error) { if (generation.current === version) setError(siteError(error)) }
     finally { if (generation.current === version) setPreviewing(false) }
   }
+  // A changed slab or bay invalidates every floor above. Refresh the complete draft
+  // after the user finishes an edit, and ignore superseded requests in preview().
+  const slabScaffold=edit?.enclosure?.style==='scaffold'&&!!edit.enclosure.scaffold?.slabs?.length
+  useEffect(()=>{
+    if(!slabScaffold||!confirmed||!edit||draft)return
+    const timer=window.setTimeout(()=>void preview(edit),300)
+    return ()=>window.clearTimeout(timer)
+  },[edit,confirmed,slabScaffold])
   async function commit() {
     if (!draft || state.placing) return
     setCapturing(true)
@@ -259,15 +291,19 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
         <button key={kind} className={button} disabled={!state.ready || busy} onClick={() => startLayout(kind)}>
           + {kind === 'fence' ? 'Fence / objects along path' : presets[kind].name}
         </button>)}
+      <button className={button} disabled={!state.ready || busy} onClick={startSlabScaffold}>+ Scaffold from slabs</button>
       {(['Formwork','Reinforcement'] as const).map(kind=><button key={kind} className={button} disabled={!state.ready || busy}
         onClick={()=>setCreator(kind)}>+ {kind} creator</button>)}
       <button className={button} onClick={()=>onGenerateSchedule([],'cycle')}>Add simulation activities…</button>
     </div>}
+    {!library && !edit && !creator && floorTools}
+    {!library && !edit && !creator && <PourZonesPanel projectId={projectId} axis={upAxis} paths={paths} activities={activities} state={state} openPaths={openPaths} selection={()=>selectedShapeSources('construction')} hideSources={hideShapeSources} onSelect={ids=>onPickItems(ids,'replace')}/>}
+    {!library && !edit && !creator && <KitAndLiftPanel state={state} activities={activities} axis={upAxis} selected={()=>selectedShapeSources('construction')}/>}
     {!library && !edit && !creator && <CoreRigTemplate projectId={projectId} inventory={inventory}
       selection={{sources:()=>selectedShapeSources('construction'),activities,axis:upAxis}}
       onPlace={(asset,fit)=>placeAsset(asset,false,true,fit)}/>}
     {!library && !edit && creator && <ConstructionCreator key={projectId+creator+upAxis} kind={creator} projectId={projectId} upAxis={upAxis} state={state} selectedSources={()=>selectedShapeSources('construction')} onSelect={ids=>onPickItems(ids,'replace')} onPlan={onGenerateSchedule} onClose={()=>setCreator(null)}/>}
-    {!library && !edit && !creator && <GroundFromObjectsPanel key={projectId+upAxis} projectId={projectId} axis={upAxis} state={state}
+    {!library && !edit && !creator && <GroundFromObjectsPanel activities={activities} key={projectId+upAxis} projectId={projectId} axis={upAxis} state={state}
       selection={()=>selectedShapeSources('construction')} hideSources={hideShapeSources}
       onSelect={ids=>onPickItems(ids,'replace')} onPlan={ids=>onGenerateSchedule(ids,'ground')}/>}
     {!edit && !creator && <ShapeOperationsPanel projectId={projectId} upAxis={upAxis} sources={sceneSources.filter(s=>!scene.items.some(i=>i.kind==='geographic'&&s.id==='site:'+i.id))} state={state} selectedSources={shapeSources} hideSources={hideShapeSources}/> }
@@ -280,10 +316,10 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
         </select></label>}
       <label>Name<input className={input} value={edit.name} onChange={e => change({ name: e.target.value })} /></label>
       {edit.kind==='geographic' && edit.geographic ? <GeographicEditor data={edit.geographic} onChange={geographic=>change({geographic})}/> : ['fence','shape','array','scatter'].includes(edit.kind) ? <>
-        <label>Source path<select className={input} value={edit.path_id || ''} onChange={e => change({ path_id: e.target.value || null, zone_id:null })}><option value="">Choose path…</option>{paths.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        {!(edit.enclosure?.style==='scaffold'&&edit.enclosure.scaffold?.slabs?.length)&&<><label>Source path<select className={input} value={edit.path_id || ''} onChange={e => change({ path_id: e.target.value || null, zone_id:null })}><option value="">Choose path…</option>{paths.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
         {edit.kind!=='fence' && <label>Or source zone<select className={input} value={edit.zone_id || ''} onChange={e=>change({zone_id:e.target.value || null,path_id:null})}><option value="">Choose zone…</option>{zones.map(z=><option key={z.id} value={z.id}>{z.name}</option>)}</select></label>}
         <button className={button} onClick={openPaths}>Draw / edit a path</button>
-        <p>Follows the source geometry. Edit its points, then Preview and Save to regenerate. Saved geometry is retained if the source is hidden or removed.</p>
+        <p>Follows the source geometry. Edit its points, then Preview and Save to regenerate. Saved geometry is retained if the source is hidden or removed.</p></> }
         <label>Tag<input className={input} value={edit.tag || ''} onChange={e=>change({tag:e.target.value})} placeholder="Water, landscaping, access…" /></label>
         {edit.kind==='shape' && <><p>Close a path or choose a zone to create a solid footprint.</p>{number('Height / thickness (m)','height')}<label>Surface<select className={input} value={edit.finish || 'default'} onChange={e=>change({finish:e.target.value as SiteItem['finish']})}><option value="default">Standard · edit in Materials</option><option value="water">Animated water</option><optgroup label="Temporary ground">{GROUND_FINISHES.map(f=><option key={f} value={f}>{REALISTIC_CLASS_LABELS[f]}</option>)}</optgroup></select></label></>}
         {(edit.kind==='array'||edit.kind==='scatter') && <>
@@ -303,7 +339,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
           {edit.kind==='scatter'?<>{number('Object count','count')}{number('Random seed','seed')}<label><input type="checkbox" checked={edit.random_rotation!==false} onChange={e=>change({random_rotation:e.target.checked})} /> Random rotation</label></>:<label><input type="checkbox" checked={edit.align_to_path!==false} onChange={e=>change({align_to_path:e.target.checked})} /> Align to path</label>}
           <div className="grid grid-cols-2 gap-2">{number('Width (m)','width')}{number('Depth (m)','depth')}{number('Height (m)','height')}{number('Heading offset (°)','yaw')}</div>
         </>}
-        {edit.kind==='fence' && <FenceSettings item={edit} change={change}/>}
+        {edit.kind==='fence' && <FenceSettings item={edit} change={change} selection={()=>selectedShapeSources('construction')} layout={bayReview?.id===edit.id?bayReview.layout:scene.items.find(i=>i.id===edit.id)?.layout}/>}
       </> : <>
         <button className={`${button} w-full bg-blue-600 text-white`} disabled={!confirmed || busy} onClick={beginPlacement}>{state.placing ? 'Click a surface to place' : 'Place in viewport'}</button>
         {state.placing && <p className="rounded bg-blue-50 text-blue-800 p-2">Move to preview · click to position · right-drag to navigate · Esc to cancel</p>}
@@ -319,7 +355,7 @@ export function SiteToolsPanel({ sceneLightsEnabled, enableSceneLights, timeline
       {edit.kind !== 'light' && edit.kind !== 'asset' && edit.kind !== 'geographic' && <label className="flex items-center gap-2">Colour<input type="color" value={edit.color} onChange={e => change({ color: e.target.value })} /></label>}
       {edit.activity_id && <label>Previous visibility setting<select className={input} value={edit.activity_id} onChange={e => change({ activity_id: e.target.value || null })}><option value="">Clear setting</option>{activities.filter(a => a.start && a.finish).map(a => <option value={a.id} key={a.id}>{a.code} · {a.task_name}</option>)}</select><span className="block">Activity links and profiles take precedence.</span></label>}
       {edit.kind !== 'light' && <label className="flex gap-2"><input type="checkbox" checked={confirmed} onChange={e => { generation.current++; sequence.current?.abort(); setPreviewing(false); setConfirmed(e.target.checked); setDraft(null); state.setPlacing(false) }} />Model coordinates are in metres</label>}
-      <div className="flex gap-2">{edit.kind !== 'light' && <button className={button} disabled={!confirmed || busy || previewing || capturing || state.placing} onClick={() => void preview()}>{previewing ? 'Preparing…' : 'Preview'}</button>}<button className={`${button} bg-blue-600 text-white`} disabled={!draft || busy || state.placing || previewing || capturing} onClick={() => void commit()}>Save</button><button className={button} disabled={busy} onClick={cancel}>Cancel</button></div>
+      <div className="flex gap-2">{edit.kind !== 'light' && <button className={button} disabled={!confirmed || busy || previewing || capturing || state.placing} onClick={() => void preview()}>{previewing ? 'Preparing…' : 'Preview'}</button>}<button className={`${button} bg-blue-600 text-white`} disabled={!draft || !!draft.layout?.reference_bays&&!draft.layout.panel_count || busy || state.placing || previewing || capturing} onClick={() => void commit()}>Save</button><button className={button} disabled={busy} onClick={cancel}>Cancel</button></div>
       {draft?.layout?.panels && <p>{draft.layout.panel_count} panels · {draft.layout.length?.toFixed(2)} m run · {draft.layout.gate_width?.toFixed(2)} m openings per level</p>}
     </div>}
     {draft?.layout?.placements && <p>{draft.layout.count} objects prepared</p>}

@@ -33,7 +33,8 @@ export async function run(){
   const viewport=document.createElement('div');viewport.style.cssText='width:320px;height:240px';document.body.append(viewport)
   const live=createRoot(viewport)
   let item=example('edge',[0,2.4,6.8],2.4,[],[0,3])
-  const draw=()=>root.render(<FenceSettings item={item} change={patch=>{item={...item,...patch};draw()}}/>)
+  const slab=new T.Mesh(new T.BoxGeometry(8,.3,6)),upper=slab.clone();upper.position.y=3
+  const draw=()=>root.render(<FenceSettings item={item} selection={()=>[slab,upper].map((object,i)=>({id:'slab-'+i,name:'Slab '+i,object,ifcType:'IfcSlab'}))} layout={item.layout} change={patch=>{item={...item,...patch};draw()}}/>)
   let tower={tower_cover:null} as SiteItem
   const drawTower=()=>root.render(<TowerCoverSettings item={tower} change={patch=>{tower={...tower,...patch};drawTower()}}/>)
   const assembly=buildEnclosure(item)
@@ -53,6 +54,26 @@ export async function run(){
     const control=ui.querySelector('select')!
     const dark=getComputedStyle(control)
     check(dark.backgroundColor!==dark.color && ui.scrollWidth<=321,'Dark narrow controls')
+    item=example('scaffold',[0,2.5],2.5)
+    draw();await wait();await click('Use selected level slabs')
+    check(item.enclosure?.scaffold?.slabs?.length===2,'Both slab references should be captured')
+    const z=3.15, key='3.150/example'
+    item.layout!.reference_bays=[{key,elevation:z,a:[-4,-3],b:[4,-3],status:'supported',stairs:false,reason:''}]
+    draw();await wait()
+    const choose=async(label:string,value:string)=>{
+      const sel=[...ui.querySelectorAll('label')].find(l=>l.firstChild?.textContent===label)?.querySelector('select')
+      check(sel,'Missing '+label);sel!.value=value;sel!.dispatchEvent(new Event('change',{bubbles:true}));await wait()
+    }
+    await choose('Bay',key);await choose('Bay use','stairs')
+    check(item.enclosure?.scaffold?.bay_edits?.[key]==='stairs','Lost level-specific stair edit')
+    await choose('Bay use','gap');check(item.enclosure?.scaffold?.bay_edits?.[key]==='gap','Lost local opening')
+    const door={...gate('pedestrian',3.5,1.1),posters:['PPE','Site access','Fire exit'] as NonNullable<FenceOpening['posters']>}
+    const street=example('street',[0,4.6],3.5,[door])
+    Object.assign(street.enclosure!,{barrier_base:'ballast',blanket:true,blanket_bays:[1],reflective:true})
+    const signed=buildEnclosure(street)
+    check(signed.root.children.filter(m=>m.name.includes('poster')).length>=3,'Missing door posters')
+    check(signed.root.children.some(m=>m.name.includes('blanket')),'Missing acoustic blanket')
+    signed.dispose()
     drawTower();await wait()
     const wrapSelect=ui.querySelector('select')!
     wrapSelect.value='netted';wrapSelect.dispatchEvent(new Event('change',{bubbles:true}));await wait()
@@ -150,7 +171,7 @@ export async function run(){
     }
     ;(window as any).enclosureProofs=images
     renderer.dispose()
-    return {passed:true,checks:['gate swing and clear opening','hinge pivots, reverse seek, rest pose and Z-up turnstile travel','two-level instancing and selection','GLB board roundtrip','six open tower bridges','net and sheet loading','dark narrow controls','whole-site and close WebGL views']}
+    return {passed:true,checks:['slab capture and per-level bay editing','signed streetworks gate and acoustic blanket','gate swing and clear opening','hinge pivots, reverse seek, rest pose and Z-up turnstile travel','two-level instancing and selection','GLB board roundtrip','six open tower bridges','net and sheet loading','dark narrow controls','whole-site and close WebGL views']}
   }finally{
     live.unmount();viewport.remove();root.unmount();ui.remove();document.documentElement.classList.remove('dark')
     for(const part of [assembly,entrance,perimeter])part.dispose()
