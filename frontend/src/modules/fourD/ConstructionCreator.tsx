@@ -6,7 +6,7 @@ import { constructionPlacements, prepareConstruction, releaseConstruction, type 
 import { siteError, type useSiteScene } from './siteScene'
 
 export type CreatorKind='Formwork'|'Reinforcement'
-const modes:Record<CreatorKind,ConstructionMode[]>={Formwork:['deck','shutter','screen'],Reinforcement:['mat','column','wall']}
+const modes:Record<CreatorKind,ConstructionMode[]>={Formwork:['deck','shutter','wallForm','screen'],Reinforcement:['mat','column','wall']}
 const field='block w-full rounded border p-1.5 bg-white dark:bg-prosota-panel2 dark:border-prosota-line'
 const button='rounded border px-2 py-1.5 disabled:opacity-40 dark:border-prosota-line'
 export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state,onSelect,onPlan,onClose}:{
@@ -16,6 +16,8 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
   const [mode,setMode]=useState<ConstructionMode>(modes[kind][0])
   const [spacing,setSpacing]=useState('200'),[diameter,setDiameter]=useState('16'),[cover,setCover]=useState('35')
   const [clearance,setClearance]=useState('3.424'),[propSpacing,setPropSpacing]=useState('1.9')
+  const [panelWidth,setPanelWidth]=useState('1.2')
+  const [braceSide,setBraceSide]=useState<'near'|'far'|'both'>('near')
   const [screenHeight,setScreenHeight]=useState('7.2'),[bayWidth,setBayWidth]=useState('2.4'),[skip,setSkip]=useState('')
   const [doubleMat,setDoubleMat]=useState(true),[separate,setSeparate]=useState(true)
   const [preview,setPreview]=useState<ConstructionPreview|null>(null),prepared=useRef<ConstructionPreview|null>(null)
@@ -26,7 +28,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
     alive.current=true
     return ()=>{alive.current=false;if(prepared.current)releaseConstruction(prepared.current.scene)}
   },[])
-  const host=mode==='shutter'||mode==='column'?'columns':mode==='wall'?'walls':'slabs'
+  const host=mode==='shutter'||mode==='column'?'columns':(mode==='wall'||mode==='wallForm')?'walls':'slabs'
   const number=(label:string,value:string,change:(v:string)=>void)=><label>{label}<input className={field} type="number" step="any" min="0" value={value} onChange={e=>{clear();change(e.target.value)}}/></label>
   function value(text:string,min:number,max:number,label:string){
     const n=Number(text)
@@ -40,6 +42,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
       const rebar=kind==='Reinforcement'
       const options:ConstructionOptions={mode,
         spacing:rebar?value(spacing,40,2000,'Bar spacing (mm)')/1000:mode==='deck'?value(propSpacing,.3,5,'Prop spacing (m)'):1,
+        panelWidth:mode==='wallForm'?value(panelWidth,.4,3,'Max wall panel width (m)'):undefined,braceSide,
         diameter:rebar?value(diameter,4,60,'Bar diameter (mm)')/1000:.016,
         cover:rebar?value(cover,5,250,'Cover (mm)')/1000:.035,
         clearance:mode==='deck'?value(clearance,.75,10,'Soffit height (m)'):3.424,
@@ -76,6 +79,12 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
       <label>Generate<select className={field} value={mode} onChange={e=>{clear();setMode(e.target.value as ConstructionMode)}}>{modes[kind].map(m=><option key={m} value={m}>{constructionModes[m]}</option>)}</select></label>
       <p>Select {host} in the viewport. Ctrl/Cmd-click to add more.</p>
       {mode==='deck'&&<div className="grid grid-cols-2 gap-2">{number('Soffit height above support (m)',clearance,setClearance)}{number('Max prop spacing (m)',propSpacing,setPropSpacing)}</div>}
+      {mode==='wallForm'&&<div className="grid grid-cols-2 gap-2">
+        {number('Max wall panel width (m)',panelWidth,setPanelWidth)}
+        <label>Brace placement<select className={field} value={braceSide} onChange={e=>{clear();setBraceSide(e.target.value as typeof braceSide)}}>
+          <option value="near">Face A</option><option value="far">Face B</option><option value="both">Both faces</option>
+        </select></label>
+      </div>}
       {mode==='screen'&&<><div className="grid grid-cols-2 gap-2">{number('Max bay width (m)',bayWidth,setBayWidth)}{number('Screen height (m)',screenHeight,setScreenHeight)}</div>
         <label>Exterior edges to skip<input placeholder="e.g. 2, 4" className={field} value={skip} onChange={e=>{clear();setSkip(e.target.value)}}/></label></>}
       {kind==='Reinforcement'&&<><div className="grid grid-cols-2 gap-2">{number('Spacing (mm)',spacing,setSpacing)}{number('Bar diameter (mm)',diameter,setDiameter)}{number('Cover (mm)',cover,setCover)}</div>

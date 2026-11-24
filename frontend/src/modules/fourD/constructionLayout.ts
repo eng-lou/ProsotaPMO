@@ -45,12 +45,13 @@ export function releaseConstruction(scene:Group){
 export async function prepareConstruction(sources:HostSource[],upAxis:'y'|'z',options:ConstructionOptions,skipEdges:number[]){
   if(!sources.length)throw Error('Select one or more IFC elements or individual mesh objects in the viewport.')
   const {mode}=options
-  const expected=mode==='column'||mode==='shutter'?'column':mode==='wall'?'wall':'slab'
+  const wallHost=mode==='wall'||mode==='wallForm'
+  const expected=mode==='column'||mode==='shutter'?'column':wallHost?'wall':'slab'
   const elements=sources.map(source=>{
     const type=source.ifcType?.toLowerCase()
     if(type && !type.includes(expected) && /ifc(slab|wall|column|beam|door|window)/.test(type))
       throw Error(source.name+' is a '+source.ifcType+'. Select a '+expected+' for this layout.')
-    try{return readConstructionHost(source.name,source.object,upAxis,mode==='wall')}
+    try{return readConstructionHost(source.name,source.object,upAxis,mode==='wallForm'?'wallForm':wallHost)}
     catch(e){throw Error(source.name+': '+(e instanceof Error?e.message:e))}
   })
   const root=new Group(),base=elements[0].origin

@@ -1,4 +1,4 @@
-import { Box2, Box3, InstancedMesh, Matrix4, Mesh, Object3D, ShapeUtils, Vector2, Vector3 } from 'three'
+import { Box2, Box3, InstancedMesh, Matrix4, Mesh, Object3D, Path, Shape, ShapeUtils, Vector2, Vector3 } from 'three'
 import { fullDetailGeometry } from './contextGeometry'
 
 /** Work in metres around each host. Plan coordinates are X/Z in glTF's Y-up space. */
@@ -63,7 +63,7 @@ function flatFace(triangles: Triangle[], axis: 'y'|'z', elevation: number): Vect
   return rings.sort((a,b)=>Math.abs(ShapeUtils.area(b))-Math.abs(ShapeUtils.area(a)))
 }
 
-export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',needWallFace=false):ConstructionHost {
+export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',needWallFace:boolean|'wallForm'=false):ConstructionHost {
   object.updateWorldMatrix(true,true)
   const triangles:Triangle[]=[]
   const worldBounds=new Box3()
@@ -108,6 +108,21 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
     const d=ring[(i+1)%ring.length].clone().sub(ring[i])
     if(d.lengthSq()>longest){longest=d.lengthSq();angle=Math.atan2(d.y,d.x)}
   }
+  if(needWallFace==='wallForm'){
+    // A door can split the underside into short piers. Orient panels from the wall faces.
+    const directions=new Map<number,{angle:number;area:number}>()
+    for(const [a,b,c] of triangles){
+      const normal=b.clone().sub(a).cross(c.clone().sub(a)),area=normal.length()
+      if(area<tolerance*tolerance || Math.abs(normal.y)>area*tolerance)continue
+      const tangent=Math.atan2(-normal.x,normal.z)
+      const key=Math.round(((tangent%Math.PI)+Math.PI)%Math.PI*10000)%Math.round(Math.PI*10000)
+      const direction=directions.get(key)
+      if(direction)direction.area+=area
+      else directions.set(key,{angle:tangent,area})
+    }
+    let bestArea=0
+    for(const direction of directions.values())if(direction.area>bestArea){bestArea=direction.area;angle=direction.angle}
+  }
   // Make grid direction independent of triangle winding.
   angle=((angle%Math.PI)+Math.PI)%Math.PI
   const zero=new Vector2()
@@ -117,6 +132,16 @@ export function readConstructionHost(name:string,object:Object3D,upAxis:'y'|'z',
   if(needWallFace){
     const rotation=new Matrix4().makeRotationY(angle)
     vertices.forEach(v=>v.applyMatrix4(rotation))
+    if(needWallFace==='wallForm'){
+      // A two-sided panel set requires a single straight, constant-thickness wall.
+      for(const [a,b,c] of triangles){
+        const normal=b.clone().sub(a).cross(c.clone().sub(a))
+        if(Math.abs(normal.z)<=tolerance*normal.length())continue
+        if(![bounds.min.y,bounds.max.y].some(z=>[a,b,c].every(p=>Math.abs(p.z-z)<tolerance))){
+          throw Error('Select each straight, constant-thickness wall separately.')
+        }
+      }
+    }
     wallFace=flatFace(triangles,'z',bounds.min.y)
     if(!wallFace.length)throw Error('Select a straight wall with planar faces.')
   }
@@ -134,6 +159,18 @@ export function contains(ring:Vector2[],p:Vector2){
 
 export function isExterior(ring:Vector2[],rings:Vector2[][]){
   return rings.filter(other=>other!==ring && contains(other,ring[0])).length%2===0
+}
+
+export function faceShapes(rings:Vector2[][]){
+  const outers=rings.filter(r=>isExterior(r,rings))
+  return outers.map(outer=>{
+    const shape=new Shape(outer)
+    for(const hole of rings.filter(r=>!isExterior(r,rings))){
+      const owner=outers.filter(r=>contains(r,hole[0])).sort((a,b)=>Math.abs(ShapeUtils.area(a))-Math.abs(ShapeUtils.area(b)))[0]
+      if(owner===outer)shape.holes.push(new Path(hole))
+    }
+    return shape
+  })
 }
 
 /** Intersect a parallel row with every boundary, including interior openings. */

@@ -1,9 +1,9 @@
-import { Box2, BoxGeometry, BufferGeometry, Color, CylinderGeometry, DataTexture, DoubleSide, ExtrudeGeometry, Group, Matrix4, Mesh, MeshStandardMaterial, Path, PlaneGeometry, Quaternion, RepeatWrapping, Shape, ShapeUtils, Vector2, Vector3 } from 'three'
+import { Box2, BoxGeometry, BufferGeometry, Color, CylinderGeometry, DataTexture, DoubleSide, ExtrudeGeometry, Group, Matrix4, Mesh, MeshStandardMaterial, PlaneGeometry, Quaternion, RepeatWrapping, Shape, ShapeUtils, Vector2, Vector3 } from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { contains, isExterior, rowPositions, spans, type ConstructionHost } from './constructionHost'
+import { contains, faceShapes, isExterior, rowPositions, spans, type ConstructionHost } from './constructionHost'
 
 export const constructionModes = {
-  deck: 'Slab formwork', shutter: 'Column shutters', screen: 'Perimeter screens',
+  deck: 'Slab formwork', shutter: 'Column shutters', wallForm: 'Wall formwork', screen: 'Perimeter screens',
   mat: 'Slab reinforcement mat', column: 'Column reinforcement cage', wall: 'Wall reinforcement cage',
 } as const
 export type ConstructionMode = keyof typeof constructionModes
@@ -16,6 +16,8 @@ export interface ConstructionOptions {
   cover:number
   diameter:number
   doubleMat:boolean
+  panelWidth?:number
+  braceSide?:'near'|'far'|'both'
   excludedEdges?:ReadonlySet<string>
   screenRuns?:ScreenRun[]
 }
@@ -26,6 +28,7 @@ const cube=new BoxGeometry(1,1,1), tube=new CylinderGeometry(.5,.5,1,8)
 const identity=new Quaternion()
 const finishes={
   wood:'#a77943', sheet:'#75624f', beam:'#cec264', red:'#9c392d', steel:'#879397',
+  facing:'#37302a', frame:'#cf632d', galvanised:'#bfc5c8',
   bar:'#675649', link:'#766557', rail:'#a64a30', mesh:'#707f89', board:'#cf922f',
 }
 type Finish=keyof typeof finishes
@@ -105,7 +108,7 @@ class Parts {
     let mat:MeshStandardMaterial
     if(typeof finish==='string'){
       if(!this.materials.has(finish)){
-        const created=finish==='mesh'?meshMaterial():new MeshStandardMaterial({color:new Color(finishes[finish]),roughness:.76,metalness:['steel','bar','link','rail'].includes(finish)?.45:.08})
+        const created=finish==='mesh'?meshMaterial():new MeshStandardMaterial({color:new Color(finishes[finish]),roughness:.76,metalness:['steel','bar','link','rail','frame','galvanised'].includes(finish)?.45:.08})
         created.name=finish;this.materials.set(finish,created)
       }
       mat=this.materials.get(finish)!
@@ -169,13 +172,7 @@ function buildDeck(host:ConstructionHost,o:ConstructionOptions,p:Parts,prop:Prop
   }
   for(const z of rowPositions(bounds.min.y,bounds.max.y,.50,.12))
     for(const [a,b] of spans(rings,true,z))beam(joists,true,z,a,b,top)
-  const outers=rings.filter(r=>isExterior(r,rings))
-  for(const outer of outers){
-    const shape=new Shape(outer)
-    for(const hole of rings.filter(r=>!isExterior(r,rings))){
-      const owner=outers.filter(r=>contains(r,hole[0])).sort((a,b)=>Math.abs(ShapeUtils.area(a))-Math.abs(ShapeUtils.area(b)))[0]
-      if(owner===outer)shape.holes.push(new Path(hole))
-    }
+  for(const shape of faceShapes(rings)){
     p.add(deck,'sheet',new ExtrudeGeometry(shape,{depth:.024,bevelEnabled:false}).rotateX(Math.PI/2))
   }
   // Sheet joints also stop at recesses and floor openings.
@@ -203,6 +200,104 @@ function shutters(host:ConstructionHost,p:Parts){
       p.member(g,'wood',at(length/2,.15,host.height*.72),at(length/2,reach,.03),.075)
       const foot=at(length/2,reach,.023)
       p.box(g,'wood',foot.x,foot.y,foot.z,.2,.046,.2)
+    }
+  }
+}
+
+function wallFormwork(host:ConstructionHost,o:ConstructionOptions,p:Parts){
+  const profile=host.wallFace
+  if(!profile.length)throw Error('Select a straight wall with a planar face.')
+  const panelWidth=o.panelWidth??1.2
+  if(!Number.isFinite(panelWidth)||panelWidth<.4||panelWidth>3)throw Error('Max wall panel width must be between 0.4 and 3 m.')
+  const faceBounds=new Box2().setFromPoints(profile.flat())
+  const length=faceBounds.max.x-faceBounds.min.x,height=host.height
+  const count=Math.ceil(length/panelWidth),width=length/count
+  const zMin=host.bounds.min.y,zMax=host.bounds.max.y
+  const skin=.021,frameDepth=.09,frameWidth=.052,back=skin+frameDepth
+  const shapes=faceShapes(profile)
+  const stopEnds=p.part('Stop ends and opening forms'),ties=p.part('Through ties and plates')
+
+  // Follow the cut boundaries for the stop ends, door jambs, lintels and window sills.
+  for(const ring of profile){
+    const exterior=isExterior(ring,profile)
+    const winding=Math.sign(ShapeUtils.area(ring))*(exterior?1:-1)
+    ring.forEach((a,i)=>{
+      const b=ring[(i+1)%ring.length]
+      if(exterior && (Math.max(a.y,b.y)<.0001||Math.min(a.y,b.y)>height-.0001))return
+      const normal=new Vector2(b.y-a.y,a.x-b.x).normalize().multiplyScalar(winding)
+      const offset=normal.clone().multiplyScalar(skin)
+      const edge=new Shape([a,b,b.clone().add(offset),a.clone().add(offset)])
+      p.add(stopEnds,'sheet',new ExtrudeGeometry(edge,{depth:zMax-zMin,bevelEnabled:false}).translate(0,0,zMin))
+      if(exterior && Math.abs(a.x-b.x)<.0001){
+        const x=a.x+normal.x*(skin+.027)
+        const lo=Math.min(a.y,b.y),hi=Math.max(a.y,b.y)
+        const inset=Math.min((zMax-zMin)/4,.028)
+        for(const z of [zMin+inset,zMax-inset])p.box(stopEnds,'frame',x,(lo+hi)/2,z,.054,hi-lo,inset*2)
+        for(const y of rowPositions(lo,hi,.68,.04))p.box(stopEnds,'frame',x,y,(zMin+zMax)/2,.054,.045,zMax-zMin)
+      }
+    })
+  }
+  for(const sign of [1,-1]){
+    const face=sign===1?'Face A':'Face B',z=sign===1?zMax:zMin
+    const braced=o.braceSide==='both'||(o.braceSide??'near')===(sign===1?'near':'far')
+    const panels=p.part(face+' panels'),braces=p.part(face+' push-pull props')
+    const outward=(x:number,y:number,d:number)=>v(x,y,z+sign*d)
+    for(const shape of shapes){
+      p.add(panels,'facing',new ExtrudeGeometry(shape,{depth:skin,bevelEnabled:false}).translate(0,0,z+(sign===1?0:-skin)))
+    }
+    // Outline the panel gangs, including the exposed edges around openings.
+    for(const ring of profile)ring.forEach((a,i)=>{
+      const b=ring[(i+1)%ring.length],along=b.clone().sub(a)
+      const inset=new Vector2(-along.y,along.x).normalize()
+        .multiplyScalar(Math.sign(ShapeUtils.area(ring))*(isExterior(ring,profile)?1:-1)*frameWidth)
+      const rim=new Shape([a,b,b.clone().add(inset),a.clone().add(inset)])
+      p.add(panels,'frame',new ExtrudeGeometry(rim,{depth:frameDepth,bevelEnabled:false})
+        .translate(0,0,z+sign*skin+(sign===1?0:-frameDepth)))
+    })
+    const frameZ=z+sign*(skin+frameDepth/2)
+    for(let bay=0;bay<count;bay++){
+      const centre=faceBounds.min.x+(bay+.5)*width
+      const solid=spans(profile,false,centre)
+      for(const [lo,hi] of solid){
+        p.box(panels,'frame',centre,(lo+hi)/2,frameZ,frameWidth,hi-lo,frameDepth)
+        if(sign===1 && hi-lo>.25)for(const y of rowPositions(lo,hi,1.25,Math.min(.36,(hi-lo)/3))){
+          p.member(ties,'galvanised',v(centre,y,zMin-back-.065),v(centre,y,zMax+back+.065),.021,.021,true)
+          for(const plateZ of [zMin-back-.008,zMax+back+.008]){
+            p.box(ties,'galvanised',centre,y,plateZ,.13,.085,.016)
+            p.box(ties,'steel',centre,y,plateZ+(plateZ<zMin?-.02:.02),.075,.031,.035)
+          }
+        }
+      }
+      if(bay>0){
+        // Adjacent panel rails share a seam; clamps bridge the pair.
+        const seam=centre-width/2
+        for(const [lo,hi] of spans(profile,false,seam)){
+          for(const x of [seam-.027,seam+.027])p.box(panels,'frame',x,(lo+hi)/2,frameZ,.045,hi-lo,frameDepth)
+          if(hi-lo>.22)for(const y of rowPositions(lo,hi,1.25,Math.min(.38,(hi-lo)/3))){
+            p.box(panels,'galvanised',seam,y,z+sign*(back+.012),.16,.034,.024)
+          }
+        }
+      }
+      if(!braced || (bay%2!==0 && bay!==count-1))continue
+      // Mount to a solid upright. A tall opening can split this upright into two pieces.
+      const target=Math.min(height*.74,2.7)
+      const anchor=solid.filter(([lo,hi])=>hi-lo>.16 && hi>.38)
+        .map(([lo,hi])=>Math.min(Math.max(target,lo+.08),hi-.08))
+        .sort((a,b)=>Math.abs(a-target)-Math.abs(b-target))[0]
+      if(anchor===undefined)continue
+      const foot=outward(centre,.06,back+Math.min(1.65,anchor*.52)),head=outward(centre,anchor,back+.04)
+      const sleeve=foot.clone().lerp(head,.62)
+      p.box(braces,'galvanised',foot.x,.022,foot.z,.21,.044,.30)
+      p.box(braces,'steel',foot.x,.065,foot.z,.085,.09,.10)
+      p.member(braces,'galvanised',foot,sleeve,.074,.074,true)
+      p.member(braces,'steel',sleeve,head,.046,.046,true)
+      p.member(braces,'galvanised',sleeve,foot.clone().lerp(head,.66),.087,.087,true)
+      p.box(braces,'galvanised',head.x,head.y,head.z,.092,.14,.08)
+    }
+    const rows=Math.ceil(height/.68)
+    for(let r=1;r<rows;r++){
+      const y=r*height/rows
+      for(const [a,b] of spans(profile,true,y))p.box(panels,'frame',(a+b)/2,y,z+sign*(skin+.034),b-a,.045,.068)
     }
   }
 }
@@ -300,6 +395,7 @@ export function buildConstruction(host:ConstructionHost,o:ConstructionOptions,pr
     if(!prop.length)throw Error('The slab prop kit could not be loaded.')
     buildDeck(host,o,p,prop)
   }else if(o.mode==='shutter')shutters(host,p)
+  else if(o.mode==='wallForm')wallFormwork(host,o,p)
   else if(o.mode==='screen')screens(host,o,p)
   else if(o.mode==='column')columnCage(host,o,p)
   else {

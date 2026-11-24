@@ -1,6 +1,8 @@
 import React from 'react'
 import {createRoot} from 'react-dom/client'
-import {BoxGeometry, Mesh} from 'three'
+import {Box3, BoxGeometry, Mesh} from 'three'
+import {parseAsset} from '../../src/modules/fourD/siteAssets'
+import {extractAssetPart, siteAssetPlacement} from '../../src/modules/fourD/assetParts'
 import {api} from '../../src/lib/api'
 import {SiteToolsPanel} from '../../src/modules/fourD/SiteToolsPanel'
 import {SiteScheduleWizard} from '../../src/modules/fourD/SiteScheduleWizard'
@@ -19,6 +21,11 @@ export async function run() {
   const wall=new Mesh(new BoxGeometry(3,2.8,.24))
   for(const mesh of [slab,column,wall])mesh.position.set(11,8,18)
   let source=slab, items:SiteItem[]=[], uploads=0
+  wall.rotation.y=.43
+  const secondWall=wall.clone()
+  secondWall.position.x+=8
+  secondWall.rotation.y=-.68
+  let multipleWalls=false, uploadedFile:File|undefined
   let assetId='', schedulePayload:any, finished=false
   const tasks=[{id:'floor',code:'W-35',schedule_period_id:'live',task_name:'Level 35',activity_type:'wbs_summary'},
     {id:'existing',parent_id:'floor',schedule_period_id:'live',task_name:'Climb core formwork and placing boom',activity_type:'task'}] as Activity[]
@@ -31,7 +38,7 @@ export async function run() {
     send(body?:Document|XMLHttpRequestBodyInit|null){
       if(!this.fixture)return super.send(body)
       if(!(body instanceof File)||body.size<1000)throw Error('Missing generated GLB')
-      uploads++
+      uploadedFile=body;uploads++
       Object.defineProperty(this,'status',{value:200})
       queueMicrotask(()=>this.dispatchEvent(new ProgressEvent('load')))
     }
@@ -65,7 +72,9 @@ export async function run() {
     root.render(<SiteToolsPanel state={state} projectId="creator-test" activities={[]} paths={[]} zones={[]} sceneSources={[]}
       timelineFormat={{scheduleStart:now,timeDisplayMode:'date',speedDaysPerSecond:1,fps:30}} upAxis="y"
       selectedObjectIds={new Set()} onPickItems={noop} links={[]} profiles={[]} onSeek={noop} onLink={noop} onUnlink={noop}
-      onAssignProfile={noop} linkError={null} selectedShapeSources={()=>[{id:'selected-host',name:'Selected host',object:source}]}
+      onAssignProfile={noop} linkError={null} selectedShapeSources={()=>multipleWalls
+        ?[wall,secondWall].map((object,i)=>({id:'wall-'+i,name:'W'+i,ifcType:'IfcWallStandardCase',object}))
+        :[{id:'selected-host',name:'Selected host',object:source}]}
       hideShapeSources={()=>noop} readPileBounds={()=>{throw Error('Unused')}} onGenerateSchedule={plan} openPaths={noop}
       focusSite={noop} sceneLightsEnabled enableSceneLights={noop}/>)
   }
@@ -73,27 +82,46 @@ export async function run() {
     draw()
     ;(await button('Layout tools')).click()
     for(const [kind,mode,element] of [
-      ['Formwork','deck',slab],['Formwork','shutter',column],['Formwork','screen',slab],
+      ['Formwork','deck',slab],['Formwork','shutter',column],['Formwork','wallForm',wall],['Formwork','screen',slab],
       ['Reinforcement','mat',slab],['Reinforcement','column',column],['Reinforcement','wall',wall],
     ] as const){
-      source=element
+      source=element;multipleWalls=mode==='wallForm'
       ;(await button('+ '+kind+' creator')).click()
       const select=await waitFor(()=>host.querySelector<HTMLSelectElement>('section[aria-label$=" creator"] select')||undefined,'mode')
       select.value=mode;select.dispatchEvent(new Event('change',{bubbles:true}))
       await new Promise(r=>setTimeout(r,30))
       ;(await button('Preview from selection')).click()
-      const create=await button('Create at selected element')
+      const create=await button(multipleWalls?'Create at selected elements':'Create at selected element')
       const before=items.length
-      if(mode==='wall')(await button('Create and plan activities…')).click()
+      if(mode==='wall'||multipleWalls)(await button('Create and plan activities…')).click()
       else create.click()
       await waitFor(()=>items.length>before,'saved '+mode)
       const added=items.slice(before)
       if(added.length<2||added.some(p=>!p.asset_part||p.assembly_id!==added[0].assembly_id||
-        !Number.isFinite(p.position.x)||Math.abs(p.position.x-11)>5||Math.abs(p.position.z-18)>5||Math.abs(p.position.y-8)>9))
+        !Number.isFinite(p.position.x)||Math.abs(p.position.x-11)>(multipleWalls?11:5)||Math.abs(p.position.z-18)>5||Math.abs(p.position.y-8)>9))
         throw Error('Incorrect saved parts or placement in '+mode)
-      if(mode==='wall'){
+      if(multipleWalls){
+        // Reload the exported bytes and serialized scene items, bypassing the import cache.
+        const {object}=await parseAsset(await uploadedFile!.arrayBuffer())
+        const saved:SiteItem[]=JSON.parse(JSON.stringify(added))
+        const panels=saved.filter(item=>item.name.endsWith('panels'))
+        if(panels.length!==4)throw Error('Expected two independent panel gangs per wall')
+        for(const [i,element] of [wall,secondWall].entries()){
+          const parts=panels.filter(item=>item.name.startsWith('W'+i+' - '))
+          const original=new Box3().setFromObject(element)
+          const reloaded=new Box3()
+          for(const part of parts){
+            const group=extractAssetPart(object,part.asset_part!)
+            group.applyMatrix4(siteAssetPlacement(part))
+            reloaded.union(new Box3().setFromObject(group,true))
+          }
+          if(parts.length!==2 || Math.abs(original.min.y-reloaded.min.y)>.001 || Math.abs(original.max.y-reloaded.max.y)>.001 ||
+            Math.abs(original.min.x-reloaded.min.x)>.2 || Math.abs(original.max.z-reloaded.max.z)>.2)throw Error('Wall formwork moved on reload')
+        }
+      }
+      if(mode==='wall'||multipleWalls){
         const template=await waitFor(()=>host.querySelector<HTMLSelectElement>('label:has(option[value="wall"]) select')||undefined,'wall template')
-        if(template.value!=='wall')throw Error('Creator opened the wrong planning template')
+        if(template.value!==mode)throw Error('Creator opened the wrong planning template')
         ;(await button('Cancel')).click()
         ;(await button('Layout tools')).click()
       }
@@ -111,7 +139,7 @@ export async function run() {
       schedulePayload.activities.some((a:any)=>a.element_refs?.length || a.parent_temp_id)||
       schedulePayload.relationships.length || !schedulePayload.activities.some((a:any)=>a.phase_key==='pour'))
       throw Error('Activities-only generation wrote unexpected data')
-    if(uploads!==6)throw Error('Wrong number of generated assets')
-    return {passed:true,creators:2,modes:6,uploads,scheduledParts:items.length,activities:4}
+    if(uploads!==7)throw Error('Wrong number of generated assets')
+    return {passed:true,creators:2,modes:7,uploads,scheduledParts:items.length,activities:4}
   }finally{root.unmount();host.remove();api.defaults.adapter=previousAdapter;window.XMLHttpRequest=originalXHR}
 }

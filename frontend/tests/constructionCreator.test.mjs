@@ -48,6 +48,54 @@ test('adjacent slab selections trim full and partial shared screen edges only on
   const lengths=t.perimeterRuns([a,b,upper]).map(runs=>runs.reduce((sum,r)=>sum+r.length,0))
   assert.deepEqual(lengths,[18,6,8])
 })
+test('wall forms fit rotated walls on both axes and leave the window and doorway clear',()=>{
+  const profile=new t.Shape([[-3,0],[-2.4,0],[-2.4,2],[-.8,2],[-.8,0],[3,0],[3,3.2],[-3,3.2]].map(([x,y])=>new t.Vector2(x,y)))
+  profile.holes.push(new t.Path(rectangle(1.1,1).map(p=>p.add(new t.Vector2(1.6,1.7)))))
+  for(const axis of ['y','z']){
+    const mesh=new t.Mesh(new t.ExtrudeGeometry(profile,{depth:.28,bevelEnabled:false}))
+    mesh.rotation.y=.45
+    const group=new t.Group();group.add(mesh);group.position.set(11,23,34);group.rotation.x=axis==='z'?Math.PI/2:0
+    const host=t.readConstructionHost('Wall W12',group,axis,'wallForm')
+    const built=t.buildConstruction(host,{...options,mode:'wallForm',braceSide:'both',panelWidth:1})
+    const faces=built.children.filter(g=>g.name.endsWith('panels'))
+    assert.equal(faces.length,2)
+    // Convert points on the original face to the generator's local axes.
+    const local=(x,y)=>new t.Vector3(x,y,0).applyMatrix4(mesh.matrixWorld)
+      .applyAxisAngle(new t.Vector3(1,0,0),axis==='z'?-Math.PI/2:0).sub(host.origin).applyAxisAngle(new t.Vector3(0,1,0),host.angle)
+    const hits=(x,y)=>{
+      const pt=local(x,y)
+      const ray=new t.Raycaster(new t.Vector3(pt.x,pt.y,-3),new t.Vector3(0,0,1))
+      return ray.intersectObjects(faces,true).length
+    }
+    built.updateMatrixWorld(true)
+    assert.equal(hits(-1.65,1),0);assert.equal(hits(1.6,1.7),0)
+    assert.ok(hits(-1.65,2.7)>=2);assert.ok(hits(1.6,.6)>=2)
+    for(const [i,g] of faces.entries()){
+      const bounds=new t.Box3().setFromObject(g),skin=new t.Box3().setFromObject(g.children.find(m=>m.material.name==='facing'))
+      near(i===0?skin.min.z:skin.max.z,i===0?host.bounds.max.y:host.bounds.min.y)
+      near(bounds.min.y,0);near(bounds.max.y,3.2)
+    }
+    assert.equal(built.children.filter(g=>g.name.includes('push-pull')).length,2)
+    assert.ok(built.children.some(g=>g.name.includes('Through ties')))
+    assert.ok(built.children.some(g=>g.name.includes('Stop ends')))
+  }
+})
+test('wall formwork rejects non-prismatic wall selections',()=>{
+  const mesh=new t.Mesh(new t.BoxGeometry(4,3,.3))
+  const pos=mesh.geometry.getAttribute('position')
+  for(let i=0;i<pos.count;i++)if(pos.getY(i)>0 && pos.getZ(i)>0)pos.setZ(i,.05)
+  assert.throws(()=>t.readConstructionHost('Tapered wall',mesh,'y','wallForm'),/constant-thickness/)
+})
+test('wall forms and reinforcement offer separate editable activity templates',()=>{
+  const rows=t.phaseRows('wallForm')
+  const plan=t.buildSimulationActivities('p','s','wbs','',rows,'',true)
+  assert.equal(plan.activities.length,rows.length)
+  assert.equal(plan.relationships.length,rows.length-1)
+  assert.deepEqual(rows.filter(r=>r.name.includes('Pour')).map(r=>r.name),['Pour wall concrete'])
+  assert.ok(rows.at(-1).name.includes('Strip'))
+  assert.ok(t.phaseRows('wall').some(r=>r.name.includes('curtain')))
+})
+
 test('core activities support later assignments and matching by phase after renaming',()=>{
   const rows=t.phaseRows('core')
   rows[0].name='Raise boom and core deck'

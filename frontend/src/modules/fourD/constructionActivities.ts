@@ -9,6 +9,8 @@ const taskSets = {
     'Complete deck pre-pour checks'],
   deck: ['Deliver slab formwork', 'Install props, bearers and joists', 'Lay slab soffit panels', 'Strip slab formwork and reshore'],
   shutter: ['Deliver column shutters', 'Erect and brace column shutters', 'Pour columns', 'Strip column shutters'],
+  wallForm: ['Deliver wall formwork panels', 'Erect and brace first wall face', 'Fix wall reinforcement',
+    'Fit stop ends and opening forms', 'Close opposite wall face and install ties', 'Pour wall concrete', 'Strip wall formwork'],
   screen: ['Install screen anchors and shoes', 'Rig perimeter screen bay', 'Crane lift and secure screen bay', 'Release crane hook'],
   mat: ['Deliver slab reinforcement', 'Fix bottom mat', 'Install cast-in items', 'Fix top mat', 'Check slab reinforcement'],
   column: ['Assemble column cages', 'Crane lift column cages', 'Position and tie column cages'],
@@ -19,7 +21,7 @@ const taskSets = {
 } as const
 export type ConstructionTemplate = keyof typeof taskSets
 export const templateLabels: Record<ConstructionTemplate,string> = {
-  cycle:'Deck cycle', deck:'Slab formwork', shutter:'Column shutters', screen:'Perimeter screens',
+  cycle:'Deck cycle', deck:'Slab formwork', shutter:'Column shutters', wallForm:'Wall formwork', screen:'Perimeter screens',
   mat:'Slab reinforcement', column:'Column reinforcement', wall:'Wall reinforcement', core:'Climbing core', crane:'Crane delivery and lift', blank:'Custom activities',
 }
 const corePhaseKeys:Record<string,string>={
