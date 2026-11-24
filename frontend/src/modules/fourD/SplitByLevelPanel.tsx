@@ -230,6 +230,7 @@ export function SplitByLevelPanel({
       // descendant mesh individually and only checks each one's own
       // userData for this flag, not its ancestors'.
       plane.userData.isSplitPreview = true
+      plane.raycast = () => {}
       previewGroup.add(plane)
     }
 

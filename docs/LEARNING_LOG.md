@@ -9292,3 +9292,9 @@ Crane rig sweeps store a calibrated hinge, an activity ID and round trips or per
 ## 2026-11-22 - Selecting a pile while editing its rig
 
 Ctrl-clicking an IFC pile added its model to the selection, which unmounted the rig editor and discarded the open draft. The piling editor now retains the selected rig and measures the picked IFC element in world coordinates. A browser regression covers an unsaved pile row, a transformed IFC pile, ambiguous picks, a site marker and saving the sequence to the rig.
+
+### 24 November 2026 — Split by Level selection and placement
+
+The renderer clipped copies of the entire IFC product. Raycasts and selection bounds still saw the full product, and the element mesh index had no entry for a slice. Generate slice geometry at the saved elevations, index it through the same path as IFC meshes and retain a stable parent GlobalId plus slice index for unloaded elements and placements.
+
+The `level-slices` Chromium fixture opens an IFC wall and checks picking at three heights, gizmo placement, unloading one slice, reopening, selective reload and unsplitting. It also covers a multi-piece wall under a rotated Z-up root.

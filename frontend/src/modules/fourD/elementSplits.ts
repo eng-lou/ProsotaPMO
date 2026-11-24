@@ -1,14 +1,6 @@
 import { api } from '@/lib/api'
 
-// Frontend for element_split.py's backend (2026-07-15, per Maro: "vertical
-// elements are modeled this way which seems like it spans across several
-// levels at once, which is unreasonable in the construction process unless
-// its a prefab installation... I want to be able to split an element by
-// levels"). Only ever records WHICH elevations to cut an element at — the
-// actual per-level slices are generated client-side every time the model
-// loads (elementSplitTargets.ts), as clipped clones of the one real mesh.
-// No geometry is ever produced or stored here; see element_split.py's own
-// docstring for the full reasoning.
+// The API stores the cut elevations. The viewer builds selectable meshes from the original IFC on load.
 export interface ElementSplit {
   id: string
   project_id: string

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/browser/run-web-fixture.mjs batch && node tests/browser/run-web-fixture.mjs import && node tests/browser/run-web-fixture.mjs context && node tests/browser/run-web-fixture.mjs foliage",
+    "test:browser": "node tests/browser/run-web-fixture.mjs batch && node tests/browser/run-web-fixture.mjs import && node tests/browser/run-web-fixture.mjs context && node tests/browser/run-web-fixture.mjs foliage && node tests/browser/run-web-fixture.mjs level-slices",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },

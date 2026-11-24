@@ -7086,9 +7086,17 @@ export function Viewport3D({
   return (
     <div
       ref={containerRef}
+      tabIndex={-1}
+      onKeyDown={event => {
+        if (event.key === 'Delete' && !event.repeat && (event.target === event.currentTarget || event.target instanceof HTMLCanvasElement) && selectedExpressIds.size > 0) {
+          event.preventDefault()
+          event.stopPropagation()
+          onUnloadSelected()
+        }
+      }}
       className="relative flex-1 min-h-0 bg-gradient-to-b from-sky-100 to-white"
       onPointerDownCapture={e => {
-        if (e.target instanceof HTMLCanvasElement) { selectionGesture.current.begin(e.clientX, e.clientY, e.pointerId); handleBoxPointerDown(e) }
+        if (e.target instanceof HTMLCanvasElement) { e.currentTarget.focus({ preventScroll: true }); selectionGesture.current.begin(e.clientX, e.clientY, e.pointerId); handleBoxPointerDown(e) }
       }}
       onPointerMoveCapture={e => { selectionGesture.current.move(e.clientX, e.clientY, e.pointerId); handleBoxPointerMove(e) }}
       onPointerUpCapture={e => { selectionGesture.current.move(e.clientX, e.clientY, e.pointerId); handleBoxPointerMove(e); handleBoxPointerUp() }}
@@ -7163,7 +7171,7 @@ export function Viewport3D({
         <button
           onClick={onUnloadSelected}
           disabled={selectedExpressIds.size === 0}
-          title="Unload Selected — actually remove the selected elements from this session (frees geometry; not reversible short of re-importing). Unlike Hide, this is real disposal, not just visibility."
+          title="Remove selected IFC elements or level slices (Delete). Restore them with Reload IFC."
           className="text-xs px-2 py-1 rounded-md border border-red-300 bg-white/90 text-red-600 dark:text-red-400 hover:bg-red-50 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-300 disabled:text-gray-600"
         >
           Unload Selected

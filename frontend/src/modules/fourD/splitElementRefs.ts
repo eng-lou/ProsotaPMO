@@ -1,13 +1,6 @@
 import type { IfcModelHandle } from './ifcModel'
 
-// The synthetic-expressID <-> element_ref lookup for level-slices
-// (2026-07-15), split out from elementSplitTargets.ts on purpose: that
-// module imports three.js to actually build/clip the clone meshes, but
-// several consumers of *this* lookup alone (linkedElements.ts,
-// collectionResolvers.ts) deliberately have no other reason to pull three.js
-// into their own dependency graph — linkedElements.ts's own header explains
-// why. See elementSplitTargets.ts's own header for the full "clipped
-// virtual slice" design this is one piece of.
+// Selection uses per-handle express IDs. Project data uses the stable parent GlobalId and slice index.
 export interface SplitTargetMaps {
   refToExpressId: Map<string, number>
   expressIdToRef: Map<number, string>

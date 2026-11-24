@@ -1,3 +1,4 @@
+import { getSplitExpressId, parseSplitElementRef } from './splitElementRefs'
 import * as THREE from 'three'
 import {
   IfcAPI, IFCRELAGGREGATES, IFCRELASSOCIATESMATERIAL, IFCRELCONTAINEDINSPATIALSTRUCTURE, IFCRELDEFINESBYPROPERTIES, IFCRELDEFINESBYTYPE,
@@ -194,6 +195,7 @@ export function getExpressIdFromGuid(handle: IfcModelHandle, guid: string): numb
 
 // Older exclusions may contain the express ID when the IFC has no GlobalId.
 export function resolveUnloadedId(handle: IfcModelHandle, guid: string): number | undefined {
+  if (parseSplitElementRef(guid)) return getSplitExpressId(handle, guid)
   if (/^[1-9]\d{0,9}$/.test(guid)) return Number(guid)
   return getExpressIdFromGuid(handle, guid)
 }

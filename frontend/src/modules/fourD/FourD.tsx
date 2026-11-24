@@ -86,7 +86,7 @@ import {
 } from './collections'
 import { CollectionsPanel } from './CollectionsPanel'
 import { listElementSplits, type ElementSplit } from './elementSplits'
-import { regenerateSplitTargets } from './elementSplitTargets'
+import { regenerateSplitTargets, splitExclusions } from './elementSplitTargets'
 import { SplitByLevelPanel } from './SplitByLevelPanel'
 import { applyElementTransform, restoreIfcPlacements } from './savedModelPlacement'
 import { listElementTransforms, saveElementTransform, type ElementTransform } from './elementTransforms'
@@ -136,7 +136,7 @@ import { selectedPileBounds } from './pileSelection'
 import { SiteToolsPanel } from './SiteToolsPanel'
 import { loadSiteAsset, importSiteAsset } from './siteAssets'
 import { siteMaterialInfo, primitiveMaterialInfo } from './siteAssetMaterials'
-import { getSplitElementRef } from './splitElementRefs'
+import { getSplitElementRef, getSplitExpressId, parseSplitElementRef } from './splitElementRefs'
 import { copyName, copySitePlacements, planningCopyFile, ifcCopySource } from './planningCopies'
 import { siteError, sitePlacementPoint, useSiteScene } from './siteScene'
 import { createZone, deleteZone, listZones, updateZone, type Zone, type ZonePoint } from './zones'
@@ -3197,6 +3197,22 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // by whichever of this file's own calls to updateUnloadedElements last
   // succeeded.
   const [unloadedElementsByFileId, setUnloadedElementsByFileId] = useState<Map<string, UnloadedElementInfo[]>>(new Map())
+  const removalSaveQueue = useRef<Promise<unknown>>(Promise.resolve())
+  function saveRemovalList(fileId: string, change: (previous: UnloadedElementInfo[]) => UnloadedElementInfo[]) {
+    const projectId = selectedProject!.id
+    // The API replaces the whole list. Read the latest list inside the queue so
+    // consecutive deletes and selective reloads cannot overwrite an earlier edit.
+    const save = removalSaveQueue.current.then(async () => {
+      const file = (await listModel3DFiles(projectId)).find(f => f.id === fileId)
+      if (!file) throw new Error('The saved IFC file is unavailable.')
+      const updated = await updateUnloadedElements(fileId, change(file.unloaded_elements ?? []))
+      if (sceneObjectsRef.current.some(o => o.fileId === fileId)) {
+        setUnloadedElementsByFileId(prev => new Map(prev).set(fileId, updated.unloaded_elements ?? []))
+      }
+    })
+    removalSaveQueue.current = save.catch(() => {})
+    return save
+  }
   // Re-keyed by scene-object id (not fileId) for IfcDataPanel.tsx's own
   // per-model Reload button, which only ever knows the model's `ifc-${modelID}`
   // id, not its backend fileId.
@@ -3210,25 +3226,25 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // indicator already read, now surfaced per row in both data panels too.
   const unsavedObjectIds = new Set(sceneObjects.filter(o => o.fileId === null).map(o => o.id))
 
-  // Regenerates every level-slice clone whenever the loaded IFC models or
-  // the split configuration change (2026-07-15) — see elementSplitTargets.ts's
-  // own header for why this is a full rebuild each time, not an incremental
-  // diff. Bumps sceneObjects afterward (a trivial new-array-same-contents
-  // set) purely to give Viewport3D.tsx's ModelObjects effect a fresh
-  // `objects` identity to react to — it already re-derives viewportObjects
-  // fresh off sceneObjects on every render, but has no other way to notice
-  // this effect just imperatively added new mesh children to a handle it
-  // already holds a reference to (mutating handle.object doesn't itself
-  // trigger a React re-render the way setState does).
+  const syncHandleSplits = async (handle: IfcModelHandle, current: () => boolean) => {
+    const rows = elementSplits.filter(row => row.project_id === selectedProject?.id)
+    const created = await regenerateSplitTargets(handle, rows, settings.upAxis, current)
+    if (!current() || !created.size) return
+    const fileId = sceneObjectsRef.current.find(o => o.object === handle.object)?.fileId
+    const saved = elementTransformsRef.current.filter(t => t.model3d_file_id === fileId && t.element_ref && created.has(t.element_ref))
+    restoreIfcPlacements(handle.object, saved, ref => getSplitExpressId(handle, ref))
+  }
+
   useEffect(() => {
-    if (ifcHandles.length === 0) return
+    if (!ifcHandles.length) return
     let cancelled = false
-    ;(async () => {
-      for (const handle of ifcHandles) await regenerateSplitTargets(handle, elementSplits, settings.upAxis)
-      if (!cancelled) setSceneObjects(prev => [...prev])
-    })()
+    Promise.all(ifcHandles.map(handle => syncHandleSplits(handle, () => !cancelled))).then(() => {
+      if (!cancelled) {
+        setMaterializeVersion(v => v + 1)
+        setSceneObjects(prev => [...prev])
+      }
+    }).catch(err => { if (!cancelled) addImportError(sectionBoxErrorMessage(err, 'Could not rebuild the level slices.')) })
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ifcHandles, elementSplits, settings.upAxis])
 
   const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false)
@@ -4654,7 +4670,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             const elementTransforms_ = transforms.filter(t => t.model3d_file_id === file.id && t.element_ref !== null)
             if (elementTransforms_.length > 0) {
               const { getExpressIdFromGuid } = await import('./ifcModel')
-              restoreIfcPlacements(handle.object, elementTransforms_, guid => getExpressIdFromGuid(handle, guid))
+              restoreIfcPlacements(handle.object, elementTransforms_, guid => parseSplitElementRef(guid) ? undefined : getExpressIdFromGuid(handle, guid))
             }
             // "Unload Selected"/"Reload IFC" (2026-07-26, per Maro: "if i
             // refresh, i expect the elements i unloaded to stay unloaded")
@@ -4667,6 +4683,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
             const persistedUnloaded = file.unloaded_elements ?? []
             if (persistedUnloaded.length > 0) {
               const { resolveUnloadedId } = await import('./ifcModel')
+              for (const entry of persistedUnloaded) splitExclusions(handle).add(entry.guid)
               const unloadedExpressIds = persistedUnloaded
                 .map(e => resolveUnloadedId(handle, e.guid))
                 .filter((expressId): expressId is number => expressId !== undefined)
@@ -5039,13 +5056,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
         keyframeIds: elementKeyframes.keyframes.filter(k => k.source_kind === 'mesh' && k.element_ref === target.name).map(k => k.id),
       }
     }
-    const ifcLinks = modelElementLinks.filter(l => l.source_kind === 'ifc')
+    const ifcLinks = modelElementLinks.filter(l => l.source_kind === 'ifc' || l.source_kind === 'ifc_split')
     const ifcKeyframes = elementKeyframes.keyframes.filter(k => k.source_kind === 'ifc')
     const handle = getIfcHandleFor(target.id)
     if (!handle || (ifcLinks.length === 0 && ifcKeyframes.length === 0)) return { linkIds: [], keyframeIds: [] }
     const { getExpressIdFromGuid } = await import('./ifcModel')
     return {
-      linkIds: ifcLinks.filter(l => getExpressIdFromGuid(handle, l.element_ref) !== undefined).map(l => l.id),
+      linkIds: ifcLinks.filter(l => (l.source_kind === 'ifc_split' ? getSplitExpressId(handle, l.element_ref) : getExpressIdFromGuid(handle, l.element_ref)) !== undefined).map(l => l.id),
       keyframeIds: ifcKeyframes.filter(k => getExpressIdFromGuid(handle, k.element_ref) !== undefined).map(k => k.id),
     }
   }
@@ -5114,13 +5131,13 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const resolveLinkedDataForElements = async (
     handle: IfcModelHandle, expressIds: number[],
   ): Promise<{ linkIds: string[]; keyframeIds: string[] }> => {
-    const ifcLinks = modelElementLinks.filter(l => l.source_kind === 'ifc')
+    const ifcLinks = modelElementLinks.filter(l => l.source_kind === 'ifc' || l.source_kind === 'ifc_split')
     const ifcKeyframes = elementKeyframes.keyframes.filter(k => k.source_kind === 'ifc')
     if (ifcLinks.length === 0 && ifcKeyframes.length === 0) return { linkIds: [], keyframeIds: [] }
     const { getExpressIdFromGuid } = await import('./ifcModel')
     const targetIds = new Set(expressIds)
     const matches = (elementRef: string) => {
-      const expressID = getExpressIdFromGuid(handle, elementRef)
+      const expressID = parseSplitElementRef(elementRef) ? getSplitExpressId(handle, elementRef) : getExpressIdFromGuid(handle, elementRef)
       return expressID !== undefined && targetIds.has(expressID)
     }
     return {
@@ -5140,7 +5157,12 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   const performUnloadElements = async (objectId: string, expressIds: number[]) => {
     const handle = getIfcHandleFor(objectId)
     if (!handle) return
+    const sliceRefs = new Map(expressIds.map(id => [id, getSplitElementRef(handle, id)]))
+    for (const ref of sliceRefs.values()) {
+      if (ref) splitExclusions(handle).add(ref)
+    }
     removeElementsFromModel(handle.object, expressIds)
+    await syncHandleSplits(handle, () => ifcHandlesRef.current.includes(handle))
     setSceneObjects(prev => [...prev])
     setMaterializeVersion(v => v + 1)
     const removedSet = new Set(expressIds)
@@ -5201,17 +5223,24 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       return
     }
     if (!fileId) return
-    const { getGuidFromExpressId, getElementTypeName, getElementName } = await import('./ifcModel')
-    const newEntries = await Promise.all(expressIds.map(async expressID => ({
-      guid: getGuidFromExpressId(handle, expressID) ?? String(expressID),
-      name: await getElementName(handle, expressID).catch(() => ''),
-      type_name: getElementTypeName(handle, expressID),
-    })))
-    const existing = unloadedElementsByFileId.get(fileId) ?? []
-    const merged = [...existing.filter(e => !newEntries.some(n => n.guid === e.guid)), ...newEntries]
+    const { getGuidFromExpressId, getExpressIdFromGuid, getElementTypeName, getElementName } = await import('./ifcModel')
+    const newEntries = await Promise.all(expressIds.map(async expressID => {
+      const ref = sliceRefs.get(expressID)
+      if (ref) {
+        const parsed = parseSplitElementRef(ref)!
+        const parent = getExpressIdFromGuid(handle, parsed.parentGlobalId)
+        const name = parent === undefined ? '' : await getElementName(handle, parent).catch(() => '')
+        return { guid: ref, name: (name || parsed.parentGlobalId) + ' - Level slice ' + (parsed.index + 1), type_name: 'Level slice' }
+      }
+      return {
+        guid: getGuidFromExpressId(handle, expressID) ?? String(expressID),
+        name: await getElementName(handle, expressID).catch(() => ''),
+        type_name: getElementTypeName(handle, expressID),
+      }
+    }))
+    const removedRefs = new Set(newEntries.map(e => e.guid))
     try {
-      const updated = await updateUnloadedElements(fileId, merged)
-      setUnloadedElementsByFileId(prev => new Map(prev).set(fileId!, updated.unloaded_elements ?? merged))
+      await saveRemovalList(fileId, previous => [...previous.filter(e => !removedRefs.has(e.guid)), ...newEntries])
     } catch (err) {
       // Non-fatal (2026-07-26, same "fire-and-forget persistence, tell the
       // user, don't roll back a scene edit that already visibly happened"
@@ -5229,27 +5258,36 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
   // is fully generic (name/linkCount/keyframeCount + 3 callbacks), reused
   // as-is rather than building a second near-identical modal.
   const [pendingElementUnload, setPendingElementUnload] = useState<{
-    objectId: string; expressIds: number[]; linkIds: string[]; keyframeIds: string[]
+    groups: {objectId: string; expressIds: number[]}[]; count: number; linkIds: string[]; keyframeIds: string[]
   } | null>(null)
 
   const handleUnloadSelected = async () => {
-    if (!activeObjectId || selectedExpressIds.size === 0) return
-    const handle = getIfcHandleFor(activeObjectId)
-    if (!handle) return
-    const expressIds = [...selectedExpressIds]
-    const { linkIds, keyframeIds } = await resolveLinkedDataForElements(handle, expressIds)
-    if (linkIds.length === 0 && keyframeIds.length === 0) {
-      await performUnloadElements(activeObjectId, expressIds)
+    const owners = currentIfcPick()
+    // Older single-model tree selections can lack a qualified pick.
+    if (!owners.size && activeObjectId && selectedObjectIds.size === 1 && getIfcHandleFor(activeObjectId)) {
+      owners.set(activeObjectId, selectedExpressIds)
+    }
+    const groups = [...owners].flatMap(([objectId, ids]) => {
+      const handle = getIfcHandleFor(objectId)
+      return handle && ids.size ? [{ objectId, expressIds: [...ids], handle }] : []
+    })
+    if (!groups.length) return
+    const linked = await Promise.all(groups.map(group =>
+      resolveLinkedDataForElements(group.handle, group.expressIds)))
+    const linkIds = [...new Set(linked.flatMap(group => group.linkIds))]
+    const keyframeIds = [...new Set(linked.flatMap(group => group.keyframeIds))]
+    if (!linkIds.length && !keyframeIds.length) {
+      await Promise.all(groups.map(group => performUnloadElements(group.objectId, group.expressIds)))
       return
     }
-    setPendingElementUnload({ objectId: activeObjectId, expressIds, linkIds, keyframeIds })
+    setPendingElementUnload({ groups, count: groups.reduce((n,g) => n + g.expressIds.length, 0), linkIds, keyframeIds })
   }
 
-  const handleConfirmElementUnload = (deleteLinks: boolean) => {
+  const handleConfirmElementUnload = async (deleteLinks: boolean) => {
     if (!pendingElementUnload) return
-    const { objectId, expressIds, linkIds, keyframeIds } = pendingElementUnload
+    const { groups, linkIds, keyframeIds } = pendingElementUnload
     setPendingElementUnload(null)
-    performUnloadElements(objectId, expressIds)
+    await Promise.all(groups.map(group => performUnloadElements(group.objectId, group.expressIds)))
     if (deleteLinks) {
       linkIds.forEach(handleUnlinkElement)
       keyframeIds.forEach(keyframeId => elementKeyframes.remove(keyframeId))
@@ -5274,22 +5312,36 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
     const current = () => ifcHandlesRef.current.includes(handle)
     if (!current()) throw new Error('This model is no longer open.')
     const checked = new Set(guidsToRestore)
-    const ids = guidsToRestore.map(guid => {
-      const id = resolveUnloadedId(handle, guid)
-      if (id === undefined) throw new Error(`Could not find ${guid} in the open IFC. Check the model revision.`)
+    const slices = guidsToRestore.filter(ref => parseSplitElementRef(ref) || getSplitElementRef(handle, Number(ref)))
+    const ids = guidsToRestore.filter(ref => !slices.includes(ref)).map(ref => {
+      const id = resolveUnloadedId(handle, ref)
+      if (id === undefined) throw new Error(`Could not find ${ref} in the open IFC. Check the model revision.`)
       return id
     })
     const restored = restoreRemovedElements(handle.object, ids)
     try {
       const transforms = elementTransformsRef.current.filter(t =>
-        t.model3d_file_id === fileId && t.element_ref !== null && checked.has(t.element_ref))
+        t.model3d_file_id === fileId && t.element_ref !== null && checked.has(t.element_ref) && !slices.includes(t.element_ref))
       restoreIfcPlacements(handle.object, transforms, guid => resolveUnloadedId(handle, guid))
-      const remaining = (unloadedElementsByFileId.get(fileId) ?? []).filter(e => !checked.has(e.guid))
-      const updated = await updateUnloadedElements(fileId, remaining)
+      for (const ref of slices) splitExclusions(handle).delete(ref)
+      await syncHandleSplits(handle, current)
       if (!current()) return
-      setUnloadedElementsByFileId(prev => new Map(prev).set(fileId, updated.unloaded_elements ?? remaining))
+      for (const ref of slices) {
+        const id = resolveUnloadedId(handle, ref)
+        if (id === undefined || !hasGeometry(handle.object, id)) throw new Error('The source of this slice is unavailable. Check the split and restore its parent IFC element first.')
+      }
+      await saveRemovalList(fileId, previous => previous.filter(e => !checked.has(e.guid)))
+      if (!current()) return
     } catch (error) {
-      if (current()) removeElementsFromModel(handle.object, restored)
+      if (current()) {
+        for (const ref of slices) {
+          splitExclusions(handle).add(ref)
+          const id = resolveUnloadedId(handle, ref)
+          if (id !== undefined) removeElementsFromModel(handle.object, [id])
+        }
+        removeElementsFromModel(handle.object, restored)
+        await syncHandleSplits(handle, current)
+      }
       throw error
     } finally {
       if (current()) {
@@ -6310,7 +6362,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       let elementRef: string | null = null
       if (elementScoped && handle && expressId !== null) {
         const { getGuidFromExpressId } = await import('./ifcModel')
-        elementRef = getGuidFromExpressId(handle, expressId) ?? null
+        elementRef = getSplitElementRef(handle, expressId) ?? getGuidFromExpressId(handle, expressId) ?? null
         if (!elementRef) {
           addImportError(`Couldn't save the placement of IFC element ${expressId} in "${sceneObjectName}". Its IFC GlobalId is missing.`)
           return
@@ -8656,7 +8708,7 @@ export function FourD({ active = true }: { active?: boolean } = {}) {
       )}
       {pendingElementUnload && (
         <UnloadModelDialog
-          name={`${pendingElementUnload.expressIds.length} selected element${pendingElementUnload.expressIds.length === 1 ? '' : 's'}`}
+          name={`${pendingElementUnload.count} selected element${pendingElementUnload.count === 1 ? '' : 's'}`}
           linkCount={pendingElementUnload.linkIds.length}
           keyframeCount={pendingElementUnload.keyframeIds.length}
           onUnloadOnly={() => handleConfirmElementUnload(false)}
