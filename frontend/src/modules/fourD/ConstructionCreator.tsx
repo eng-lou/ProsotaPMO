@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bounds, OrbitControls } from '@react-three/drei'
-import { SafeCanvas as Canvas } from './SafeCanvas'
+import { ConstructionPreviewView } from './ConstructionPreviewView'
 import { constructionModes, type ConstructionMode, type ConstructionOptions } from './constructionGeometry'
 import { constructionPlacements, prepareConstruction, releaseConstruction, type ConstructionPreview, type HostSource } from './constructionLayout'
 import { siteError, type useSiteScene } from './siteScene'
@@ -90,9 +89,7 @@ export function ConstructionCreator({kind,projectId,upAxis,selectedSources,state
       {kind==='Reinforcement'&&<><div className="grid grid-cols-2 gap-2">{number('Spacing (mm)',spacing,setSpacing)}{number('Bar diameter (mm)',diameter,setDiameter)}{number('Cover (mm)',cover,setCover)}</div>
         {mode==='mat'&&<label className="flex gap-2"><input type="checkbox" checked={doubleMat} onChange={e=>{clear();setDoubleMat(e.target.checked)}}/>Top and bottom mats</label>}</>}
       <button className={button} disabled={!state.ready} onClick={()=>void prepare()}>{busy?'Working…':'Preview from selection'}</button>
-      {preview&&<><div className="h-48 rounded bg-slate-800 overflow-hidden">
-        <Canvas camera={{position:[6,5,7],fov:40}}><ambientLight intensity={1.8}/><directionalLight position={[5,9,3]} intensity={2.4}/><Bounds fit clip observe margin={1.2} key={preview.scene.uuid}><primitive object={preview.scene} dispose={null}/></Bounds><OrbitControls makeDefault/></Canvas>
-      </div><p>{preview.hosts} selected {preview.hosts===1?'host':'hosts'} · {preview.parts} construction parts</p>
+      {preview&&<><ConstructionPreviewView scene={preview.scene} label={constructionModes[mode]}/><p>{preview.hosts} selected {preview.hosts===1?'host':'hosts'} · {preview.parts} construction parts</p>
       {preview.parts>1&&<label className="flex gap-2"><input type="checkbox" checked={separate} onChange={e=>setSeparate(e.target.checked)}/>Save parts separately for scheduling</label>}
       <button className={button+' bg-blue-600 text-white'} onClick={()=>void create()}>Create at selected {preview.hosts===1?'element':'elements'}</button>
       <button className={button} onClick={()=>void create(true)}>Create and plan activities…</button></>}

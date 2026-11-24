@@ -56,3 +56,9 @@ export const CATEGORY_ORDER: ScheduleCategory[] = [
   'Mechanical Equipment', 'Ductwork', 'Piping', 'Electrical Containment', 'Railings', 'Coverings',
   'Air Terminals', 'Plumbing Fixtures', 'Lighting', 'Electrical Devices', 'Furnishings', 'Site & Landscaping',
 ]
+
+
+export function compareConstructionGroups(a: {name: string; frameOrder?: number}, b: {name: string; frameOrder?: number}) {
+  const rank = (g: typeof a) => CATEGORY_ORDER.indexOf((g.frameOrder === undefined ? g.name : 'Columns') as ScheduleCategory)
+  return rank(a) - rank(b) || (a.frameOrder ?? 0) - (b.frameOrder ?? 0)
+}

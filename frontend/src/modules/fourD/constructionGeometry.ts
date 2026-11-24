@@ -88,11 +88,16 @@ function meshMaterial(){
   return new MeshStandardMaterial({color:finishes.mesh,map:texture,alphaTest:.5,side:DoubleSide,roughness:.78,metalness:.4})
 }
 
+// Centre lines keep subpixel bars legible in the creator. Keyed by geometry so
+// the preview data follows its lifetime and stays out of the exported GLB.
+export const previewBarLines = new WeakMap<BufferGeometry, Float32Array>()
+
 /** Geometry is batched per moving part and finish. Exported GLBs need no instancing extensions. */
 class Parts {
   root=new Group()
   private meshes=new Map<Group,Map<MeshStandardMaterial,BufferGeometry[]>>()
   private materials=new Map<Finish,MeshStandardMaterial>()
+  private barLines=new Map<Group, Map<Finish, number[]>>()
   private pieces=0
   private vertices=0
   constructor(private prefix:string){}
@@ -124,6 +129,13 @@ class Parts {
   member(g:Group,m:Finish,a:Vector3,b:Vector3,w:number,d=w,round=false){
     const dir=b.clone().sub(a),length=dir.length()
     if(length<1e-5)return
+    if (m === 'bar' || m === 'link') {
+      const byFinish = this.barLines.get(g) ?? new Map<Finish, number[]>()
+      const positions = byFinish.get(m) ?? []
+      positions.push(a.x, a.y, a.z, b.x, b.y, b.z)
+      byFinish.set(m, positions)
+      this.barLines.set(g, byFinish)
+    }
     // For horizontal rectangular members the depth is vertical, regardless of heading.
     const matrix=new Matrix4()
     if(!round && Math.abs(dir.y)<1e-8){
@@ -138,6 +150,8 @@ class Parts {
       const merged=mergeGeometries(inputs)
       new Set([...inputs,...geos]).forEach(g=>g.dispose())
       if(!merged)throw Error('Could not assemble '+part.name)
+      const lines=this.barLines.get(part)?.get(mat.name as Finish)
+      if(lines)previewBarLines.set(merged,new Float32Array(lines))
       const mesh=new Mesh(merged,mat);mesh.name=part.name+' '+mat.name
       mesh.castShadow=mesh.receiveShadow=true;part.add(mesh)
     }

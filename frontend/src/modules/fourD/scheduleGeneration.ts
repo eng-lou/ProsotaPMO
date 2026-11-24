@@ -1,5 +1,5 @@
-import type { ExtractedElement, ScheduleCategory } from './ifcScheduleExtraction'
-import { CATEGORY_ORDER } from './scheduleCategoryOrder'
+import type { ExtractedElement, ScheduleCategory, StructuralMaterial } from './ifcScheduleExtraction'
+import { compareConstructionGroups } from './scheduleCategoryOrder'
 import { sequenceTower, type TowerSequencing } from './towerSequencing'
 
 // IFC Schedule Wizard, step 2 (2026-07-13) — groups a proposed WBS (one
@@ -581,6 +581,51 @@ export const DEFAULT_CATEGORY_PHASES: Record<ScheduleCategory, CategoryPhase[]> 
   ],
 }
 
+// Recipes use distinct phase keys so saved schedules can recover their crew and BOQ units.
+function frameRecipes(category: 'Columns' | 'Beams' | 'Slabs' | 'Walls') {
+  const slab = category === 'Slabs'
+  const unit = slab || category === 'Walls' ? 'm²' : 'each'
+  const rate = (crewName: string, productivityPerCrewDay: number, costPerCrewDay: number): CategoryRate =>
+    ({ crewName, crewSize: 5, productivityPerCrewDay, costPerCrewDay, unit })
+  const form = rate('Formwork Crew', slab ? 100 : 8, 1500)
+  const fix = rate('Rebar Crew', slab ? 130 : 10, 1400)
+  const pump: CategoryRate = { ...DEFAULT_CATEGORY_PHASES.Slabs[1].rate, unit, productivityPerCrewDay: slab ? 300 : 14 }
+  const fixBars = { key: 'rc_fix', label: 'Fix Reinforcement', rate: fix }
+  const forms = { key: 'rc_form', label: category === 'Columns' ? 'Erect Column Shutters' : 'Set '+category.slice(0,-1)+' Formwork', rate: form }
+  const pour = { key: 'rc_pour', label: 'Pour Concrete', rate: pump }
+  const strip = { key: 'rc_strip', label: slab ? 'Cure & Finish Slab' : 'Cure & Strip Formwork',
+    rate: slab ? DEFAULT_CATEGORY_PHASES.Slabs[2].rate : form }
+  const precast = { ...rate('Precast Installation Crew', slab ? 180 : 10, 1800),
+    equipmentName: 'Mobile Crane (50t)', equipmentCostPerDay: 1500 }
+  return {
+    concrete: category === 'Walls' ? DEFAULT_CATEGORY_PHASES.Walls :
+      category === 'Columns' ? [fixBars, forms, pour, strip] : [forms, fixBars, pour, strip],
+    precast: [
+      { key: 'pc_install', label: 'Lift & Place Precast '+category, rate: precast },
+      { key: 'pc_connect', label: 'Complete Precast Connections', rate: rate('Precast Installation Crew', slab ? 220 : 14, 1800) },
+    ],
+    neutral: [{ key: 'install_frame', label: 'Install '+category, rate: rate('Installation Crew', unit === 'each' ? 8 : 120, 1500) }],
+  }
+}
+const structuralRecipes = { Columns: frameRecipes('Columns'), Beams: frameRecipes('Beams'), Slabs: frameRecipes('Slabs'), Walls: frameRecipes('Walls') }
+function variants(name: string) { return Object.prototype.hasOwnProperty.call(structuralRecipes,name) ? structuralRecipes[name as keyof typeof structuralRecipes] : undefined }
+
+function constructionPhases(category: CategoryGroup): CategoryPhase[] {
+  const recipes = variants(category.name)
+  if (!recipes || !category.method) return resolvePhases(category.name)
+  if (category.method === 'precast') return recipes.precast
+  if (category.method === 'concrete') return recipes.concrete
+  if (category.method === 'composite' && category.name === 'Slabs') return DEFAULT_CATEGORY_PHASES.Slabs
+  if (category.method === 'steel' && (category.name === 'Columns' || category.name === 'Beams')) return resolvePhases(category.name)
+  return recipes.neutral
+}
+
+export function resolveActivityPhase(category: string, key: string | null) {
+  const legacy = resolvePhases(category)
+  const recipes = variants(category)
+  return legacy.find(p=>p.key===key) ?? (recipes && Object.values(recipes).flat().find(p=>p.key===key)) ?? legacy[0]
+}
+
 // A generic single-phase fallback for a Collections-derived category with
 // no name match against the known categories above — always count-based
 // (a hand-built collection carries no length/area metadata the way an
@@ -683,8 +728,7 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
 
   for (const activity of activities) {
     if (!activity.schedule_category) continue
-    const phases = resolvePhases(activity.schedule_category)
-    const phase = phases.find(p => p.key === activity.schedule_phase_key) ?? phases[0]
+    const phase = resolveActivityPhase(activity.schedule_category, activity.schedule_phase_key)
     if (!phase) continue
     const { rate } = phase
     assignments.push({
@@ -729,6 +773,8 @@ export function buildResourceRecipe(activities: ResourceRecipeActivity[]): {
 }
 
 export interface CategoryGroup {
+  method?: StructuralMaterial
+  frameOrder?: number
   workstream?: 'core'
   phaseWork?: Record<string, { quantity: number; elementRefs: string[]; elementLabels: string[] }>
   name: string
@@ -789,46 +835,89 @@ const COUNT_BASED: ReadonlySet<ScheduleCategory> = new Set([
 // elevation sort last rather than crashing the ordering — same "don't
 // guess, degrade gracefully" rule ifcModel.ts's own unit-conversion
 // fallback follows).
-export function groupByStorey(elements: ExtractedElement[]): StoreyGroup[] {
-  interface Bucket {
-    storeyName: string; elevationMetres: number | null
-    categories: Map<ScheduleCategory, { elementRefs: string[]; elementLabels: string[]; quantity: number; materialVolumeM3: number }>
-  }
-  const byStorey = new Map<string, Bucket>()
-  // Each element once (2026-09-29, real production failure): federated
-  // models can carry the same element under the same GlobalId in more than
-  // one file — the NBU Medical Clinic's Eng-ELE.ifc and Eng-MEP.ifc share
-  // 2,048 light fittings — which double-counted its quantity and sent the
-  // same link twice (a 500 from the backend's one-link-per-element rule).
-  // First model scanned wins.
-  const seenGlobalIds = new Set<string>()
+// Thin slab faces also identify the vertical axis in single-storey models, where
+// comparing storey elevations alone can give X, Y and Z equally good scores.
+function slabVerticalAxis(elements: ExtractedElement[]) {
+  const votes = [0,0,0]
   for (const el of elements) {
-    if (seenGlobalIds.has(el.globalId)) continue
-    seenGlobalIds.add(el.globalId)
+    if (el.category !== 'Slabs') continue
+    const size = el.boxMaxMetres.map((v,i)=>v-el.boxMinMetres[i])
+    const [thin,next] = [0,1,2].sort((a,b)=>size[a]-size[b])
+    if (size[thin] > 0 && size[thin] * 3 < size[next]) votes[thin]++
+  }
+  const [first,second] = [0,1,2].sort((a,b)=>votes[b]-votes[a])
+  return votes[first] > votes[second] ? first : undefined
+}
+
+export function groupByStorey(elements: ExtractedElement[], axis?: number): StoreyGroup[] {
+  const byStorey = new Map<string, {elevation: number | null; categories: Map<string, CategoryGroup>}>()
+  const seen = new Set<string>()
+  const unique = elements.filter(el => {
+    if (seen.has(el.globalId)) return false
+    seen.add(el.globalId)
+    return true
+  })
+  const evidence = new Map<string, Set<StructuralMaterial>>()
+  const location = (el: ExtractedElement) => JSON.stringify([el.sourceModelId, el.storeyName])
+  for (const el of unique) {
+    if (el.category !== 'Columns' && el.category !== 'Beams') continue
+    const key = location(el)
+    const methods = evidence.get(key) ?? new Set<StructuralMaterial>()
+    methods.add(el.material ?? 'unknown')
+    evidence.set(key, methods)
+  }
+
+  // A slab closes the band below it. Members bearing on that slab start the next
+  // band, even when the IFC puts both rows (or several decks) under one storey.
+  const decks: number[] = []
+  if (axis !== undefined) {
+    const tops = unique.filter(el=>el.category==='Slabs').map(el=>el.boxMaxMetres[axis]).sort((a,b)=>a-b)
+    for (const top of tops) if (!decks.length || top - decks[decks.length-1] > LEVEL_MERGE_TOLERANCE_M) decks.push(top)
+  }
+  function bandAt(height: number) {
+    let lo=0, hi=decks.length
+    while (lo<hi) {
+      const mid=Math.floor((lo+hi)/2)
+      if (decks[mid] < height) lo=mid+1
+      else hi=mid
+    }
+    return lo
+  }
+
+  for (const el of unique) {
     let group = byStorey.get(el.storeyName)
-    if (!group) { group = { storeyName: el.storeyName, elevationMetres: el.storeyElevation, categories: new Map() }; byStorey.set(el.storeyName, group) }
-    let bucket = group.categories.get(el.category)
-    if (!bucket) { bucket = { elementRefs: [], elementLabels: [], quantity: 0, materialVolumeM3: 0 }; group.categories.set(el.category, bucket) }
+    if (!group) {
+      group = {elevation:el.storeyElevation, categories:new Map()}
+      byStorey.set(el.storeyName,group)
+    }
+    const frame = FRAME_CATEGORIES.has(el.category)
+    let method = frame || el.category==='Walls' ? el.material ?? 'unknown' : undefined
+    if (method==='unknown' && (el.category==='Slabs' || el.category==='Walls')) {
+      const methods = evidence.get(location(el))
+      if (methods?.size===1 && methods.has('concrete')) method='concrete'
+    }
+    let frameOrder: number | undefined
+    if (axis!==undefined && decks.length && (frame || (el.category==='Walls' && (method==='concrete' || method==='precast')))) {
+      const slab=el.category==='Slabs'
+      const height=slab ? el.boxMaxMetres[axis]-LEVEL_MERGE_TOLERANCE_M-1e-6 : el.boxMinMetres[axis]+.05
+      const order=slab ? 3 : el.category==='Beams' ? 2 : el.category==='Walls' ? 1 : 0
+      frameOrder=bandAt(height)*4+order
+    }
+    const key=JSON.stringify([el.category, method, frameOrder])
+    let bucket=group.categories.get(key)
+    if (!bucket) {
+      bucket={name:el.category, method, frameOrder, elementRefs:[],elementLabels:[],quantity:0,materialVolumeM3:0}
+      group.categories.set(key,bucket)
+    }
     bucket.elementRefs.push(el.globalId)
-    // el.name falls back to el.ifcType (2026-07-22) — a handful of real
-    // elements genuinely have no Name set in the source file; showing the
-    // IFC type is still more useful for browsing than an empty string.
     bucket.elementLabels.push(el.name || el.ifcType)
     bucket.quantity += COUNT_BASED.has(el.category) ? 1 : el.quantity
     bucket.materialVolumeM3 += el.volumeM3 ?? 0
   }
-  return [...byStorey.values()]
-    .sort((a, b) => {
-      const ea = a.elevationMetres ?? Number.POSITIVE_INFINITY
-      const eb = b.elevationMetres ?? Number.POSITIVE_INFINITY
-      return ea !== eb ? ea - eb : a.storeyName.localeCompare(b.storeyName)
-    })
-    .map(group => ({
-      storeyName: group.storeyName,
-      categories: CATEGORY_ORDER
-        .filter(c => group.categories.has(c))
-        .map(c => ({ name: c, ...group.categories.get(c)! })),
-    }))
+  return [...byStorey].sort(([an,a],[bn,b])=>{
+    const ea=a.elevation??Infinity, eb=b.elevation??Infinity
+    return ea!==eb ? ea-eb : an.localeCompare(bn)
+  }).map(([storeyName,g])=>({storeyName,categories:[...g.categories.values()].sort(compareConstructionGroups)}))
 }
 
 // Building-wide levels, by elevation and physical position — not by storey
@@ -880,7 +969,8 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
   const seen = new Set<string>()
   const unique = elements.filter(el => (seen.has(el.globalId) ? false : (seen.add(el.globalId), true)))
   const declared = unique.filter(el => el.storeyElevation !== null && Number.isFinite(el.storeyElevation))
-  if (declared.length === 0) return groupByStorey(unique)
+  const slabAxis = slabVerticalAxis(unique)
+  if (declared.length === 0) return groupByStorey(unique, slabAxis)
 
   // 1. Levels, merged by elevation.
   interface Level { elevation: number; names: Map<string, { models: Set<number>; count: number }> }
@@ -908,11 +998,13 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
   const calibration = declared.filter(el => FLOOR_STANDING.has(el.category))
   const sample = calibration.length >= 20 ? calibration : declared
   let axis = 2, offset = 0, spread = Infinity
-  for (let a = 0; a < 3; a++) {
+  const axes = slabAxis === undefined ? [0,1,2] : [slabAxis,...[0,1,2].filter(a=>a!==slabAxis)]
+  for (const a of axes) {
     const diffs = sample.map(el => el.boxMinMetres[a] - el.storeyElevation!)
     const m = median(diffs)
     const mad = median(diffs.map(d => Math.abs(d - m)))
     if (mad < spread) { spread = mad; axis = a; offset = m }
+    if (a === slabAxis && (levels.length === 1 || mad < GEOMETRY_TRUST_SPREAD_M)) break
   }
   const trustGeometry = spread < GEOMETRY_TRUST_SPREAD_M
   const levelIndexAtElevation = (elevation: number): number => {
@@ -921,14 +1013,13 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
     return index
   }
   const geometryLevelIndex = (el: ExtractedElement): number => levelIndexAtElevation(el.boxMinMetres[axis] - offset)
-  // The floor a frame member FORMS (2026-10-02, per Maro: "you can see the
-  // ground slab formed after" the first-floor steel). Columns rising to a
-  // level, the beams at that level and the slab on top of them are what
-  // create that floor, so they're grouped by their TOP — the ground slab
-  // (top 0.00) with the ground level, the 4.57 m beams/deck/columns with
-  // the 4.57 m level — and CATEGORY_ORDER's Columns -> Beams -> Slabs then
-  // reads as each floor's real frame cycle. Walls, MEP and finishes stay
-  // grouped by their bottom (the floor they stand on).
+  // Beams and decks form the level at their top. A column with a modelled
+  // bearing slab starts on that slab's level; otherwise it supports the
+  // first level above its base. This also handles continuous columns.
+  const slabsByLevel = levels.map(()=>[] as ExtractedElement[])
+  if (trustGeometry) for (const el of unique) {
+    if (el.category==='Slabs') slabsByLevel[levelIndexAtElevation(el.boxMaxMetres[axis]-offset)].push(el)
+  }
   const frameLevelIndex = (el: ExtractedElement): number => {
     const topIndex = levelIndexAtElevation(el.boxMaxMetres[axis] - offset)
     if (el.category !== 'Columns') return topIndex
@@ -936,6 +1027,11 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
     // above its base — not its top: a continuous two-storey column grouped
     // at its top would make the beams of the floor in between wait for it.
     const base = el.boxMinMetres[axis] - offset
+    const baseIndex = geometryLevelIndex(el)
+    const restsOnSlab = slabsByLevel[baseIndex].some(slab =>
+      Math.abs(slab.boxMaxMetres[axis] - el.boxMinMetres[axis]) <= .05 &&
+      [0,1,2].every(d=>d===axis || (slab.boxMaxMetres[d]>el.boxMinMetres[d] && slab.boxMinMetres[d]<el.boxMaxMetres[d])))
+    if (restsOnSlab) return baseIndex
     const firstAbove = levels.findIndex(l => l.elevation > base + LEVEL_PLACEMENT_TOLERANCE_M)
     return firstAbove === -1 ? topIndex : Math.min(firstAbove, topIndex)
   }
@@ -962,7 +1058,7 @@ export function groupByLevel(elements: ExtractedElement[]): StoreyGroup[] {
       : Math.max(fromDeclared, fromGeometry)
     return { ...el, storeyName: levelName(levels[index]), storeyElevation: levels[index].elevation }
   })
-  return groupByStorey(placed)
+  return groupByStorey(placed, trustGeometry ? axis : slabAxis)
 }
 
 // Whole multiples of HOURS_PER_DAY only, never a fractional/.5-hour
@@ -1146,7 +1242,7 @@ export function usedPhaseRows(storeys: StoreyGroup[]): PhaseRow[] {
   const rows: PhaseRow[] = []
   for (const storey of storeys) {
     for (const category of storey.categories) {
-      for (const phase of resolvePhases(category.name)) {
+      for (const phase of constructionPhases(category)) {
         const id = phaseRowId(category.name, phase.key)
         if (seen.has(id)) continue
         seen.add(id)
@@ -1815,8 +1911,10 @@ export function buildStagedSchedule(
     let firstSlabsTempId: string | null = null
     storey.categories.forEach((category, categoryIndex) => {
       elementCount += category.elementRefs.length
-      const phases = resolvePhases(category.name)
-      const isStructural = STRUCTURAL_CATEGORIES.has(category.name)
+      const phases = constructionPhases(category)
+      const placementKey = phases.find(p=>['rc_pour','pour','pc_install','erect'].includes(p.key))?.key
+      const linkedPhase = category.method && placementKey ? placementKey : phases[phases.length-1].key
+      const isStructural = STRUCTURAL_CATEGORIES.has(category.name) || (category.name === 'Walls' && category.frameOrder !== undefined)
       if (tower?.coreClimbHours && category.workstream==='core' && storeys.slice(0,storeyIndex).some(s=>s.categories.some(c=>c.workstream==='core'))) {
         if (!Number.isFinite(tower.coreClimbHours) || tower.coreClimbHours<=0 || tower.coreClimbHours>8760) throw Error('Enter a positive climb duration up to 8760 working hours.')
         activities.push({temp_id:`act-${storeyIndex}-${categoryIndex}-climb`, task_name:`${storey.storeyName} - Core walls - Climb formwork`,
@@ -1846,11 +1944,11 @@ export function buildStagedSchedule(
           task_name: `${storey.storeyName} — ${tower && category.workstream === 'core' ? 'Core walls' : category.name} — ${phase.label}`,
           parent_temp_id: wbsTempId,
           duration_hours: phaseWork && phaseQuantity === 0 ? 0 : computeDurationHours(phaseQuantity, rate),
-          // Elements "appear" at their category's completion phase, not
+          // Link each physical installation once, on its placement phase or
           // every intermediate step — avoids the same IFC elements being
           // linked to N separate activities for one physical installation.
-          element_refs: phaseWork?.elementRefs ?? (phaseIndex === phases.length - 1 ? category.elementRefs : []),
-          element_labels: phaseWork?.elementLabels ?? (phaseIndex === phases.length - 1 ? category.elementLabels : []),
+          element_refs: phaseWork?.elementRefs ?? (phase.key === linkedPhase ? category.elementRefs : []),
+          element_labels: phaseWork?.elementLabels ?? (phase.key === linkedPhase ? category.elementLabels : []),
           category: category.name, phase_key: phase.key, quantity: phaseQuantity, activity_type: 'task',
           discipline: disciplineFor(category.name, phase.key),
           ...(rate.materialName ? {

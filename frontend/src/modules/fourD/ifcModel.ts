@@ -387,8 +387,7 @@ export async function buildElementStoreyMap(
   handle: IfcModelHandle,
 ): Promise<Map<number, { name: string; elevationMetres: number | null }>> {
   const storeyExpressIds = getExpressIdsForType(handle, 'IfcBuildingStorey')
-  const projectExpressIds = getExpressIdsForType(handle, 'IfcProject')
-  const toMetres = projectExpressIds.length > 0 ? getLengthUnitToMetres(handle, projectExpressIds[0]) : 1
+  const toMetres = getModelLengthUnitToMetres(handle)
 
   const storeyInfoByExpressId = new Map<number, { name: string; elevationMetres: number | null }>()
   await Promise.all(storeyExpressIds.map(async storeyId => {
@@ -932,6 +931,67 @@ function refList(value: unknown): number[] {
   return value.map(refId).filter((id): id is number => id !== null)
 }
 
+type IfcMaterials = { names: string[]; layered: boolean }
+const assignmentCache = new WeakMap<IfcModelHandle, Map<number, IfcMaterials>>()
+
+export function getIfcMaterialAssignments(handle: IfcModelHandle): Map<number, IfcMaterials> {
+  const cached = assignmentCache.get(handle)
+  if (cached) return cached
+  const { api, ifcModelID: modelID } = handle
+  const getLine = (id: number): IfcLine | null => {
+    try { return api.GetLine(modelID, id, false) as IfcLine } catch { return null }
+  }
+  // Element (or type object) -> material names, in layer order for a
+  // layer set.
+  const materialCache = new Map<number, { names: string[]; layered: boolean }>()
+  const resolveMaterial = (id: number, depth: number): { names: string[]; layered: boolean } => {
+    const cached = materialCache.get(id)
+    if (cached) return cached
+    const result = { names: [] as string[], layered: false }
+    const line = depth > 6 ? null : getLine(id)
+    const collect = (ids: number[]) => {
+      for (const child of ids) {
+        const r = resolveMaterial(child, depth + 1)
+        for (const n of r.names) if (!result.names.includes(n)) result.names.push(n)
+        result.layered ||= r.layered
+      }
+    }
+    if (line) {
+      if ('ForLayerSet' in line) { collect(refList(line.ForLayerSet)); result.layered = true }
+      else if ('MaterialLayers' in line) { collect(refList(line.MaterialLayers)); result.layered = true }
+      else if ('ForProfileSet' in line) collect(refList(line.ForProfileSet))
+      else if ('MaterialProfiles' in line) collect(refList(line.MaterialProfiles))
+      else if ('MaterialConstituents' in line) collect(refList(line.MaterialConstituents))
+      else if ('Materials' in line) collect(refList(line.Materials))
+      else if ('Material' in line) collect(refList(line.Material))
+      else if ('Name' in line) { const n = labelOf(line.Name); if (n) result.names.push(n) }
+    }
+    materialCache.set(id, result)
+    return result
+  }
+  const materialByObject = new Map<number, { names: string[]; layered: boolean }>()
+  const associations = api.GetLineIDsWithType(modelID, IFCRELASSOCIATESMATERIAL)
+  for (let i = 0; i < associations.size(); i++) {
+    const rel = getLine(associations.get(i))
+    const materialId = rel ? refId(rel.RelatingMaterial) : null
+    if (!rel || materialId === null) continue
+    const resolved = resolveMaterial(materialId, 0)
+    if (resolved.names.length === 0) continue
+    for (const objectId of refList(rel.RelatedObjects)) materialByObject.set(objectId, resolved)
+  }
+  const typeRels = api.GetLineIDsWithType(modelID, IFCRELDEFINESBYTYPE)
+  for (let i = 0; i < typeRels.size(); i++) {
+    const rel = getLine(typeRels.get(i))
+    const typeId = rel ? refId(rel.RelatingType) : null
+    const typeMaterial = typeId !== null ? materialByObject.get(typeId) : undefined
+    if (!rel || !typeMaterial) continue
+    for (const objectId of refList(rel.RelatedObjects)) if (!materialByObject.has(objectId)) materialByObject.set(objectId, typeMaterial)
+  }
+
+  assignmentCache.set(handle, materialByObject)
+  return materialByObject
+}
+
 export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticModelInfo {
   const { api, ifcModelID: modelID } = handle
   const getLine = (id: number): IfcLine | null => {
@@ -981,53 +1041,7 @@ export function extractRealisticMaterialInfo(handle: IfcModelHandle): RealisticM
     }
   }
 
-  // Element (or type object) -> material names, in layer order for a
-  // layer set.
-  const materialCache = new Map<number, { names: string[]; layered: boolean }>()
-  const resolveMaterial = (id: number, depth: number): { names: string[]; layered: boolean } => {
-    const cached = materialCache.get(id)
-    if (cached) return cached
-    const result = { names: [] as string[], layered: false }
-    const line = depth > 6 ? null : getLine(id)
-    const collect = (ids: number[]) => {
-      for (const child of ids) {
-        const r = resolveMaterial(child, depth + 1)
-        for (const n of r.names) if (!result.names.includes(n)) result.names.push(n)
-        result.layered ||= r.layered
-      }
-    }
-    if (line) {
-      if ('ForLayerSet' in line) { collect(refList(line.ForLayerSet)); result.layered = true }
-      else if ('MaterialLayers' in line) { collect(refList(line.MaterialLayers)); result.layered = true }
-      else if ('ForProfileSet' in line) collect(refList(line.ForProfileSet))
-      else if ('MaterialProfiles' in line) collect(refList(line.MaterialProfiles))
-      else if ('MaterialConstituents' in line) collect(refList(line.MaterialConstituents))
-      else if ('Materials' in line) collect(refList(line.Materials))
-      else if ('Material' in line) collect(refList(line.Material))
-      else if ('Name' in line) { const n = labelOf(line.Name); if (n) result.names.push(n) }
-    }
-    materialCache.set(id, result)
-    return result
-  }
-  const materialByObject = new Map<number, { names: string[]; layered: boolean }>()
-  const associations = api.GetLineIDsWithType(modelID, IFCRELASSOCIATESMATERIAL)
-  for (let i = 0; i < associations.size(); i++) {
-    const rel = getLine(associations.get(i))
-    const materialId = rel ? refId(rel.RelatingMaterial) : null
-    if (!rel || materialId === null) continue
-    const resolved = resolveMaterial(materialId, 0)
-    if (resolved.names.length === 0) continue
-    for (const objectId of refList(rel.RelatedObjects)) materialByObject.set(objectId, resolved)
-  }
-  const typeRels = api.GetLineIDsWithType(modelID, IFCRELDEFINESBYTYPE)
-  for (let i = 0; i < typeRels.size(); i++) {
-    const rel = getLine(typeRels.get(i))
-    const typeId = rel ? refId(rel.RelatingType) : null
-    const typeMaterial = typeId !== null ? materialByObject.get(typeId) : undefined
-    if (!rel || !typeMaterial) continue
-    for (const objectId of refList(rel.RelatedObjects)) if (!materialByObject.has(objectId)) materialByObject.set(objectId, typeMaterial)
-  }
-
+  const materialByObject = getIfcMaterialAssignments(handle)
   const typeByExpressId = buildIfcTypeByExpressId(handle)
   const info = createRealisticModelInfo()
   const addPiece = (expressID: number, geometryId: number | undefined, alpha: number) => {

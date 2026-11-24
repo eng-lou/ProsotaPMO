@@ -11,8 +11,34 @@ import type { IfcModelHandle } from './ifcModel'
 import { extractScheduleElements, type ExtractedElement } from './ifcScheduleExtraction'
 import {
   buildStagedSchedule, fullScheduleCategoryNames, fullSchedulePhaseRows, groupByLevel,
-  usedCategoryNames, usedPhaseRows, type CategoryRate, type PhaseRow, type ProposedScheduleSummary, type StoreyGroup,
+  usedCategoryNames, usedPhaseRows, type CategoryRate, type PhaseRow, type StagedSchedule, type ProposedScheduleSummary, type StoreyGroup,
 } from './scheduleGeneration'
+
+function SchedulePreview({ schedule }: { schedule: StagedSchedule }) {
+  const [limit, setLimit] = useState(30)
+  const { work, predecessors } = useMemo(() => {
+    const names = new Map(schedule.activities.map(a => [a.temp_id, a.task_name]))
+    const predecessors = new Map<string, string[]>()
+    for (const link of schedule.relationships) {
+      const name = names.get(link.predecessor_temp_id)
+      if (!name) continue
+      const existing = predecessors.get(link.successor_temp_id)
+      if (existing) existing.push(name)
+      else predecessors.set(link.successor_temp_id, [name])
+    }
+    return { work: schedule.activities.filter(a => a.category), predecessors }
+  }, [schedule])
+  return <section aria-label="Schedule preview" className="space-y-2 text-sm dark:text-prosota-paper">
+    <h3 className="font-semibold">Preview activities and dependencies</h3>
+    <div className="max-h-64 overflow-auto rounded border dark:border-prosota-line"><table className="w-full text-left">
+      <thead className="sticky top-0 bg-slate-100 dark:bg-prosota-panel2"><tr><th className="p-2">Activity</th><th>Hours</th><th>Waits for</th></tr></thead>
+      <tbody>{work.slice(0,limit).map(a => <tr key={a.temp_id} className="border-t dark:border-prosota-line">
+        <td className="p-2">{a.task_name}</td><td className="p-1">{a.duration_hours}</td>
+        <td className="p-2">{predecessors.get(a.temp_id)?.join('; ')}</td>
+      </tr>)}</tbody>
+    </table>{limit < work.length && <button type="button" className="m-2 underline" onClick={() => setLimit(n => n + 30)}>Show more activities</button>}</div>
+  </section>
+}
 
 interface Props {
   // Every currently-loaded IFC model, not just the active one (2026-07-15,
@@ -225,11 +251,11 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
       }
       const kept = excludedGlobalIds.size > 0 ? found.filter(el => !excludedGlobalIds.has(el.globalId)) : found
       setExcludedCount(found.length - kept.length)
-      const suggestions = detectTowerGroups(kept, groupByLevel(kept))
+      const grouped = groupByLevel(kept)
+      const suggestions = detectTowerGroups(kept, grouped)
       setTower({ ...initialTowerSettings, coreIds: suggestions.coreIds, facadeIds: suggestions.facadeIds, levelMap: suggestions.levelMap })
       setConfirmedPreview('')
       setElements(kept)
-      const grouped = groupByLevel(kept)
       setStoreys(grouped)
       seedRates(grouped)
       setStep('review')
@@ -434,7 +460,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 <div>1 root WBS ("{rootName}") + {summary.storeyCount} storey summary activities</div>
                 <div>{Math.max(0, summary.activityCount - summary.storeyCount - 1)} work activities across {categoryNames.length} categories, {phaseRows.length} construction phases</div>
                 <div>{summary.relationshipCount} sequencing links</div>
-                <div>{summary.elementCount} IFC elements will be linked to their completion activities</div>
+                <div>{summary.elementCount} IFC elements will be linked to their installation activities</div>
                 {/* No Resource/ResourceAssignment rows generated here
                     (2026-07-17, per Maro's phased-generation plan) — typical
                     industry crew/productivity DEFAULTS (DEFAULT_CATEGORY_
@@ -483,15 +509,7 @@ export function IfcScheduleWizard({ models, calendars, projectId, projectName, s
                 Quantities are bounding-box estimates from the loaded geometry, not a certified takeoff — durations are a first draft, freely editable afterward in Scheduling.
               </p>
               </details>
-              {tower.enabled && !preview.error && <details className="text-xs text-gray-700 dark:text-prosota-paper">
-                <summary className="cursor-pointer font-semibold">Preview activities and dependencies</summary>
-                <div className="max-h-64 overflow-auto mt-2"><table className="w-full text-left"><thead><tr><th>Activity</th><th>Hours</th><th>Waits for</th></tr></thead><tbody>
-                  {staged.activities.filter(a => a.category).map(a => <tr key={a.temp_id} className="border-t dark:border-prosota-line">
-                    <td className="p-1">{a.task_name}</td><td className="p-1">{a.duration_hours}</td>
-                    <td className="p-1">{staged.relationships.filter(r => r.successor_temp_id === a.temp_id).map(r => staged.activities.find(p => p.temp_id === r.predecessor_temp_id)?.task_name).join('; ')}</td>
-                  </tr>)}
-                </tbody></table></div>
-              </details>}
+              {!preview.error && <SchedulePreview schedule={staged}/>}
               {generateError && <div className="text-xs text-red-600 dark:text-red-400">{generateError}</div>}
               </>}
             </div>

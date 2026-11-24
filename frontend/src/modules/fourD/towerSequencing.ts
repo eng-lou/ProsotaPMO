@@ -1,5 +1,5 @@
 import type { ExtractedElement } from './ifcScheduleExtraction'
-import { CATEGORY_ORDER } from './scheduleCategoryOrder'
+import { compareConstructionGroups } from './scheduleCategoryOrder'
 import type { CategoryGroup, StoreyGroup, StagedActivity, StagedRelationship } from './scheduleGeneration'
 
 export interface TowerSequencing {
@@ -66,13 +66,13 @@ export function prepareTowerStoreys(
         if (!refs.length) continue
         const values = refs.map(id => byId.get(id)!)
         const item: CategoryGroup = {
-          ...category, name: core ? 'Walls' : category.name, workstream: core ? 'core' : undefined,
+          ...category, name: core ? 'Walls' : category.name, method: core ? 'concrete' : category.method, workstream: core ? 'core' : undefined,
           elementRefs: [...refs], elementLabels: refs.map(id => category.elementLabels[category.elementRefs.indexOf(id)]),
           // Only wall categories are split; all other quantity conventions stay unchanged.
           quantity: selected.length ? values.reduce((sum, el) => sum + el.quantity, 0) : category.quantity,
           materialVolumeM3: selected.length ? values.reduce((sum, el) => sum + (el.volumeM3 ?? 0), 0) : category.materialVolumeM3,
         }
-        const existing = categories.find(c => c.name === item.name && c.workstream === item.workstream)
+        const existing = categories.find(c => c.name === item.name && c.workstream === item.workstream && c.method === item.method && c.frameOrder === item.frameOrder)
         if (existing) {
           existing.elementRefs.push(...item.elementRefs); existing.elementLabels.push(...item.elementLabels)
           existing.quantity += item.quantity; existing.materialVolumeM3 += item.materialVolumeM3
@@ -93,7 +93,7 @@ export function prepareTowerStoreys(
     }
     // Parent assemblies remain linked, but are not priced again as panels.
   }
-  return storeys.filter(s => grouped.has(s.storeyName)).map(s => ({ storeyName: s.storeyName, categories: grouped.get(s.storeyName)!.sort((a, b) => CATEGORY_ORDER.indexOf(a.name as typeof CATEGORY_ORDER[number]) - CATEGORY_ORDER.indexOf(b.name as typeof CATEGORY_ORDER[number])) }))
+  return storeys.filter(s => grouped.has(s.storeyName)).map(s => ({ storeyName: s.storeyName, categories: grouped.get(s.storeyName)!.sort(compareConstructionGroups) }))
 }
 
 const FRAME = new Set(['Piling', 'Foundation', 'Reinforcement', 'Columns', 'Beams', 'Slabs', 'Walls', 'Structural Members', 'Stairs', 'Ramps', 'Roofs'])

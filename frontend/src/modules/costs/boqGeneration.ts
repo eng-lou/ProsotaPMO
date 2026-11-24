@@ -1,5 +1,5 @@
 import type { Activity, ResourceAssignment } from '@/modules/scheduling/types'
-import { resolvePhases } from '@/modules/fourD/scheduleGeneration'
+import { resolveActivityPhase } from '@/modules/fourD/scheduleGeneration'
 import type { CostRateLine } from './types'
 
 // "Generate BOQ" (2026-07-18, per Maro: "populated from our schedule, ifc
@@ -93,8 +93,7 @@ export function buildBoqDraft(activities: Activity[], resourceAssignments: Resou
   for (const activity of activities) {
     if (!activity.schedule_category || !activity.duration_hours) continue
     if (activity.schedule_phase_key && PROCUREMENT_ADMIN_PHASE_KEYS.has(activity.schedule_phase_key)) continue
-    const phases = resolvePhases(activity.schedule_category)
-    const phase = phases.find(p => p.key === activity.schedule_phase_key) ?? phases[0]
+    const phase = resolveActivityPhase(activity.schedule_category, activity.schedule_phase_key)
     if (!phase || phase.rate.productivityPerCrewDay <= 0) continue
 
     // location/system/activity (2026-07-27) — the real WBS storey parent

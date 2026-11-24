@@ -223,24 +223,26 @@ export const IFC_TYPE_CATEGORIES: { ifcType: string; category: ScheduleCategory 
   { ifcType: 'IfcFurnishingElement', category: 'Furnishings' },
 ]
 
-// Purely informational (not a second category axis) — keyword-matched off
-// each element's own Name, which for a Revit export already carries real
-// assembly/section data (e.g. 'W-Wide Flange:W21X50:...',
-// 'Floor:6" Concrete on 3" Metal Deck:...', see this file's own plan doc
-// for how this was verified against the real reference file). Surfaced in
-// the wizard's Review step so a generated "Columns" activity reads as
-// "12 steel columns" rather than an opaque count — not used to split
-// categories, since the fixed IFC-type categories above already drive
-// sequencing and rates.
-export type StructuralMaterial = 'steel' | 'concrete' | 'unknown'
+export type StructuralMaterial = 'steel' | 'concrete' | 'precast' | 'composite' | 'other' | 'unknown'
 
-const STEEL_KEYWORDS = ['steel', 'wide flange', 'w-shape', 'w-wide flange', 'hss', 'w1', 'w2', 'w3', 'w4']
-const CONCRETE_KEYWORDS = ['concrete', 'cip', 'precast', 'rebar']
-
-function classifyMaterial(name: string): StructuralMaterial {
-  const lower = name.toLowerCase()
-  if (STEEL_KEYWORDS.some(k => lower.includes(k))) return 'steel'
-  if (CONCRETE_KEYWORDS.some(k => lower.includes(k))) return 'concrete'
+export function classifyMaterial(name: string, materials: string[], category: ScheduleCategory): StructuralMaterial {
+  const deck = /\b(?:metal|steel|composite)\s+deck(?:ing)?\b|\b(?:comflor|multideck)\b/i
+  const concrete = /\b(?:concrete|rcc|cip|rc|cast[ -]in[ -](?:place|situ))\b/i
+  const steel = /\b(?:steel|wide[ -]flange|hss|w[ -]shape|w\d+[x×]\d+)\b/i
+  const precast = /\b(?:pre[ -]?cast|hollow[ -]?core)\b/i
+  const assigned = materials.join(' / ')
+  const other = /\b(?:timber|wood|glulam|clt|masonry|brick|aluminium|aluminum)\b/i
+  if (category === 'Slabs' && deck.test(assigned)) return 'composite'
+  if (precast.test(assigned)) return 'precast'
+  if (category === 'Slabs' && deck.test(name) && (concrete.test(assigned) || steel.test(assigned))) return 'composite'
+  if (concrete.test(assigned)) return precast.test(name) ? 'precast' : 'concrete'
+  if (steel.test(assigned)) return 'steel'
+  if (other.test(assigned)) return 'other'
+  if (category === 'Slabs' && deck.test(name)) return 'composite'
+  if (precast.test(name)) return 'precast'
+  if (concrete.test(name)) return 'concrete'
+  if (steel.test(name)) return 'steel'
+  if (other.test(name)) return 'other'
   return 'unknown'
 }
 
@@ -543,9 +545,9 @@ const VOLUME_PRICED_CATEGORIES = new Set<ScheduleCategory>([
 // buildElementPropertyData (ifcModel.ts) and AREA_PRICED_CATEGORIES above
 // for why a real Qto value is tried first when the file actually has one.
 function measureElement(
-  box: THREE.Box3, category: ScheduleCategory, toMetres: number,
+  box: THREE.Box3, category: ScheduleCategory,
 ): { quantity: number; quantityUnit: 'm' | 'm²' } {
-  const size = box.getSize(new THREE.Vector3()).multiplyScalar(toMetres)
+  const size = box.getSize(new THREE.Vector3())
   const dims = [size.x, size.y, size.z].sort((a, b) => b - a)
   if (category === 'Columns' || category === 'Beams') {
     return { quantity: dims[0], quantityUnit: 'm' }
@@ -584,14 +586,7 @@ export async function extractScheduleElements(
   onProgress?: ExtractionProgressCallback,
 ): Promise<ExtractedElement[]> {
   const ifcModel = await import('./ifcModel')
-  // IfcProject's own expressID directly (2026-07-25 fix, replacing
-  // getSpatialTree()'s own tree root — see buildElementStoreyMap's header
-  // in ifcModel.ts for the full "why" this file no longer walks that tree
-  // at all) — IfcProject is always exactly one instance per file, so this
-  // is the identical expressID getSpatialTree's own root node used to
-  // carry, without needing the tree itself.
-  const projectExpressIds = ifcModel.getExpressIdsForType(handle, 'IfcProject')
-  const toMetres = projectExpressIds.length > 0 ? ifcModel.getLengthUnitToMetres(handle, projectExpressIds[0]) : 1
+  const materials = ifcModel.getIfcMaterialAssignments(handle)
   const storeyByExpressId = await ifcModel.buildElementStoreyMap(handle)
 
   const candidates: { expressID: number; category: ScheduleCategory; ifcType: string }[] = []
@@ -683,24 +678,20 @@ export async function extractScheduleElements(
       const realArea = AREA_PRICED_CATEGORIES.has(category) ? quantityAreaByExpressId.get(expressID) ?? null : null
       const { quantity, quantityUnit } = realArea !== null
         ? { quantity: realArea, quantityUnit: 'm²' as const }
-        : measureElement(box, category, toMetres)
-      // getExpressIdWorldVolume, same never-materialize discipline as
-      // getExpressIdWorldBounds just above (2026-07-27) — only computed for
-      // VOLUME_PRICED_CATEGORIES, not every candidate, so a file with no
-      // structural categories at all pays zero extra cost for this. Raw
-      // units cubed from web-ifc, same as box/measureElement above — cubing
-      // toMetres (not multiplying) converts a *volume*, not a length.
+        : measureElement(box, category)
+      // web-ifc's placement matrices already convert geometry to metres.
+      // Only raw IFC storey elevations need the project's length conversion.
       const volumeM3 = VOLUME_PRICED_CATEGORIES.has(category)
-        ? (getExpressIdWorldVolume(handle.object, expressID) ?? 0) * toMetres ** 3
+        ? getExpressIdWorldVolume(handle.object, expressID) ?? 0
         : null
       elements.push({
         expressID, globalId, name, ifcType, category,
         facadeAssemblyId: facadeAssemblies.get(expressID),
-        material: classifyMaterial(name),
+        material: classifyMaterial(name, materials.get(expressID)?.names ?? [], category),
         storeyName: storey?.name ?? 'Unassigned',
         storeyElevation: storey?.elevationMetres ?? null,
-        boxMinMetres: [box.min.x * toMetres, box.min.y * toMetres, box.min.z * toMetres],
-        boxMaxMetres: [box.max.x * toMetres, box.max.y * toMetres, box.max.z * toMetres],
+        boxMinMetres: [box.min.x, box.min.y, box.min.z],
+        boxMaxMetres: [box.max.x, box.max.y, box.max.z],
         sourceModelId: handle.modelID,
         quantity, quantityUnit, volumeM3,
       })
