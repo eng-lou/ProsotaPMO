@@ -84,7 +84,7 @@ def file_keys(records):
     return sorted(keys)
 
 
-async def capture(db: AsyncSession, project_id: uuid.UUID):
+async def read_records(db: AsyncSession, project_id: uuid.UUID, names=TABLE_NAMES):
     """Read a project within the caller's transaction; never traverse to another project."""
     scopes = {'projects': TABLES['projects'].c.id == project_id}
 
@@ -112,7 +112,8 @@ async def capture(db: AsyncSession, project_id: uuid.UUID):
         return result
 
     records = {}
-    for name, table in TABLES.items():
+    for name in names:
+        table = TABLES[name]
         if name in ('reassessments', 'record_links'):
             continue
         condition = scope(name)
@@ -123,10 +124,17 @@ async def capture(db: AsyncSession, project_id: uuid.UUID):
     ids = {n: [r[primary(TABLES[n])] for r in rows] for n, rows in records.items()}
     for name, fields in [('reassessments', [('record_type', 'record_id')]),
                          ('record_links', [('source_type', 'source_id'), ('target_type', 'target_id')])]:
+        if name not in names:
+            continue
         table = TABLES[name]
         conditions = [or_(*(and_(table.c[kind] == kind_value, table.c[ref].in_(ids[target]))
                             for kind_value, target in POLY_TYPES.items())) for kind, ref in fields]
         records[name] = [dict(r) for r in (await db.execute(select(table).where(and_(*conditions)))).mappings()]
+    return records
+
+
+async def capture(db: AsyncSession, project_id: uuid.UUID):
+    records = await read_records(db, project_id)
     # User/org identity belongs to the destination. Never put source account IDs in a package.
     for name, rows in records.items():
         for row in rows:
@@ -238,6 +246,12 @@ def rewrite(value, identifiers, files):
 async def restore(db, snapshot, transfer_id, user, name):
     records = validate(snapshot)
     identifiers, files = mappings(snapshot, transfer_id, user.id)
+    await insert_records(db, records, identifiers, files, name, import_user=user)
+    return transfer_id
+
+
+async def insert_records(db, records, identifiers, files, name=None, *, import_user=None):
+    """Insert JSON-compatible project rows. External FKs are supplied by trusted callers."""
     pending = []
     for table_name, rows in records.items():
         table = TABLES[table_name]
@@ -246,8 +260,8 @@ async def restore(db, snapshot, transfer_id, user, name):
             for column in table.c:
                 value = row.get(column.name)
                 for fk in column.foreign_keys:
-                    if fk.column.table.name in ('users', 'organisations'):
-                        value = (user.id if fk.column.table.name == 'users' else user.org_id) if value or not column.nullable else None
+                    if import_user is not None and fk.column.table.name in ('users', 'organisations'):
+                        value = (import_user.id if fk.column.table.name == 'users' else import_user.org_id) if value or not column.nullable else None
                 if value is not None:
                     if isinstance(column.type, Uuid): value = uuid.UUID(str(value))
                     elif isinstance(column.type, DateTime): value = datetime.fromisoformat(value)
@@ -275,7 +289,7 @@ async def restore(db, snapshot, transfer_id, user, name):
         ready, waiting = [], []
         for table, row in pending:
             dependencies = [(fk.column.table.name, row.get(c.name)) for c in table.c if not c.nullable
-                            for fk in c.foreign_keys if fk.column.table.name in TABLES and row.get(c.name) is not None]
+                            for fk in c.foreign_keys if fk.column.table.name in records and row.get(c.name) is not None]
             (ready if all(d in inserted for d in dependencies) else waiting).append((table, row))
         if not ready:
             raise ValueError('Project records contain a required-reference cycle.')
@@ -297,4 +311,3 @@ async def restore(db, snapshot, transfer_id, user, name):
         statement = update(table).where(table.c[primary(table)] == bindparam('record_pk')).values({k: bindparam('v_' + k) for k in columns})
         for start in range(0, len(batch), 100):
             await db.execute(statement, batch[start:start + 100])
-    return transfer_id

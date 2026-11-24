@@ -36,6 +36,7 @@ class ProjectDuplicateRequest(BaseModel):
     # Optional — app/api/projects.py falls back to f"{original.name} (Copy)"
     # when omitted, matching the frontend's own default suggestion.
     name: str | None = None
+    request_id: uuid.UUID | None = None
 
 
 class ProjectResponse(BaseModel):

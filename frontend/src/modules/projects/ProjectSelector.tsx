@@ -26,7 +26,11 @@ export function ProjectSelector() {
   // content, Save/Cancel" pattern (e.g. CalendarWidget's Edit) rather than a
   // separate modal (2026-07-06, per Maro: "allow me to duplicate a project...
   // and rename ofcourse").
-  const [rowAction, setRowAction] = useState<{ mode: 'rename' | 'duplicate'; project: Project; value: string } | null>(null)
+  const [rowAction, setRowAction] = useState<{ mode: 'rename' | 'duplicate'; project: Project; value: string; requestId?: string } | null>(null)
+  const [restoreTarget, setRestoreTarget] = useState<Project | null>(null)
+  const [restoreSource, setRestoreSource] = useState('')
+  const [restoreMessage, setRestoreMessage] = useState('')
+  const [restoreBusy, setRestoreBusy] = useState(false)
   const [rowActionError, setRowActionError] = useState<string | null>(null)
   const [rowActionBusy, setRowActionBusy] = useState(false)
   const { selectProject, clearProject } = useProject()
@@ -70,6 +74,9 @@ export function ProjectSelector() {
   }
 
   const toggleSelected = (id: string) => {
+    if (restoreBusy) return
+    setRestoreTarget(null)
+    setRestoreMessage('')
     setSelectedIds(prev => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
@@ -142,7 +149,7 @@ export function ProjectSelector() {
   }
 
   const startDuplicate = (project: Project) => {
-    setRowAction({ mode: 'duplicate', project, value: `${project.name} (Copy)` })
+    setRowAction({ mode: 'duplicate', project, requestId: crypto.randomUUID(), value: `${project.name} (Copy)` })
     setRowActionError(null)
   }
 
@@ -163,8 +170,8 @@ export function ProjectSelector() {
         setProjects(prev => prev.map(p => p.id === data.id ? data : p))
       } else {
         const { data } = await api.post<Project>(`/api/v1/projects/${rowAction.project.id}/duplicate`, {
-          name: rowAction.value.trim(),
-        })
+          name: rowAction.value.trim(), request_id: rowAction.requestId,
+        }, { timeout: 300000 })
         setProjects(prev => [...prev, data])
       }
       setRowAction(null)
@@ -173,6 +180,24 @@ export function ProjectSelector() {
       setRowActionError(detail ?? (rowAction.mode === 'rename' ? 'Failed to rename project' : 'Failed to duplicate project'))
     } finally {
       setRowActionBusy(false)
+    }
+  }
+
+  const restoreModels = async () => {
+    if (!restoreTarget || !restoreSource || restoreBusy) return
+    setRestoreBusy(true)
+    setRestoreMessage('')
+    try {
+      const { data } = await api.post<{ models: number; site_objects: number; links: number }>(
+        `/api/v1/projects/${restoreTarget.id}/restore-3d`, { source_project_id: restoreSource }, { timeout: 300000 },
+      )
+      setRestoreMessage(`Restored to ${restoreTarget.name}: ${data.models} model files, ${data.site_objects} site objects and ${data.links} activity links.`)
+      setRestoreTarget(null)
+    } catch (err) {
+      setRestoreMessage(axios.isAxiosError(err) && typeof err.response?.data?.detail === 'string'
+        ? err.response.data.detail : 'Could not confirm the restore. Reopen the project to check its models before retrying.')
+    } finally {
+      setRestoreBusy(false)
     }
   }
 
@@ -247,6 +272,13 @@ export function ProjectSelector() {
             >
               Archive
             </button>
+            {selectedProjects.length === 1 && projects.length > 1 && (
+              <button disabled={restoreBusy} onClick={() => {
+                setRestoreTarget(selectedProjects[0])
+                setRestoreSource('')
+                setRestoreMessage('')
+              }} className="text-xs text-blue-600 dark:text-prosota-azure font-medium">Restore 3D/IFC</button>
+            )}
             <button
               onClick={handleDelete}
               disabled={working}
@@ -255,13 +287,38 @@ export function ProjectSelector() {
               Delete
             </button>
             <button
-              onClick={() => setSelectedIds(new Set())}
+              disabled={restoreBusy}
+              onClick={() => { setSelectedIds(new Set()); setRestoreTarget(null); setRestoreMessage('') }}
               className="text-xs text-gray-400 dark:text-prosota-muted hover:text-gray-600 dark:hover:text-prosota-paper ml-auto"
             >
               Clear
             </button>
           </div>
         )}
+
+        {restoreTarget && (
+          <div className="mb-3 rounded-lg border dark:border-prosota-line p-4 space-y-2 text-sm">
+            <p className="font-medium dark:text-prosota-paper">Restore 3D/IFC into {restoreTarget.name}</p>
+            <label className="block dark:text-prosota-muted">
+              Source project
+              <select className="block w-full mt-1 rounded border p-2 dark:bg-prosota-panel dark:border-prosota-line"
+                value={restoreSource} disabled={restoreBusy} onChange={e => setRestoreSource(e.target.value)}>
+                <option value="">Choose the original project</option>
+                {projects.filter(p => p.id !== restoreTarget.id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </label>
+            <p className="text-xs text-gray-500 dark:text-prosota-muted">Copies saved models and site objects. Activity links use the matching schedule variant and activity code.</p>
+            <div className="flex gap-3">
+              <button disabled={!restoreSource || restoreBusy} onClick={restoreModels}
+                className="rounded px-3 py-1.5 bg-blue-600 text-white disabled:opacity-50">
+                {restoreBusy ? 'Restoring...' : 'Restore models and links'}
+              </button>
+              <button disabled={restoreBusy} onClick={() => { setRestoreTarget(null); setRestoreMessage('') }}
+                className="dark:text-prosota-muted">Cancel</button>
+            </div>
+          </div>
+        )}
+        {restoreMessage && <p role="status" className="mb-3 text-sm dark:text-prosota-paper">{restoreMessage}</p>}
 
         <div className="space-y-3 mb-6">
           {projects.map(project => {

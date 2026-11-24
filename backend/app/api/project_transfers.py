@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, DataError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ from app.core.auth import get_db_user
 from app.database import get_db
 from app.models.project import Project
 from app.models.user import User
+from app.services.project import check_project_capacity
 from app.services import object_storage as storage, project_transfer as transfer
 
 router = APIRouter(prefix='/project-transfers', tags=['project-transfers'])
@@ -50,15 +51,6 @@ def read_manifest(user_id, transfer_id, *, export=False):
         return snapshot
     except (ValueError, KeyError, TypeError, ClientError) as exc:
         raise HTTPException(422, 'The project package is missing, invalid, or unsupported. Export it again from the source workspace.') from exc
-
-
-async def check_cap(db, user):
-    # Same rule as project creation. Serialise concurrent imports by this owner.
-    await db.execute(select(User.id).where(User.id == user.id).with_for_update())
-    if not user.is_super_user:
-        count = (await db.execute(select(func.count()).select_from(Project).where(Project.created_by == user.id))).scalar_one()
-        if count >= 2:
-            raise HTTPException(403, "You've reached the 2-project limit for trial accounts.")
 
 
 @router.post('/export/{project_id}')
@@ -101,7 +93,7 @@ async def export_files(export_id: uuid.UUID, offset: int = Query(0, ge=0), db=De
 
 @router.post('/imports')
 async def start_import(db=Depends(get_db), user=Depends(get_db_user)):
-    await check_cap(db, user)
+    await check_project_capacity(db, user)
     import_id = uuid.uuid4()
     return {'id': import_id, 'upload_url': storage.presigned_put_url(manifest_key(user.id, import_id), 'application/json')}
 
@@ -146,7 +138,7 @@ async def commit_import(import_id: uuid.UUID, payload: CommitImport, db=Depends(
         snapshot = await run_in_threadpool(read_manifest, user.id, import_id)
         identifiers, files = transfer.mappings(snapshot, import_id, user.id)
         return {'id': existing.id, 'name': existing.name, 'appearance': transfer.rewrite(snapshot.get('appearance'), identifiers, files)}
-    await check_cap(db, user)
+    await check_project_capacity(db, user)
     snapshot = await run_in_threadpool(read_manifest, user.id, import_id)
     _, keys = transfer.mappings(snapshot, import_id, user.id)
     semaphore = asyncio.Semaphore(8)

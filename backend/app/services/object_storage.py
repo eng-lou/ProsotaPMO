@@ -84,6 +84,11 @@ def upload_bytes(key: str, data: bytes, content_type: str | None = None) -> None
     _client().put_object(Bucket=settings.r2_bucket_name, Key=key, Body=data, **extra_args)
 
 
+def copy_object(source: str, target: str) -> None:
+    bucket = settings.r2_bucket_name
+    _client().copy({"Bucket": bucket, "Key": source}, bucket, target)
+
+
 def delete_object(key: str) -> None:
     _client().delete_object(Bucket=settings.r2_bucket_name, Key=key)
 

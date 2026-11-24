@@ -1,4 +1,6 @@
 import copy
+import gzip
+from pathlib import Path
 import json
 from datetime import datetime, time
 from decimal import Decimal
@@ -200,3 +202,128 @@ async def test_older_desktop_backup_bridge(db, project, populated, tmp_path):
     svc.validate(package)
     assert len(package['records']['activities']) == 2
     assert all((output / f['path']).read_bytes() == b'bytes' for f in package['files'])
+
+
+@pytest.fixture
+def copy_storage(monkeypatch, tmp_path):
+    # Exercise actual file copying and the same download-key contract as desktop.
+    import importlib.util
+    from app.services import object_storage
+
+    module = Path(__file__).resolve().parents[2] / 'desktop/backend/local_storage.py'
+    spec = importlib.util.spec_from_file_location('desktop_copy_storage', module)
+    local = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(local)
+    local.configure(tmp_path, 'test', 'http://test')
+    for method in ('copy_object', 'delete_object', 'presigned_get_url'):
+        monkeypatch.setattr(object_storage, method, getattr(local, method))
+    return local
+
+
+@pytest.fixture
+async def copy_fixture(db, project, populated, copy_storage):
+    model, activity = populated['model'], populated['activity']
+    # An archived library asset can still be pinned by a placed scene instance.
+    await db.execute(svc.TABLES['site_assets'].update().where(
+        svc.TABLES['site_assets'].c.id == populated['asset']['id']).values(status='archived'))
+    await row(db, 'element_transforms', project_id=project.id, model3d_file_id=model['id'], position_x=42)
+    await row(db, 'equipment_rigs', project_id=project.id, name='Core', model_ref='site:tree-scatter',
+              definition={'lift_activity': str(activity['id'])})
+    await row(db, 'site_assets', project_id=project.id, name='Unfinished', category='Other',
+              storage_key='site-assets/waiting.glb', upload_key='uploads/waiting.glb', status='pending')
+    links = svc.TABLES['model_element_links']
+    await db.execute(links.update().where(links.c.project_id == project.id, links.c.source_kind == 'ifc')
+                     .values(element_ref='0000000000000000000001'))
+    await db.commit()
+    fixtures = Path(__file__).resolve().parents[2] / 'desktop/tests/fixtures'
+    source = {model['storage_filename']: gzip.compress((fixtures / 'wall.ifc').read_bytes()),
+              populated['asset']['storage_key']: (fixtures / 'site-cabin.glb').read_bytes(),
+              svc.media_key(populated['media']): b'annotation'}
+    for key, payload in source.items():
+        copy_storage.upload_bytes(key, payload)
+    return source
+
+
+async def test_duplicate_project_files_links_and_rig(client, db, project, populated, copy_fixture, copy_storage):
+    from app.services.simulation import sources
+    period_id = populated['activity']['schedule_period_id']
+    current = await sources(db, project.id, period_id)
+    await row(db, 'working_simulation_sequences', project_id=project.id, schedule_period_id=period_id,
+              snapshot={'source_hash': current['hash']}, source_hash=current['hash'])
+    await row(db, 'simulation_scenarios', project_id=project.id, schedule_period_id=period_id,
+              name='Old review', source_hash='old', config={})
+    await db.commit()
+    payload = {'request_id': str(uuid.uuid4())}
+    url = f'/api/v1/projects/{project.id}/duplicate'
+    response = await client.post(url, json=payload)
+    assert response.status_code == 201, response.text
+    dest = uuid.UUID(response.json()['id'])
+    retry = await client.post(url, json=payload)
+    assert retry.status_code == 201 and retry.json()['id'] == str(dest)
+    copied = (await svc.capture(db, dest))['records']
+    model = copied['model3d_files'][0]
+    asset, = copied['site_assets']
+    assert asset['status'] == 'archived'
+    child = next(a for a in copied['activities'] if a['code'] == 'T-4')
+    assert {link['activity_id'] for link in copied['model_element_links']} == {child['id']}
+    assert child['animation_profile_id'] == copied['animation_profiles'][0]['id']
+    assert copied['equipment_rigs'][0]['definition']['lift_activity'] == child['id']
+    assert copied['site_scenes'][0]['items'][0]['asset_id'] == asset['id']
+    assert copied['element_transforms'][0]['model3d_file_id'] == model['id']
+    assert copied['element_transforms'][0]['position_x'] == 42
+    dest_hash = (await sources(db, dest, uuid.UUID(child['schedule_period_id'])))['hash']
+    working = copied['working_simulation_sequences'][0]
+    assert working['source_hash'] == working['snapshot']['source_hash'] == dest_hash != current['hash']
+    assert copied['simulation_scenarios'][0]['source_hash'] == 'old'
+    for key, original in [(model['storage_filename'], 'model3d/fort.ifc.gz'), (asset['storage_key'], 'site-assets/trees.glb')]:
+        assert key != original and copy_storage.path_for(key).read_bytes() == copy_fixture[original]
+    assert copy_storage.path_for(svc.media_key(copied['annotation_media'][0])).read_bytes() == b'annotation'
+    linked_guid = next(link['element_ref'] for link in copied['model_element_links'] if link['source_kind'] == 'ifc')
+    assert linked_guid.encode() in gzip.decompress(copy_storage.path_for(model['storage_filename']).read_bytes())
+    result = await client.get(f"/api/v1/model3d-files/{model['id']}/download", follow_redirects=False)
+    assert result.status_code == 307 and model['storage_filename'] in result.headers['location']
+    assert (await client.delete(f"/api/v1/model3d-files/{model['id']}")).status_code == 204
+    assert all(copy_storage.path_for(k).read_bytes() == v for k, v in copy_fixture.items())
+
+
+async def test_restore_old_duplicate_preserves_activity_edits_and_can_retry(client, db, project, user, populated, copy_fixture, copy_storage):
+    dest = await row(db, 'projects', name='Edited Fort Tower copy', org_id=user.org_id, created_by=user.id)
+    pid = dest['id']
+    variant = await row(db, 'schedule_variants', project_id=pid, name='Master', is_master=True)
+    period = await row(db, 'schedule_periods', schedule_variant_id=variant['id'], period_label='Live')
+    child = await row(db, 'activities', project_id=pid, schedule_variant_id=variant['id'], schedule_period_id=period['id'],
+                      task_name='Updated on copy', code='T-4', duration_hours=Decimal('30'),
+                      animation_profile_id=populated['activity']['animation_profile_id'])
+    await db.commit()
+    url, body = f'/api/v1/projects/{pid}/restore-3d', {'source_project_id': str(project.id)}
+    # A missing blob rolls back metadata and discards independently staged bytes.
+    key = 'model3d/fort.ifc.gz'
+    copy_storage.delete_object(key)
+    assert (await client.post(url, json=body)).status_code == 502
+    assert not (await svc.read_records(db, pid, ['site_assets']))['site_assets']
+    assert not [p for p in copy_storage.root.rglob('*') if p.is_file() and p.relative_to(copy_storage.root).as_posix() not in copy_fixture]
+    copy_storage.upload_bytes(key, copy_fixture[key])
+    # The test client shares one ORM session across requests. Production auth
+    # loads a fresh user after the previous request rolls back.
+    await db.refresh(user)
+    restored = await client.post(url, json=body)
+    assert restored.status_code == 200, restored.text
+    assert restored.json() == {'models': 1, 'site_objects': 1, 'links': 2}
+    result = (await svc.capture(db, pid))['records']
+    a, = result['activities']
+    assert a['id'] == str(child['id']) and a['task_name'] == 'Updated on copy' and Decimal(a['duration_hours']) == 30
+    assert a['animation_profile_id'] == result['animation_profiles'][0]['id']
+    assert result['equipment_rigs'][0]['definition']['lift_activity'] == a['id']
+    assert {link['activity_id'] for link in result['model_element_links']} == {a['id']}
+    assert (await client.post(url, json=body)).status_code == 409
+
+
+async def test_restore_rejects_foreign_projects_and_unmatched_activities(client, db, project, user, other_user, copy_fixture):
+    other = await row(db, 'projects', name='Private', org_id=user.org_id, created_by=other_user.id)
+    blank = await row(db, 'projects', name='Blank', org_id=user.org_id, created_by=user.id)
+    await db.commit()
+    for src, dst, status in [(project.id, blank['id'], 409), (other['id'], blank['id'], 404),
+                             (project.id, other['id'], 404), (project.id, project.id, 422)]:
+        res = await client.post(f'/api/v1/projects/{dst}/restore-3d', json={'source_project_id': str(src)})
+        assert res.status_code == status
+    assert not (await svc.read_records(db, blank['id'], ['model3d_files']))['model3d_files']

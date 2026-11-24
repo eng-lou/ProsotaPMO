@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.services.project_materials import apply_material_changes
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import get_db_user
@@ -15,19 +15,12 @@ from app.database import get_db
 from app.models.activity import Activity
 from app.models.project import Project
 from app.models.resource_assignment import ResourceAssignment
+from app.models.user import User
 from app.schemas.project import ProjectCreate, ProjectDuplicateRequest, ProjectResponse, ProjectUpdate
-from app.services import project as project_svc
+from app.services import project_copy
+from app.services.project import check_project_capacity
 
 router = APIRouter(prefix="/projects", tags=["projects"])
-
-# 2026-08-25 (per Maro, alongside the trial/beta access gate) — projects are
-# private to whoever created them: a super user reviewing access requests
-# shouldn't incidentally see a normal user's project, so ownership is
-# enforced for everyone alike, not just normal users. Only the CREATION cap
-# below is role-gated — super users can create as many as they like, a
-# normal (non-super) user is capped at this many of their own.
-_NORMAL_USER_PROJECT_CAP = 2
-
 
 @router.get("/", response_model=list[ProjectResponse])
 async def list_projects(
@@ -49,15 +42,7 @@ async def create_project(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_db_user),
 ):
-    if not current_user.is_super_user:
-        count_result = await db.execute(
-            select(func.count()).select_from(Project).where(Project.created_by == current_user.id)
-        )
-        if count_result.scalar_one() >= _NORMAL_USER_PROJECT_CAP:
-            raise HTTPException(
-                status_code=403,
-                detail=f"You've reached the {_NORMAL_USER_PROJECT_CAP}-project limit for trial accounts.",
-            )
+    await check_project_capacity(db, current_user)
     project = Project(org_id=current_user.org_id, created_by=current_user.id, **data.model_dump())
     db.add(project)
     await db.commit()
@@ -101,25 +86,33 @@ async def duplicate_project(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_db_user),
 ):
-    """A full, independent deep copy — see app/services/project.py:duplicate_project
-    for exactly what's cloned (2026-07-06, per Maro: "in switch projects,
-    allow me to duplicate a project"). The copy is owned by whoever duplicates
-    it, so it counts against *their* cap (2026-08-25), not the original
-    owner's."""
     original = await db.get(Project, project_id)
     if original is None or original.org_id != current_user.org_id or original.created_by != current_user.id:
         raise HTTPException(status_code=404, detail="Project not found")
-    if not current_user.is_super_user:
-        count_result = await db.execute(
-            select(func.count()).select_from(Project).where(Project.created_by == current_user.id)
-        )
-        if count_result.scalar_one() >= _NORMAL_USER_PROJECT_CAP:
-            raise HTTPException(
-                status_code=403,
-                detail=f"You've reached the {_NORMAL_USER_PROJECT_CAP}-project limit for trial accounts.",
-            )
+    target_id = uuid.uuid5(project_id, str(data.request_id)) if data.request_id else uuid.uuid4()
+    if data.request_id:
+        # A large duplicate may finish after the browser loses its response.
+        # Check after taking the same owner lock as create/import, before the cap.
+        await db.execute(select(User.id).where(User.id == current_user.id).with_for_update())
+        existing = await db.get(Project, target_id)
+        if existing is not None:
+            return await get_project(target_id, db, current_user)
+    await check_project_capacity(db, current_user)
     new_name = data.name.strip() if data.name and data.name.strip() else f"{original.name} (Copy)"
-    return await project_svc.duplicate_project(db, project_id, new_name, current_user.id)
+    return await project_copy.duplicate_project(db, project_id, target_id, new_name, current_user)
+
+
+class RestoreProject3D(BaseModel):
+    source_project_id: uuid.UUID
+
+
+@router.post("/{project_id}/restore-3d")
+async def restore_project_3d(
+    project_id: uuid.UUID, data: RestoreProject3D, db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_db_user),
+):
+    await get_project(data.source_project_id, db, current_user)
+    return await project_copy.restore_visuals(db, data.source_project_id, project_id, current_user)
 
 
 @router.delete("/{project_id}", status_code=204)

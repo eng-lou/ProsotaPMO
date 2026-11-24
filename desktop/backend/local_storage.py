@@ -76,6 +76,10 @@ def upload_bytes(key: str, data: bytes, content_type=None):
     target.write_bytes(data)
 
 
+def copy_object(source: str, target: str):
+    upload_from_path(target, path_for(source))
+
+
 def delete_object(key: str):
     path_for(key).unlink(missing_ok=True)
 
