@@ -4,7 +4,7 @@ import { matchGroundSeams } from './groundSeams'
 import { groundSolid } from './groundSolids'
 
 export type GroundPrism = { rings:Vector2[][]; low:number; high:number }
-export type FoundationPrisms = { excavation:GroundPrism; bed:GroundPrism; concrete:GroundPrism }
+export type FoundationPrisms = { excavation:GroundPrism; bed:GroundPrism; concrete:GroundPrism|null }
 type Edge = {left:Vector2; right:Vector2; shape:number}
 const remainingSoil=1,excavation=2,blinding=4,foundationConcrete=8,backfill=16
 type Band = {lo:number; hi:number; mask:Uint8Array}
@@ -95,7 +95,9 @@ function cap(rings:Vector2[][],y:number,up:boolean,out:number[]){
 // keeping only edges where phase membership changes. Triangulate each resulting
 // face once, including its holes, so a large site stays lightweight in the viewer.
 export function partitionGround(site:GroundPrism,foundations:FoundationPrisms[]){
-  const shapes=[site,...foundations.flatMap(f=>[f.excavation,f.bed,f.concrete])]
+  const shapes=[{...site,role:remainingSoil},...foundations.flatMap(f=>[
+    {...f.excavation,role:excavation},{...f.bed,role:blinding},...(f.concrete?[{...f.concrete,role:foundationConcrete}]:[])
+  ])]
   const levels=unique(shapes.flatMap(s=>[s.low,s.high])).filter((y,i,all)=>!i||y-all[i-1]>1e-5)
   const edges:Edge[]=[],xs:number[]=[]
   for(const [shape,s] of shapes.entries())for(const ring of s.rings)for(let i=0;i<ring.length;i++){
@@ -139,9 +141,9 @@ export function partitionGround(site:GroundPrism,foundations:FoundationPrisms[])
       for(const id of active){
         const s=shapes[id]
         if(y<=s.low||y>=s.high)continue
-        if(id===0)soil=true
-        else if(id%3===1)voided=true
-        else if(id%3===2)bed=true
+        if(s.role===remainingSoil)soil=true
+        else if(s.role===excavation)voided=true
+        else if(s.role===blinding)bed=true
         else concrete=true
       }
       let mask=concrete?foundationConcrete:0

@@ -1,4 +1,4 @@
-import {Box3,ExtrudeGeometry,Group,Mesh,MeshStandardMaterial,ShapeUtils,Vector2,Vector3} from 'three'
+import {Box2,Box3,ExtrudeGeometry,Group,Mesh,MeshStandardMaterial,ShapeUtils,Vector2,Vector3} from 'three'
 import {partitionGround,type GroundPrism, type FoundationPrisms} from './groundPrisms'
 import {sameOutline,verifiedSlabProfile} from './slabPourProfile'
 import {volume} from './shapeBoolean'
@@ -6,9 +6,42 @@ import {overlaps as footprintsOverlap} from './deckBearing'
 import {faceShapes,isExterior} from './constructionHost'
 import {arraySourceSnapshot,disposeArraySnapshot} from './arraySourceSnapshot'
 import type {IfcAPI} from 'web-ifc'
-import {GroundBooleans,readGroundSolid,solidGeometry,type GroundSolid} from './groundSolids'
+import {GroundBooleans,groundSolid,readGroundSolid,solidGeometry,type GroundSolid} from './groundSolids'
 import type {GroundCut,GroundOptions,GroundPiece} from './groundFromObjects'
 import type {HostSource} from './constructionLayout'
+
+type Foundation = FoundationPrisms & { solid:()=>GroundSolid }
+
+// Only interacting foundations need a shared 3D boolean. Combining separate
+// pile groups in one native operation also combines their numerical errors.
+function foundationGroups(rows:Foundation[]) {
+  const groups:{bounds:Box2;rows:Foundation[]}[]=[]
+  for(const row of rows){
+    const bounds=new Box2().setFromPoints(row.excavation.rings.flat())
+    if(row.concrete){
+      for(const ring of row.concrete.rings)for(const p of ring)bounds.expandByPoint(p)
+    }else{
+      const body=row.solid().bounds
+      bounds.expandByPoint(new Vector2(body.min.x,body.min.z))
+      bounds.expandByPoint(new Vector2(body.max.x,body.max.z))
+    }
+    const group={bounds,rows:[row]}
+    for(let i=groups.length-1;i>=0;i--)if(bounds.intersectsBox(groups[i].bounds)){
+      group.rows.push(...groups[i].rows)
+      group.bounds.union(groups[i].bounds)
+      groups.splice(i,1)
+    }
+    groups.push(group)
+  }
+  return groups.map(g=>g.rows)
+}
+
+function joinGround(parts:GroundSolid[]){
+  const vertices=new Float32Array(parts.reduce((n,p)=>n+p.vertices.length,0))
+  let offset=0
+  for(const p of parts){vertices.set(p.vertices,offset);offset+=p.vertices.length}
+  return groundSolid(vertices)
+}
 
 function offsetRing(ring:Vector2[],distance:number){
   if(!distance)return ring
@@ -28,13 +61,14 @@ export function phasedFoundations(cuts:GroundCut[],base:HostSource|null,axis:'y'
   for(const cut of cuts)for(const r of cut.rings)for(const p of r){bounds.expandByPoint(new Vector3(p.x,cut.bottom-blind,p.y));bounds.expandByPoint(new Vector3(p.x,cut.top,p.y))}
   const origin=bounds.getCenter(new Vector3()),size=bounds.getSize(new Vector3())
   const ops=new GroundBooleans(api),pieces:GroundPiece[]=[],refs:string[]=[],skipped:string[]=[]
-  function snapshot(s:HostSource){
+  function snapshot(s:HostSource,allowRoundShaft=false){
     const group=arraySourceSnapshot(s.object,axis,s.name,false)
     try{
       group.children.forEach(n=>(n as Mesh).geometry.translate(-origin.x,-origin.y,-origin.z))
       let profile
-      try {profile=verifiedSlabProfile(group,1e-5)} catch { /* Non-prismatic solids use their closed 3D meshes. */ }
+      try {profile=verifiedSlabProfile(group,1e-5,allowRoundShaft)} catch { /* Non-prismatic solids use their closed 3D meshes. */ }
       if(profile){
+        if(profile.roundShaft)ops.source(group,s.name)
         const prism={rings:profile.outline,low:profile.bottom,high:profile.top}
         return {shape:prism,solid:()=>extrude(prism)}
       }
@@ -75,8 +109,7 @@ export function phasedFoundations(cuts:GroundCut[],base:HostSource|null,axis:'y'
       site={shape,solid:()=>extrude(shape)}
     }
     const soil=site.solid(),top=soil.bounds.max.y+origin.y
-    const shapes:FoundationPrisms[]=[]
-    const cuts3d:{excavation:GroundPrism;bed:GroundPrism;concrete:()=>GroundSolid}[]=[]
+    const foundations:Foundation[]=[]
     for(const cut of cuts){
       if(cut.bottom-blind>=top-1e-5){skipped.push(cut.name);continue}
       const excavation=prism(cut,cut.bottom-blind,top,space)
@@ -86,28 +119,45 @@ export function phasedFoundations(cuts:GroundCut[],base:HostSource|null,axis:'y'
         return box.intersectsBox(soil.bounds)
       })
       if(!overlaps || (site.shape && !footprintsOverlap(site.shape.rings,excavation.rings))){skipped.push(cut.name);continue}
-      const bed=prism(cut,cut.bottom-blind,cut.bottom,0),concrete=snapshot(cut.source)
-      if(concrete.shape){
+      const bed=prism(cut,cut.bottom-blind,cut.bottom,0),concrete=snapshot(cut.source,true)
+      let shape=concrete.shape
+      if(shape){
         // The measured host and its baked mesh pass through Float32 at different
         // points. Use the same boundary for a verified shared bedding interface.
-        const c=concrete.shape
-        const sameBase=Math.abs(c.low-bed.high)<1e-4 && sameOutline(c.rings,bed.rings)
-        shapes.push({excavation,bed,concrete:sameBase?{rings:bed.rings,low:bed.high,high:cut.top-origin.y}:c})
+        if(Math.abs(shape.low-bed.high)<1e-4 && sameOutline(shape.rings,bed.rings))
+          shape={rings:bed.rings,low:bed.high,high:cut.top-origin.y}
       }
-      cuts3d.push({excavation,bed,concrete:concrete.solid})
+      foundations.push({excavation,bed,concrete:shape,solid:concrete.solid})
       refs.push(cut.id)
     }
-    if(!cuts3d.length)throw Error('The selected exclusions do not reach the ground base. Check their elevations and positions.')
+    if(!foundations.length)throw Error('The selected exclusions do not reach the ground base. Check their elevations and positions.')
     progress?.('Building excavation and foundation phases…')
     let remaining:GroundSolid,removed:GroundSolid,blinding:GroundSolid,concrete:GroundSolid,fill:GroundSolid
-    if(site.shape && shapes.length===cuts3d.length){
-      ;[remaining,removed,blinding,concrete,fill]=partitionGround(site.shape,shapes)
+    if(site.shape){
+      ;[remaining,removed,blinding,concrete,fill]=partitionGround(site.shape,foundations)
+      // The cut has a measured footprint and formation level even when the
+      // foundation inside it has a tapered or irregular mesh.
+      if(foundations.some(f=>!f.concrete)){
+        const groups=foundationGroups(foundations)
+        const phases=groups.map(group=>{
+          let [bed,body,backfill]=groups.length===1?[blinding,concrete,fill]:partitionGround(site.shape!,group).slice(2)
+          const irregular=group.filter(f=>!f.concrete)
+          if(irregular.length){
+            const solid=ops.union(irregular.map(c=>c.solid()))
+            bed=ops.subtract(bed,solid)
+            backfill=ops.subtract(backfill,solid)
+            body=ops.union([body,solid].filter(s=>s.vertices.length))
+          }
+          return [bed,body,backfill]
+        })
+        ;[blinding,concrete,fill]=[0,1,2].map(i=>joinGround(phases.map(p=>p[i])))
+      }
     }else{
-      const cutters=ops.union(cuts3d.map(p=>extrude({...p.excavation,high:p.excavation.high+.02})))
+      const cutters=ops.union(foundations.map(p=>extrude({...p.excavation,high:p.excavation.high+.02})))
       remaining=ops.subtract(soil,cutters)
       removed=ops.subtract(soil,remaining)
-      concrete=ops.union(cuts3d.map(p=>p.concrete()))
-      const beds=ops.union(cuts3d.map(p=>extrude(p.bed)))
+      concrete=ops.union(foundations.map(p=>p.solid()))
+      const beds=ops.union(foundations.map(p=>extrude(p.bed)))
       blinding=ops.subtract(ops.intersect(beds,removed),concrete)
       fill=ops.subtract(ops.subtract(removed,concrete),blinding)
       const measure=(s:GroundSolid)=>{const g=solidGeometry(s);try{return volume(g)}finally{g.dispose()}}

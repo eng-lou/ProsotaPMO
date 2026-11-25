@@ -9318,3 +9318,11 @@ Ground from objects used to run the geometry operations on the UI thread after a
 For verified vertical extrusions, partition the site and foundations by their actual outlines, holes and changes of elevation. Stitch the cap and side edges before export. Use the existing web-ifc solid operator for tapered or irregular solids. Only participating source references are attached to the generated concrete.
 
 A read-only replay used 270 slab exclusions from the Revit advanced structural sample at two ground elevations. All five phase meshes were checked for closed surfaces. The Chromium creator fixture covers cancelling, clearing during and after preview, keeping the site base, retrying, and creating individual excavation volumes.
+
+### 25 November 2026 - Background visible through shallow foundation cuts
+
+The RST Sample IFC exports pile caps and six-metre steel pipe piles as IfcSlab. The pipes have additional triangles around the shaft between identical end profiles. A single such mesh sent the entire site through a 3D boolean. In a replay the underside remained visible, but rays from above missed the excavation floors. Total volume alone cannot verify the visible surfaces.
+
+On a site with vertical sides, generate the remaining soil and removed soil directly from each excavation footprint and formation elevation. Overlapping cuts expose the deeper floor. Through-cuts open the underside. For round shafts the simulation can use the common end profile after checking the barrel, winding and closed solid with a maximum radial deviation of 3 mm. Other irregular solids retain their measured mesh for the foundation phases.
+
+On an eight-metre-deep test base, all 294 cap and pile positions from the matching IFC hit soil at the expected depth from above and the site base from below. All five phase meshes passed the closed-solid check. A Chromium regression reloads a generated ground GLB with a soil finish and varies the backdrop to distinguish a real through-cut from a shallow dig.

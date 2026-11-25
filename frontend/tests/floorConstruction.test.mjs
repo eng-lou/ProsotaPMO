@@ -152,6 +152,29 @@ test('a tapered pile uses the original solid for the concrete phase',()=>{
  close(v.soil+v.excavation,256)
  assert.ok(v.backfill>0 && v.blinding>0)
 })
+test('a cap over two IFC-style round shafts keeps the shallow bench and both deeper floors',()=>{
+ const ground=source('site',0,-4,0,16,8,16), cap=source('cap',0,-.55,0,2.4,.9,1)
+ function shaft(x){
+   const geometry=new t.CylinderGeometry(.2,.2,6,26,2)
+   // Extra barrel vertices between the two identical end profiles.
+   const p=geometry.getAttribute('position'),v=new t.Vector3(),up=new t.Vector3(0,1,0)
+   for(let i=0;i<p.count;i++)if(Math.abs(p.getY(i))<.00001){
+     v.fromBufferAttribute(p,i).applyAxisAngle(up,.035);p.setXYZ(i,v.x,v.y,v.z)
+   }
+   const object=new t.Mesh(geometry);object.position.set(x,-4,0)
+   return {id:'pile'+x,name:'Shaft',ifcType:'IfcSlab',object}
+ }
+ const cuts=[cap,shaft(-.65),shaft(.65)].map(s=>t.groundCutSource(s,'y'))
+ const {pieces}=t.phasedFoundations(cuts,ground,'y',{margin:0},.2,.05,groundApi)
+ for(const {preview} of pieces)t.checkSolid(preview.scene.children[0].geometry)
+ const {scene,anchor}=pieces[0].preview
+ scene.position.copy(anchor);scene.updateMatrixWorld(true)
+ const height=(x,from,dir)=>new t.Raycaster(new t.Vector3(x,from,0),new t.Vector3(0,dir,0)).intersectObject(scene)[0].point.y
+ close(height(0,1,-1),-1.05)
+ for(const x of [-.65,.65]){close(height(x,1,-1),-7.05);close(height(x,-9,1),-8)}
+ const concrete=pieces.find(p=>p.phase==='concrete').preview
+ close(t.volume(concrete.scene.children[0].geometry),2.4*.9+2*6*13*.2**2*Math.sin(2*Math.PI/26))
+})
 test('transfer holds backprops and rejects an unverified receiving deck',()=>{
  const ids=['table','prop','new'];const items=ids.map(id=>({id,name:id,construction_mode:'deck',measured_bearing:true}))
  const out=t.transferKit(items,ids.slice(0,2),['new'],'a2',tasks,'a3')
