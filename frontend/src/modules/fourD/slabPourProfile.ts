@@ -6,7 +6,7 @@ type Triangle = [Vector3, Vector3, Vector3]
 const tolerance = .0001
 
 // Compare in plan, allowing different starting corners, winding and triangulation.
-function sameOutline(a: ReturnType<typeof flatFaceRings>, b: ReturnType<typeof flatFaceRings>) {
+export function sameOutline(a: ReturnType<typeof flatFaceRings>, b: ReturnType<typeof flatFaceRings>) {
   if (a.length !== b.length) return false
   return a.every(ring => b.some(other => {
     if (other.length !== ring.length) return false
@@ -36,7 +36,7 @@ function clippedFace(face: Triangle[], normal: Vector3, offset: number, side: nu
 
 // Rebuild the two pours only when both horizontal faces independently describe
 // the same extrusion. An IFC opening subtraction can omit a reveal triangle.
-export function splitSlabProfile(slab: Group, normal: Vector3, offset: number): BooleanResult[] | null {
+export function verifiedSlabProfile(slab: Group, edgeUncertainty = 0) {
   const { triangles, worldBounds } = constructionTriangles(slab, 'y')
   const bottom = worldBounds.min.y, top = worldBounds.max.y, depth = top - bottom
   if (!(depth > tolerance)) return null
@@ -54,7 +54,8 @@ export function splitSlabProfile(slab: Group, normal: Vector3, offset: number): 
   const planArea = outline.reduce((sum,r) => sum + (isExterior(r,outline) ? 1 : -1) * Math.abs(ShapeUtils.area(r)), 0)
   const faceArea = (face: Triangle[]) => face.reduce((sum,[a,b,c]) =>
     sum + Math.abs((b.x-a.x)*(c.z-a.z) - (b.z-a.z)*(c.x-a.x))/2, 0)
-  if ([base,lid].some(face => Math.abs(faceArea(face)-planArea) > Math.max(1e-8,planArea*1e-6))) return null
+  const perimeter = outline.reduce((sum,ring) => sum + ring.reduce((length,p,i) => length+p.distanceTo(ring[(i+1)%ring.length]),0),0)
+  if ([base,lid].some(face => Math.abs(faceArea(face)-planArea) > Math.max(1e-8,planArea*1e-6,perimeter*edgeUncertainty))) return null
 
   // Reject internal, sloping or recessed sides even if the two caps look alike.
   const edges = outline.flatMap((ring,ringIndex) => ring.map((p,i) => {
@@ -72,6 +73,13 @@ export function splitSlabProfile(slab: Group, normal: Vector3, offset: number): 
 
   if (sidedRings.size !== outline.length) return null
 
+  return {base, outline, bottom, top, depth, planArea}
+}
+
+export function splitSlabProfile(slab: Group, normal: Vector3, offset: number): BooleanResult[] | null {
+  const profile = verifiedSlabProfile(slab)
+  if (!profile) return null
+  const {base, bottom, top, depth, planArea} = profile
   const source = slab.children[0] as Mesh
   const material = Array.isArray(source.material) ? source.material[0] : source.material
   const pieces: BooleanResult[] = []

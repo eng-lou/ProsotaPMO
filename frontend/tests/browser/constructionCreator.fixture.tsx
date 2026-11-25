@@ -49,6 +49,7 @@ export async function run() {
     mesh.position.set(11+x,8,18+z)
     return mesh
   })
+  let groundSelection:{id:string;name:string;object:Mesh}[]|undefined
   let cageSelection=false
   let multipleWalls=false, uploadedFile:File|undefined
   let assetId='', schedulePayload:any, finished=false
@@ -98,11 +99,11 @@ export async function run() {
     root.render(<SiteToolsPanel state={state} projectId="creator-test" activities={tasks} paths={[pourPath]} zones={[]} sceneSources={[]}
       timelineFormat={{scheduleStart:now,timeDisplayMode:'date',speedDaysPerSecond:1,fps:30}} upAxis="y"
       selectedObjectIds={new Set()} onPickItems={noop} links={[]} profiles={[]} onSeek={noop} onLink={noop} onUnlink={noop}
-      onAssignProfile={noop} linkError={null} selectedShapeSources={()=>cageSelection
+      onAssignProfile={noop} linkError={null} selectedShapeSources={()=>groundSelection??(cageSelection
         ?cageWalls.map((object,i)=>({id:'cage-wall-'+i,name:'Core wall '+i,ifcType:'IfcWall',object}))
         :multipleWalls
         ?[wall,secondWall].map((object,i)=>({id:'wall-'+i,name:'W'+i,ifcType:'IfcWallStandardCase',object}))
-        :[{id:'selected-host',name:'Selected host',object:source,slabLookup:source===slab?slabLookup:undefined}]}
+        :[{id:'selected-host',name:'Selected host',object:source,slabLookup:source===slab?slabLookup:undefined}])}
       hideShapeSources={()=>noop} readPileBounds={()=>{throw Error('Unused')}} onGenerateSchedule={plan} openPaths={noop}
       focusSite={noop} sceneLightsEnabled enableSceneLights={noop}/>)
   }
@@ -211,10 +212,47 @@ export async function run() {
     save.click()
     await waitFor(()=>items.some(i=>i.climbing_formwork?.lifts[0]?.activity_id==='existing'),'saved core lift')
     cageSelection=false;source=column
-    const addCuts=await button('Add selected exclusions');addCuts.closest('details')!.open=true;addCuts.click()
-    ;(await button('Preview ground cuts')).click()
+    const addCuts=await button('Add selected exclusions'),groundPanel=addCuts.closest('details')!
+    groundPanel.open=true
+    const soil=new Mesh(new BoxGeometry(30,4,30))
+    soil.position.set(11,6.5,18)
+    groundSelection=[{id:'site-base',name:'Test soil',object:soil}]
+    ;(await button('Use selected solid as base')).click()
+    const cuts=Array.from({length:24},(_,i)=>{
+      const object=new Mesh(new BoxGeometry(1,.8,1))
+      object.position.set(2+(i%8)*2,i===23?18:8,14+Math.floor(i/8)*2)
+      return {id:'cut-'+i,name:'Foundation '+i,object}
+    })
+    groundSelection=cuts
+    addCuts.click()
+    await waitFor(()=>groundPanel.querySelectorAll('li').length===24,'all exclusions')
+    const phased=groundPanel.querySelector<HTMLInputElement>('input[type=checkbox]')!
+    phased.click()
+    const previewGround=await button('Preview ground cuts'),removeAll=await button('Remove all')
+    previewGround.click()
+    ;(await button('Cancel preview')).click()
+    await waitFor(()=>!previewGround.disabled,'cancelled preview')
+    previewGround.click()
+    await button('Cancel preview')
+    removeAll.click()
+    await waitFor(()=>!groundPanel.querySelector('li')&&removeAll.disabled&&!groundPanel.textContent?.includes('Cancel preview'),'clear during preview')
+    if(!previewGround.disabled||!groundPanel.textContent?.includes('Test soil'))throw Error('Clearing exclusions lost the base or enabled an empty preview')
+    addCuts.click()
+    await waitFor(()=>!previewGround.disabled,'retry ground preview')
+    previewGround.click()
+    await button('Create ground')
+    if(!groundPanel.textContent?.includes('1 exclusion outside'))throw Error('Above-grade exclusion was included')
+    if(groundPanel.querySelectorAll('select')[0]?.options.length!==4)throw Error('Missing foundation phases')
+    removeAll.click()
+    await waitFor(()=>!groundPanel.querySelector('canvas')&&!groundPanel.querySelector('li'),'clear completed preview')
+    phased.click()
+    groundSelection=[{id:'cut-0',name:'Foundation 0',object:cuts[0].object}]
+    addCuts.click()
+    await waitFor(()=>!previewGround.disabled,'individual cut')
+    previewGround.click()
     ;(await button('Create ground')).click()
     await waitFor(()=>items.some(i=>i.name==='Ground · remaining soil')&&items.some(i=>i.name.startsWith('Excavation ·')),'saved ground and cuts')
+    groundSelection=undefined
     source=pourSlab
     const previewPour=await button('Preview selected slab')
     previewPour.closest('details')!.open=true

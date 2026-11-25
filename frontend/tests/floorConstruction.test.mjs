@@ -1,4 +1,5 @@
 import {test} from 'node:test'
+import {IfcAPI} from 'web-ifc'
 import assert from 'node:assert/strict'
 import {build} from 'esbuild'
 import {writeFile,unlink} from 'node:fs/promises'
@@ -7,6 +8,8 @@ const {outputFiles}=await build({stdin:{contents:[...exports,"export {volume,che
 const moduleUrl=new URL('./.floor-fixture-'+process.pid+'.mjs',import.meta.url)
 await writeFile(moduleUrl,outputFiles[0].text)
 const t=await import(moduleUrl.href).finally(()=>unlink(moduleUrl))
+const groundApi=new IfcAPI()
+await groundApi.Init(undefined,true)
 const source=(id,x,y,z,w,h,d)=>{const object=new t.Mesh(new t.BoxGeometry(w,h,d),new t.MeshStandardMaterial());object.position.set(x,y,z);return {id,name:id,object}}
 const date=n=>new Date(n*86400000).toISOString()
 const tasks=[1,2,3,4].map(i=>({id:'a'+i,start:date(i),finish:date(i+.5)}))
@@ -73,7 +76,7 @@ test('an incomplete cap or an interior side cannot be inferred from the other sl
 test('merged excavation, crossed beam and cap conserve concrete, blinding and backfill',()=>{
  const cap=source('cap',0,-.6,0,3,1,2),beam=source('beam',2,-.35,0,4,.5,.5)
  const cuts=[cap,beam].map(s=>t.groundCutSource(s,'y'))
- const {pieces}=t.phasedFoundations(cuts,null,'y',{margin:1,top:0,bottom:-2},.25,.05)
+ const {pieces}=t.phasedFoundations(cuts,null,'y',{margin:1,top:0,bottom:-2},.25,.05,groundApi)
  const v=Object.fromEntries(pieces.filter(p=>p.phase).map(p=>[p.phase,t.volume(p.preview.scene.children[0].geometry)]))
  assert.ok(v.backfill>0 && v.blinding>0)
  close(v.concrete,6+1-1.5*.5*.5)
@@ -104,9 +107,50 @@ test('screens in a slab stack omit bays where the lower shoe misses the façade'
 })
 test('above-grade concrete survives a phased cut',()=>{
  const pier=source('cap',0,0,0,2,1,2)
- const {pieces}=t.phasedFoundations([t.groundCutSource(pier,'y')],null,'y',{margin:2,top:0,bottom:-1},.25,.05)
+ const {pieces}=t.phasedFoundations([t.groundCutSource(pier,'y')],null,'y',{margin:2,top:0,bottom:-1},.25,.05,groundApi)
  const concrete=pieces.find(p=>p.phase==='concrete')
  close(t.volume(concrete.preview.scene.children[0].geometry),4)
+})
+test('combined cuts preserve a rotated slab opening, skip elevated and offsite slabs, and conserve soil',()=>{
+ const base=source('Site',5,-1,8,20,2,18)
+ const outline=new t.Shape([[-4,-3],[-4,3],[4,3],[4,-3]].map(([x,z])=>new t.Vector2(x,z)))
+ outline.holes.push(new t.Path([[-1,-1],[1,-1],[1,1],[-1,1]].map(([x,z])=>new t.Vector2(x,z))))
+ const object=new t.Mesh(new t.ExtrudeGeometry(outline,{depth:.4,bevelEnabled:false}).rotateX(Math.PI/2))
+ object.rotation.y=.37;object.position.set(5,-.2,8)
+ const slab={id:'slab',name:'Slab',object}
+ const above=source('Upper floor',5,4,8,10,.5,10),outside=source('Outside',55,-.5,8,2,1,2)
+ for(const axis of ['y','z']){
+  const root=new t.Group()
+  root.add(base.object,slab.object,above.object,outside.object)
+  if(axis==='z')root.rotation.x=Math.PI/2
+  const cuts=[slab,above,outside].map(s=>t.groundCutSource(s,axis))
+  const {pieces,skipped}=t.phasedFoundations(cuts,base,axis,{margin:0},0,.05,groundApi)
+  assert.deepEqual(skipped,['Upper floor','Outside'])
+  const v=Object.fromEntries(pieces.map(p=>[p.phase??'soil',t.volume(p.preview.scene.children[0].geometry)]))
+  close(v.soil+v.excavation,720);close(v.concrete,44*.4);close(v.excavation,44*.65)
+  close(v.excavation,v.concrete+v.blinding+v.backfill)
+  for(const p of pieces){
+    assert.deepEqual(p.preview.sourceRefs,['slab'])
+    t.checkSolid(p.preview.scene.children[0].geometry)
+  }
+  const removed=pieces.find(p=>p.phase==='excavation').preview
+  const ray=new t.Raycaster(new t.Vector3(5,2,8),new t.Vector3(0,-1,0))
+  const anchor=removed.anchor.clone()
+  if(axis==='z')anchor.applyAxisAngle(new t.Vector3(1,0,0),-Math.PI/2)
+  removed.scene.position.copy(anchor);removed.scene.updateMatrixWorld(true)
+  assert.equal(ray.intersectObject(removed.scene).length,0)
+ }
+})
+test('a tapered pile uses the original solid for the concrete phase',()=>{
+ const object=new t.Mesh(new t.CylinderGeometry(1,.45,3,16))
+ object.position.y=-1
+ const pile={id:'p',name:'Tapered pile',ifcType:'IfcPile',object}
+ const base=source('Site',0,-2,0,8,4,8)
+ const {pieces}=t.phasedFoundations([t.groundCutSource(pile,'y')],base,'y',{margin:2},.3,.05,groundApi)
+ const v=Object.fromEntries(pieces.map(p=>[p.phase??'soil',t.volume(p.preview.scene.children[0].geometry)]))
+ close(v.concrete,t.volume(object.geometry))
+ close(v.soil+v.excavation,256)
+ assert.ok(v.backfill>0 && v.blinding>0)
 })
 test('transfer holds backprops and rejects an unverified receiving deck',()=>{
  const ids=['table','prop','new'];const items=ids.map(id=>({id,name:id,construction_mode:'deck',measured_bearing:true}))

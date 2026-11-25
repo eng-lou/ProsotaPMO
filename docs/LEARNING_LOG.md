@@ -9310,3 +9310,11 @@ Read-only replay covered 15 floors, four cuts per floor and both viewport up axe
 Gate pose and Activity links shared the selected fence ID as a React key. Selecting one fence produced three Gate pose panels in the browser regression. Each section now has its own key. The entrance selector also checks the generated fence layout before offering a gate.
 
 The enclosure fixture switches fences, selects ground, removes a fence with an active pose preview, removes the last generated entrance and clears selection in the same session.
+
+### 25 November 2026 - Ground previews with many IFC exclusions
+
+Ground from objects used to run the geometry operations on the UI thread after a short timeout. Combined phases repeatedly combined overlapping triangle meshes, including upper-storey slabs. Both preview modes now run in a cancellable worker. Clearing exclusions also discards the active preview. Material slots for individual cuts are restored on the UI thread.
+
+For verified vertical extrusions, partition the site and foundations by their actual outlines, holes and changes of elevation. Stitch the cap and side edges before export. Use the existing web-ifc solid operator for tapered or irregular solids. Only participating source references are attached to the generated concrete.
+
+A read-only replay used 270 slab exclusions from the Revit advanced structural sample at two ground elevations. All five phase meshes were checked for closed surfaces. The Chromium creator fixture covers cancelling, clearing during and after preview, keeping the site base, retrying, and creating individual excavation volumes.
